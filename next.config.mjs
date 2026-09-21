@@ -13,10 +13,7 @@ const nextConfig = {
       },
     ],
   },
-  experimental: {
-    instrumentationHook: true,
-    serverComponentsExternalPackages: ['playwright'],
-  },
+  serverExternalPackages: ['playwright'],
 };
 
 export default nextConfig;
