@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { confessionService } from '@/services/confessionService';
 import { z } from 'zod';
 
+export const dynamic = 'force-dynamic';
+
 const updateSchema = z.object({
   cleaned_text: z.string().optional(),
   display_name: z.string().optional(),
@@ -13,11 +15,12 @@ const updateSchema = z.object({
 });
 
 export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
+  _request: NextRequest,
+  props: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
-    const confession = await confessionService.getConfessionById(params.id);
+    const { id } = await Promise.resolve(props.params);
+    const confession = await confessionService.getConfessionById(id);
     if (!confession) {
       return NextResponse.json({ error: 'Confession not found' }, { status: 404 });
     }
@@ -29,9 +32,10 @@ export async function GET(
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  props: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
+    const { id } = await Promise.resolve(props.params);
     const body = await request.json();
     const parsed = updateSchema.safeParse(body);
 
@@ -39,7 +43,7 @@ export async function PATCH(
       return NextResponse.json({ error: parsed.error.issues[0]?.message || 'Invalid input' }, { status: 400 });
     }
 
-    const updated = await confessionService.updateConfession(params.id, parsed.data);
+    const updated = await confessionService.updateConfession(id, parsed.data);
     return NextResponse.json(updated);
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Failed to update confession' }, { status: 500 });
@@ -47,15 +51,16 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { id: string } }
+  _request: NextRequest,
+  props: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
-    const deleted = await confessionService.deleteConfession(params.id);
+    const { id } = await Promise.resolve(props.params);
+    const deleted = await confessionService.deleteConfession(id);
     if (!deleted) {
       return NextResponse.json({ error: 'Failed to delete or confession not found' }, { status: 404 });
     }
-    return NextResponse.json({ success: true, id: params.id });
+    return NextResponse.json({ success: true, id });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Failed to delete confession' }, { status: 500 });
   }

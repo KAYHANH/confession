@@ -17,6 +17,7 @@ import {
   Palette,
   AlertTriangle,
   Tag,
+  Download,
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Confession, Template } from '@/types';
@@ -24,6 +25,8 @@ import { PostCardPreview } from '@/components/confessions/PostCardPreview';
 import { PublishModal } from '@/components/confessions/PublishModal';
 import { ScheduleModal } from '@/components/confessions/ScheduleModal';
 import { useToast } from '@/components/ui/ToastContext';
+import { downloadCardAsPng, downloadAllSlides } from '@/lib/downloadCard';
+
 
 export default function ConfessionEditorPage({ params }: { params: { id: string } }) {
   const router = useRouter();
@@ -46,6 +49,7 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
   // Modals
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -161,6 +165,46 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
     }
   };
 
+  const handleDownloadCard = async () => {
+    if (!confession || !activeTemplate) return;
+    try {
+      setDownloading(true);
+      await downloadCardAsPng({
+        text: cleanedText,
+        displayName: isAnonymous ? 'Anonymous' : displayName,
+        isAnonymous,
+        confessionNumber: confession.google_sheet_row,
+        template: activeTemplate,
+      });
+      success('Post card downloaded successfully as 1080x1080 PNG!');
+    } catch (err: any) {
+      error(err?.message || 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleDownloadAllSlides = async () => {
+    if (!confession || !activeTemplate) return;
+    try {
+      setDownloading(true);
+      info('Generating and downloading all slides...');
+      const count = await downloadAllSlides({
+        text: cleanedText,
+        displayName: isAnonymous ? 'Anonymous' : displayName,
+        isAnonymous,
+        confessionNumber: confession.google_sheet_row,
+        template: activeTemplate,
+      });
+      success(`All ${count} slides downloaded successfully!`);
+    } catch (err: any) {
+      error(err?.message || 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+
   if (loading) {
     return (
       <DashboardLayout title="Confession Editor">
@@ -251,6 +295,16 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
             </button>
           )}
 
+          <button
+            onClick={handleDownloadCard}
+            disabled={downloading}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold shadow-sm transition-all active:scale-95 cursor-pointer disabled:opacity-50"
+            title="Download high-resolution 1080x1080 PNG"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>{downloading ? 'Downloading...' : 'Download Post'}</span>
+          </button>
+
           {confession.status !== 'PUBLISHED' ? (
             <button
               onClick={() => setShowPublishModal(true)}
@@ -266,6 +320,7 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
           )}
         </div>
       </div>
+
 
       {/* Two-Column Editor Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -348,12 +403,35 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
         <div className="lg:col-span-7 space-y-6">
           {/* Post Card Visual Preview */}
           <div className="bg-white p-6 rounded-2xl border border-zinc-200/80 shadow-sm flex flex-col items-center">
-            <div className="flex items-center justify-between w-full mb-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between w-full mb-4 gap-2">
               <div className="flex items-center gap-2 font-bold text-sm text-zinc-900">
                 <Instagram className="w-4 h-4 text-brand-500" />
                 <span>Live 1080x1080 Instagram Card Preview</span>
               </div>
-              <span className="text-xs text-zinc-600 font-medium">Auto-scaling layout</span>
+              <div className="flex items-center gap-2">
+                {cleanedText.length > 480 && (
+                  <button
+                    type="button"
+                    onClick={handleDownloadAllSlides}
+                    disabled={downloading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-700 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                    title="Download all slides sequentially"
+                  >
+                    <Download className="w-3.5 h-3.5 text-zinc-600" />
+                    <span>Download All Slides</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleDownloadCard}
+                  disabled={downloading}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-brand-50 hover:bg-brand-100 text-brand-700 text-xs font-semibold border border-brand-200/70 transition-colors cursor-pointer disabled:opacity-50"
+                  title="Download single 1080x1080 PNG"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>{downloading ? 'Exporting...' : 'Download PNG'}</span>
+                </button>
+              </div>
             </div>
 
             <div className="p-4 bg-zinc-100 rounded-2xl flex items-center justify-center">
@@ -366,6 +444,7 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
                 scale={0.34}
               />
             </div>
+
           </div>
 
           {/* Form Fields for Customization */}

@@ -9,12 +9,15 @@ import {
   Edit,
   RefreshCw,
   ShieldCheck,
+  Download,
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Confession, Template } from '@/types';
 import { PostCardPreview } from '@/components/confessions/PostCardPreview';
 import { useToast } from '@/components/ui/ToastContext';
+import { downloadCardAsPng } from '@/lib/downloadCard';
+
 
 export default function ReviewQueuePage() {
   const [confessions, setConfessions] = useState<Confession[]>([]);
@@ -125,6 +128,24 @@ export default function ReviewQueuePage() {
   const getTemplate = (tplId?: string) => {
     return templates.find((t) => t.id === tplId) || templates[0];
   };
+
+  const handleDownload = async (c: Confession) => {
+    const template = getTemplate(c.template_id);
+    if (!template) return;
+    try {
+      await downloadCardAsPng({
+        text: c.cleaned_text || c.original_text || '',
+        displayName: c.display_name,
+        isAnonymous: c.is_anonymous,
+        confessionNumber: c.google_sheet_row,
+        template,
+      });
+      success(`Confession #${String(c.google_sheet_row || 1).padStart(3, '0')} downloaded!`);
+    } catch (err: any) {
+      error(err?.message || 'Download failed');
+    }
+  };
+
 
   return (
     <DashboardLayout
@@ -268,13 +289,25 @@ export default function ReviewQueuePage() {
 
                 {/* Actions */}
                 <div className="flex items-center justify-between pt-3 border-t border-zinc-100 mt-2">
-                  <Link
-                    href={`/confessions/${c.id}`}
-                    className="flex items-center gap-1 text-xs font-semibold text-zinc-600 hover:text-zinc-900"
-                  >
-                    <Edit className="w-3.5 h-3.5" />
-                    <span>Edit Post</span>
-                  </Link>
+                  <div className="flex items-center gap-3">
+                    <Link
+                      href={`/confessions/${c.id}`}
+                      className="flex items-center gap-1 text-xs font-semibold text-zinc-600 hover:text-zinc-900"
+                    >
+                      <Edit className="w-3.5 h-3.5" />
+                      <span>Edit Post</span>
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => handleDownload(c)}
+                      className="flex items-center gap-1 text-xs font-semibold text-zinc-600 hover:text-brand-600 transition-colors cursor-pointer"
+                      title="Download 1080x1080 PNG image"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download</span>
+                    </button>
+                  </div>
+
 
                   <div className="flex items-center gap-2">
                     <button

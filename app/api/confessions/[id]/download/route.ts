@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { confessionService } from '@/services/confessionService';
 import { imageService } from '@/services/imageService';
 import { mockStore } from '@/lib/mockStore';
+import fs from 'fs';
 
 export const dynamic = 'force-dynamic';
 
-export async function POST(
+export async function GET(
   _request: NextRequest,
   props: { params: Promise<{ id: string }> | { id: string } }
 ) {
@@ -20,6 +21,7 @@ export async function POST(
     const template = mockStore.getTemplateById(templateId) || mockStore.getTemplates()[0];
     const settings = mockStore.getSettings();
 
+    // Ensure image is generated
     const imageResult = await imageService.generatePostImage({
       confession,
       template,
@@ -28,17 +30,27 @@ export async function POST(
       confessionNumber: confession.google_sheet_row || 1,
     });
 
-    const updated = await confessionService.updateConfession(id, {
-      generated_image_url: imageResult.publicUrl,
-      generated_image_path: imageResult.localPath,
-    });
+    const filePath = imageResult.localPath;
+    if (!fs.existsSync(filePath)) {
+      return NextResponse.json({ error: 'Generated file could not be found' }, { status: 500 });
+    }
 
-    return NextResponse.json({
-      imageUrl: imageResult.publicUrl,
-      localPath: imageResult.localPath,
-      confession: updated,
+    const fileBuffer = fs.readFileSync(filePath);
+    const numFormatted = String(confession.google_sheet_row || 1).padStart(3, '0');
+    const filename = `confession-${numFormatted}.png`;
+
+    return new NextResponse(fileBuffer, {
+      status: 200,
+      headers: {
+        'Content-Type': 'image/png',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Cache-Control': 'no-store',
+      },
     });
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Image generation failed' }, { status: 500 });
+    return NextResponse.json(
+      { error: error?.message || 'Download failed' },
+      { status: 500 }
+    );
   }
 }

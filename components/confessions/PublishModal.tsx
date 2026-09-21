@@ -1,10 +1,24 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Instagram, CheckCircle2, AlertCircle, Loader2, ChevronLeft, ChevronRight, Layers, FileText, Scissors } from 'lucide-react';
+import {
+  X,
+  Instagram,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+  ChevronLeft,
+  ChevronRight,
+  Layers,
+  FileText,
+  Scissors,
+  Download,
+} from 'lucide-react';
 import { Confession, Template } from '@/types';
 import { PostCardPreview, splitIntoSlides } from './PostCardPreview';
 import { useToast } from '../ui/ToastContext';
+import { downloadCardAsPng, downloadAllSlides } from '@/lib/downloadCard';
+
 
 interface PublishModalProps {
   isOpen: boolean;
@@ -32,6 +46,8 @@ export function PublishModal({
 
   const [cardMode, setCardMode] = useState<'fit' | 'hook' | 'carousel'>('fit');
   const [currentSlide, setCurrentSlide] = useState(0);
+  const [downloading, setDownloading] = useState(false);
+
 
   if (!isOpen) return null;
 
@@ -75,6 +91,46 @@ export function PublishModal({
       setPublishing(false);
     }
   };
+
+  const handleDownloadCurrent = async () => {
+    try {
+      setDownloading(true);
+      await downloadCardAsPng({
+        text: currentTextToRender,
+        displayName: confession.display_name,
+        isAnonymous: confession.is_anonymous,
+        confessionNumber: confession.google_sheet_row,
+        template,
+        mode: cardMode,
+        slideIndex: currentSlide,
+        totalSlides: cardMode === 'carousel' ? slides.length : 1,
+      });
+      success('Post card downloaded as 1080x1080 PNG!');
+    } catch (err: any) {
+      error(err?.message || 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleDownloadAll = async () => {
+    try {
+      setDownloading(true);
+      const count = await downloadAllSlides({
+        text: fullText,
+        displayName: confession.display_name,
+        isAnonymous: confession.is_anonymous,
+        confessionNumber: confession.google_sheet_row,
+        template,
+      });
+      success(`All ${count} slides downloaded!`);
+    } catch (err: any) {
+      error(err?.message || 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
@@ -186,7 +242,38 @@ export function PublishModal({
                 </button>
               </div>
             )}
+
+            {/* Quick Download Buttons */}
+            <div className="flex flex-wrap items-center justify-center gap-2 mt-3">
+              <button
+                type="button"
+                onClick={handleDownloadCurrent}
+                disabled={downloading}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-xs font-semibold text-zinc-700 shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <Download className="w-3.5 h-3.5 text-brand-600" />
+                <span>
+                  {downloading
+                    ? 'Exporting...'
+                    : cardMode === 'carousel' && slides.length > 1
+                    ? `Download Slide ${currentSlide + 1}`
+                    : 'Download PNG'}
+                </span>
+              </button>
+              {cardMode === 'carousel' && slides.length > 1 && (
+                <button
+                  type="button"
+                  onClick={handleDownloadAll}
+                  disabled={downloading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-brand-200 bg-brand-50 hover:bg-brand-100 text-xs font-semibold text-brand-700 shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Download className="w-3.5 h-3.5 text-brand-600" />
+                  <span>Download All ({slides.length})</span>
+                </button>
+              )}
+            </div>
           </div>
+
 
           <div className="flex flex-col justify-between text-xs space-y-4">
             <div>
@@ -237,14 +324,26 @@ export function PublishModal({
         )}
 
         {/* Buttons */}
-        <div className="flex items-center justify-end gap-3 pt-2 border-t border-zinc-100">
+        <div className="flex items-center justify-between gap-3 pt-3 border-t border-zinc-100">
           <button
-            onClick={onClose}
-            disabled={publishing}
-            className="px-5 py-2.5 rounded-xl border border-zinc-200 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 transition-colors cursor-pointer"
+            type="button"
+            onClick={handleDownloadCurrent}
+            disabled={publishing || downloading}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-zinc-200 bg-zinc-50 hover:bg-zinc-100 text-sm font-semibold text-zinc-800 transition-colors cursor-pointer disabled:opacity-50 shadow-xs"
+            title="Download this 1080x1080 card as PNG"
           >
-            Cancel
+            <Download className="w-4 h-4 text-zinc-600" />
+            <span>{downloading ? 'Exporting...' : 'Download Post (PNG)'}</span>
           </button>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onClose}
+              disabled={publishing}
+              className="px-5 py-2.5 rounded-xl border border-zinc-200 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
 
           <button
             onClick={handlePublish}
@@ -271,5 +370,6 @@ export function PublishModal({
         </div>
       </div>
     </div>
+  </div>
   );
 }
