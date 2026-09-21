@@ -4,6 +4,8 @@ import { mockStore } from '@/lib/mockStore';
 import { Confession, ConfessionStatus } from '@/types';
 import { z } from 'zod';
 
+export const dynamic = 'force-dynamic';
+
 const createConfessionSchema = z.object({
   name: z.string().optional().default('Anonymous'),
   original_text: z.string().min(5, 'Confession text must be at least 5 characters'),

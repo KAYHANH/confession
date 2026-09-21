@@ -12,14 +12,10 @@ export class InstagramService {
   private baseUrl = 'https://graph.facebook.com';
 
   /**
-   * Check if external APIs are mocked or if credentials are set
+   * Check if external APIs are explicitly mocked
    */
   public isMock(): boolean {
-    return (
-      process.env.MOCK_EXTERNAL_APIS === 'true' ||
-      !process.env.INSTAGRAM_ACCESS_TOKEN ||
-      !process.env.INSTAGRAM_ACCOUNT_ID
-    );
+    return process.env.NODE_ENV === 'test' || process.env.MOCK_EXTERNAL_APIS === 'true';
   }
 
   /**

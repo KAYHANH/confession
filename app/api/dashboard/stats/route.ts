@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { confessionService } from '@/services/confessionService';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     const stats = await confessionService.getDashboardStats();

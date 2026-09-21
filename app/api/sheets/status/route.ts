@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { mockStore } from '@/lib/mockStore';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     const config = mockStore.getGoogleSheetConfig();
