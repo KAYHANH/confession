@@ -36,26 +36,109 @@ export class ImageService {
   /**
    * Calculate dynamic font size based on text length to prevent overflow in 1080x1080 canvas
    */
-  public calculateDynamicFontSize(text: string, baseSize: number = 44): { fontSize: number; lineHeight: number; warning?: string } {
+  public calculateDynamicFontSize(text: string, baseSize: number = 44): {
+    fontSize: number;
+    lineHeight: number;
+    padding: number;
+    showBigQuote: boolean;
+    quoteSize: number;
+    justify: 'center' | 'flex-start';
+    marginY: number;
+    signatureMargin: number;
+    signatureSize: number;
+    warning?: string;
+  } {
     const len = text.length;
-    if (len < 100) {
-      return { fontSize: baseSize + 6, lineHeight: 1.45 };
+    if (len < 120) {
+      return {
+        fontSize: Math.min(50, baseSize + 6),
+        lineHeight: 1.45,
+        padding: 80,
+        showBigQuote: true,
+        quoteSize: 76,
+        justify: 'center',
+        marginY: 28,
+        signatureMargin: 26,
+        signatureSize: 26,
+      };
     }
-    if (len < 250) {
-      return { fontSize: baseSize, lineHeight: 1.4 };
+    if (len < 280) {
+      return {
+        fontSize: Math.min(40, baseSize + 2),
+        lineHeight: 1.4,
+        padding: 75,
+        showBigQuote: true,
+        quoteSize: 60,
+        justify: 'center',
+        marginY: 24,
+        signatureMargin: 22,
+        signatureSize: 24,
+      };
     }
-    if (len < 400) {
-      return { fontSize: Math.max(32, baseSize - 6), lineHeight: 1.35 };
+    if (len < 500) {
+      return {
+        fontSize: Math.max(26, baseSize - 10),
+        lineHeight: 1.35,
+        padding: 65,
+        showBigQuote: true,
+        quoteSize: 42,
+        justify: 'center',
+        marginY: 18,
+        signatureMargin: 18,
+        signatureSize: 22,
+      };
     }
-    if (len < 650) {
-      return { fontSize: Math.max(26, baseSize - 12), lineHeight: 1.3 };
+    if (len < 850) {
+      return {
+        fontSize: 21,
+        lineHeight: 1.3,
+        padding: 55,
+        showBigQuote: true,
+        quoteSize: 32,
+        justify: 'flex-start',
+        marginY: 14,
+        signatureMargin: 16,
+        signatureSize: 20,
+      };
     }
-    if (len < 900) {
-      return { fontSize: Math.max(22, baseSize - 16), lineHeight: 1.25 };
+    if (len < 1400) {
+      return {
+        fontSize: 17.5,
+        lineHeight: 1.25,
+        padding: 50,
+        showBigQuote: false,
+        quoteSize: 0,
+        justify: 'flex-start',
+        marginY: 10,
+        signatureMargin: 12,
+        signatureSize: 18,
+        warning: 'Confession is long. Layout has been adapted to fit in a single post.',
+      };
+    }
+    if (len < 2000) {
+      return {
+        fontSize: 15.5,
+        lineHeight: 1.22,
+        padding: 45,
+        showBigQuote: false,
+        quoteSize: 0,
+        justify: 'flex-start',
+        marginY: 8,
+        signatureMargin: 10,
+        signatureSize: 17,
+        warning: 'Confession is too long for a single post. Consider editing or creating a carousel.',
+      };
     }
     return {
-      fontSize: 20,
+      fontSize: 14,
       lineHeight: 1.2,
+      padding: 40,
+      showBigQuote: false,
+      quoteSize: 0,
+      justify: 'flex-start',
+      marginY: 6,
+      signatureMargin: 8,
+      signatureSize: 16,
       warning: 'Confession is too long for a single post. Consider editing or creating a carousel.',
     };
   }
@@ -72,12 +155,10 @@ export class ImageService {
     const safeHandle = this.escapeHtml(instagramHandle);
     const numFormatted = String(confessionNumber).padStart(3, '0');
 
-    const { fontSize, lineHeight } = this.calculateDynamicFontSize(confession.cleaned_text || confession.original_text, template.font_size);
+    const cfg = this.calculateDynamicFontSize(confession.cleaned_text || confession.original_text, template.font_size);
     const fontFamily = template.font_family === 'serif' 
       ? `'Playfair Display', Georgia, serif` 
       : `'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`;
-
-    const padding = template.layout_config?.padding || 80;
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -102,7 +183,7 @@ export class ImageService {
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      padding: ${padding}px;
+      padding: ${cfg.padding}px;
       position: relative;
     }
 
@@ -125,19 +206,20 @@ export class ImageService {
       justify-content: space-between;
       align-items: center;
       width: 100%;
-      z-index: 2;
+      z-index: 10;
+      flex-shrink: 0;
     }
 
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      padding: 10px 22px;
+      padding: 8px 20px;
       background: ${template.accent_color}18;
       border: 1.5px solid ${template.accent_color}40;
       color: ${template.accent_color};
       border-radius: 9999px;
-      font-size: 22px;
+      font-size: 20px;
       font-weight: 700;
       letter-spacing: 1.5px;
       text-transform: uppercase;
@@ -158,47 +240,55 @@ export class ImageService {
       flex: 1;
       display: flex;
       flex-direction: column;
-      justify-content: center;
+      justify-content: ${cfg.justify};
       align-items: flex-start;
-      margin: 40px 0;
+      margin: ${cfg.marginY}px 0;
       z-index: 2;
-      max-height: 720px;
+      max-height: 840px;
+      overflow: hidden;
+      width: 100%;
     }
 
     .quote-mark {
-      font-size: 72px;
+      font-size: ${cfg.quoteSize}px;
       line-height: 1;
       color: ${template.accent_color};
       opacity: 0.8;
-      margin-bottom: -15px;
+      margin-bottom: -10px;
       font-family: Georgia, serif;
+      flex-shrink: 0;
     }
 
     .confession-text {
-      font-size: ${fontSize}px;
-      line-height: ${lineHeight};
+      font-size: ${cfg.fontSize}px;
+      line-height: ${cfg.lineHeight};
       font-weight: 500;
       letter-spacing: -0.01em;
       white-space: pre-wrap;
       word-break: break-word;
       opacity: 0.96;
+      width: 100%;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
 
     .submitter-signature {
-      margin-top: 36px;
+      margin-top: ${cfg.signatureMargin}px;
       display: flex;
       align-items: center;
-      gap: 12px;
-      font-size: 26px;
+      gap: 10px;
+      font-size: ${cfg.signatureSize}px;
       font-weight: 600;
       color: ${template.accent_color};
       font-family: 'Inter', sans-serif;
+      flex-shrink: 0;
     }
 
     .submitter-signature::before {
       content: '';
       display: inline-block;
-      width: 32px;
+      width: 28px;
       height: 3px;
       background: ${template.accent_color};
       border-radius: 2px;
@@ -211,12 +301,13 @@ export class ImageService {
       align-items: center;
       width: 100%;
       border-top: 1.5px solid ${template.text_color}18;
-      padding-top: 24px;
-      font-size: 18px;
+      padding-top: 18px;
+      font-size: 16px;
       font-weight: 500;
       opacity: 0.65;
       font-family: 'Inter', sans-serif;
-      z-index: 2;
+      z-index: 10;
+      flex-shrink: 0;
     }
 
     .footer-left {
@@ -240,7 +331,7 @@ export class ImageService {
   </div>
 
   <div class="content-area">
-    ${template.layout_config?.quote_icon !== false ? `<div class="quote-mark">&ldquo;</div>` : ''}
+    ${template.layout_config?.quote_icon !== false && cfg.showBigQuote ? `<div class="quote-mark">&ldquo;</div>` : ''}
     <div class="confession-text">${safeText}</div>
     ${template.show_name ? `<div class="submitter-signature">&mdash; ${safeName}</div>` : ''}
   </div>
@@ -342,12 +433,45 @@ export class ImageService {
     const safeText = this.escapeHtml(confession.cleaned_text || confession.original_text);
     const safeName = this.escapeHtml(confession.is_anonymous ? 'Anonymous' : confession.display_name);
 
+    const len = safeText.length;
+    let charsPerLine = 38;
+    let fontSize = 32;
+    let lineSpacing = 44;
+    let startY = 320;
+    let showQuote = true;
+
+    if (len < 250) {
+      charsPerLine = 38;
+      fontSize = 32;
+      lineSpacing = 44;
+      startY = 320;
+      showQuote = true;
+    } else if (len < 550) {
+      charsPerLine = 48;
+      fontSize = 25;
+      lineSpacing = 34;
+      startY = 260;
+      showQuote = true;
+    } else if (len < 1100) {
+      charsPerLine = 60;
+      fontSize = 20;
+      lineSpacing = 27;
+      startY = 200;
+      showQuote = false;
+    } else {
+      charsPerLine = 72;
+      fontSize = 15.5;
+      lineSpacing = 21;
+      startY = 180;
+      showQuote = false;
+    }
+
     // Split into readable lines for SVG text wrapping
     const words = safeText.split(' ');
     const lines: string[] = [];
     let currentLine = '';
     for (const word of words) {
-      if ((currentLine + ' ' + word).length > 38) {
+      if ((currentLine + ' ' + word).length > charsPerLine) {
         lines.push(currentLine.trim());
         currentLine = word;
       } else {
@@ -355,6 +479,18 @@ export class ImageService {
       }
     }
     if (currentLine) lines.push(currentLine.trim());
+
+    // Calculate maximum lines that safely fit before footer (footer starts at y=950)
+    const maxAvailableHeight = 930 - startY - 70;
+    const maxLines = Math.floor(maxAvailableHeight / lineSpacing);
+    const displayLines = lines.slice(0, maxLines);
+    if (lines.length > maxLines && displayLines.length > 0) {
+      const lastIdx = displayLines.length - 1;
+      displayLines[lastIdx] = displayLines[lastIdx].substring(0, Math.max(10, charsPerLine - 25)) + '... [Read caption 👇]';
+    }
+
+    const lastLineY = startY + (displayLines.length - 1) * lineSpacing;
+    const signatureY = Math.min(920, lastLineY + 38);
 
     const svg = `<svg width="1080" height="1080" viewBox="0 0 1080 1080" xmlns="http://www.w3.org/2000/svg">
       <defs>
@@ -366,38 +502,39 @@ export class ImageService {
       <rect width="1080" height="1080" fill="url(#bgGrad)" />
       
       <!-- Header Badge -->
-      <rect x="80" y="80" width="310" height="56" rx="28" fill="${template.accent_color}" fill-opacity="0.2" stroke="${template.accent_color}" stroke-width="2" />
-      <text x="235" y="117" font-family="system-ui, sans-serif" font-size="22" font-weight="bold" fill="${template.accent_color}" text-anchor="middle" letter-spacing="2">
+      <rect x="70" y="70" width="280" height="52" rx="26" fill="${template.accent_color}" fill-opacity="0.18" stroke="${template.accent_color}" stroke-width="2" />
+      <text x="210" y="104" font-family="system-ui, sans-serif" font-size="20" font-weight="bold" fill="${template.accent_color}" text-anchor="middle" letter-spacing="1.5">
         CONFESSION #${numFormatted}
       </text>
       
       <!-- Brand Top -->
-      <text x="1000" y="117" font-family="system-ui, sans-serif" font-size="22" font-weight="600" fill="${template.text_color}" opacity="0.75" text-anchor="end">
+      <text x="1010" y="104" font-family="system-ui, sans-serif" font-size="20" font-weight="600" fill="${template.text_color}" opacity="0.75" text-anchor="end">
         ${this.escapeHtml(brandName)}
       </text>
 
-      <!-- Quote Mark -->
-      <text x="80" y="320" font-family="Georgia, serif" font-size="96" fill="${template.accent_color}" opacity="0.85">&ldquo;</text>
+      ${showQuote ? `<!-- Quote Mark -->
+      <text x="70" y="${startY - 25}" font-family="Georgia, serif" font-size="76" fill="${template.accent_color}" opacity="0.85">&ldquo;</text>` : ''}
 
       <!-- Confession Text Lines -->
-      ${lines.slice(0, 12).map((l, i) => `
-        <text x="80" y="${390 + i * 46}" font-family="system-ui, sans-serif" font-size="34" font-weight="500" fill="${template.text_color}">
+      ${displayLines.map((l, i) => `
+        <text x="70" y="${startY + i * lineSpacing}" font-family="system-ui, sans-serif" font-size="${fontSize}" font-weight="500" fill="${template.text_color}">
           ${l}
         </text>
       `).join('')}
 
       <!-- Signature -->
-      <line x1="80" y1="${390 + Math.min(lines.length, 12) * 46 + 40}" x2="130" y2="${390 + Math.min(lines.length, 12) * 46 + 40}" stroke="${template.accent_color}" stroke-width="4" stroke-linecap="round" />
-      <text x="150" y="${390 + Math.min(lines.length, 12) * 46 + 48}" font-family="system-ui, sans-serif" font-size="28" font-weight="bold" fill="${template.accent_color}">
+      ${template.show_name ? `
+      <line x1="70" y1="${signatureY}" x2="110" y2="${signatureY}" stroke="${template.accent_color}" stroke-width="3" stroke-linecap="round" />
+      <text x="125" y="${signatureY + 6}" font-family="system-ui, sans-serif" font-size="20" font-weight="bold" fill="${template.accent_color}">
         ${safeName}
-      </text>
+      </text>` : ''}
 
       <!-- Footer Divider & Meta -->
-      <line x1="80" y1="980" x2="1000" y2="980" stroke="${template.text_color}" stroke-opacity="0.2" stroke-width="2" />
-      <text x="80" y="1025" font-family="system-ui, sans-serif" font-size="20" fill="${template.text_color}" opacity="0.7">
+      <line x1="70" y1="960" x2="1010" y2="960" stroke="${template.text_color}" stroke-opacity="0.18" stroke-width="1.5" />
+      <text x="70" y="1005" font-family="system-ui, sans-serif" font-size="18" fill="${template.text_color}" opacity="0.7">
         ${this.escapeHtml(brandName)} &bull; ${this.escapeHtml(instagramHandle)}
       </text>
-      <text x="1000" y="1025" font-family="system-ui, sans-serif" font-size="20" fill="${template.text_color}" opacity="0.5" text-anchor="end">
+      <text x="1010" y="1005" font-family="system-ui, sans-serif" font-size="18" fill="${template.text_color}" opacity="0.5" text-anchor="end">
         ConfessionFlow
       </text>
     </svg>`;
