@@ -11,13 +11,12 @@ import {
   Instagram,
   Calendar,
   Sparkles,
-  ArrowUpDown,
-  AlertCircle,
   RefreshCw,
   Trash2,
 } from 'lucide-react';
+
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
-import { Confession, ConfessionStatus, Template } from '@/types';
+import { Confession, Template } from '@/types';
 import { PublishModal } from '@/components/confessions/PublishModal';
 import { ScheduleModal } from '@/components/confessions/ScheduleModal';
 import { useToast } from '@/components/ui/ToastContext';

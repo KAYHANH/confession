@@ -10,9 +10,9 @@ import {
   Send,
   Sparkles,
   FileSpreadsheet,
-  CheckCircle2,
   XCircle,
 } from 'lucide-react';
+
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { ActivityLog } from '@/types';
 import { useToast } from '@/components/ui/ToastContext';

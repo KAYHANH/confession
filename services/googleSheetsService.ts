@@ -503,7 +503,7 @@ export class GoogleSheetsService {
   /**
    * Mock rows provider for offline local development
    */
-  private getMockRows(config: GoogleSheetConfig): RawSheetRow[] {
+  private getMockRows(_config: GoogleSheetConfig): RawSheetRow[] {
     const existing = mockStore.getConfessions();
     const maxRow = existing.reduce((max, c) => Math.max(max, c.google_sheet_row), 1);
 

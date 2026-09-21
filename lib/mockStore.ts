@@ -187,7 +187,7 @@ class MockStore {
         const raw = fs.readFileSync(DATA_FILE, 'utf-8');
         return JSON.parse(raw);
       }
-    } catch (e) {
+    } catch (_e) {
       console.warn('[MockStore] Failed to read mock file, using defaults');
     }
 

@@ -1,4 +1,4 @@
-import { Confession, ConfessionStatus, DashboardStats, SystemSettings } from '@/types';
+import { Confession, ConfessionStatus, DashboardStats } from '@/types';
 import { mockStore } from '@/lib/mockStore';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { aiService } from './aiService';
@@ -438,7 +438,7 @@ export class ConfessionService {
         const newRetryCount = (confession.retry_count || 0) + 1;
         const nextStatus: ConfessionStatus = newRetryCount >= 3 ? 'FAILED_REQUIRES_ACTION' : 'FAILED';
 
-        const failed = await this.updateConfession(id, {
+        await this.updateConfession(id, {
           status: nextStatus,
           retry_count: newRetryCount,
           error_message: publishResult.error || 'Failed to publish post',

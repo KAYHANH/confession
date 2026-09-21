@@ -7,12 +7,10 @@ import {
   Check,
   X,
   Edit,
-  Sparkles,
-  AlertTriangle,
-  CheckCircle2,
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react';
+
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Confession, Template } from '@/types';
 import { PostCardPreview } from '@/components/confessions/PostCardPreview';

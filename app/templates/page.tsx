@@ -8,9 +8,9 @@ import {
   Copy,
   Trash2,
   Check,
-  Eye,
   RefreshCw,
 } from 'lucide-react';
+
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Template } from '@/types';
 import { PostCardPreview } from '@/components/confessions/PostCardPreview';

@@ -10,12 +10,10 @@ import {
   ShieldAlert,
   Send,
   Hash,
-  Check,
   RefreshCw,
-  Clock,
   AlertCircle,
-  ExternalLink,
 } from 'lucide-react';
+
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { SystemSettings, GoogleSheetConfig, InstagramAccountConfig } from '@/types';
 import { useToast } from '@/components/ui/ToastContext';
