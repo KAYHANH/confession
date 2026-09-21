@@ -63,9 +63,19 @@ export class GoogleSheetsService {
     }
 
     try {
-      const privateKey = rawKey.replace(/\\n/g, '\n');
+      let key = rawKey.trim();
+      if (key.startsWith('"') && key.endsWith('"')) {
+        key = key.slice(1, -1);
+      }
+      if (!key.includes('BEGIN PRIVATE KEY')) {
+        key = '-----BEGIN PRIVATE KEY-----\n' + key;
+      }
+      if (!key.includes('END PRIVATE KEY')) {
+        key = key + '\n-----END PRIVATE KEY-----';
+      }
+      const privateKey = key.replace(/\\n/g, '\n');
       const auth = new google.auth.JWT({
-        email,
+        email: email.trim(),
         key: privateKey,
         scopes: ['https://www.googleapis.com/auth/spreadsheets'],
       });
