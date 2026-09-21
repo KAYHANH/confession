@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: confessionflow
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://confession-5ha2.onrender.com
+      - key: RENDER_EXTERNAL_URL
+        value: https://confession-5ha2.onrender.com
+      - key: MOCK_EXTERNAL_APIS
+        value: "false"
+      - key: GOOGLE_SHEETS_SPREADSHEET_ID
+        value: 1S5HcRCh27paVdqyiCAqAI_1x-LCABtb73R6Fisn-QJs
+      - key: GOOGLE_SHEETS_SHEET_NAME
+        value: Confessions
+      - key: AI_PROVIDER
+        value: groq
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: GROQ_API_KEY
+        sync: false
+      - key: INSTAGRAM_ACCOUNT_ID
+        sync: false
+      - key: INSTAGRAM_ACCESS_TOKEN
+        sync: false
+      - key: CRON_SECRET
+        generateValue: true
+      - key: DEFAULT_TIMEZONE
+        value: Asia/Kolkata
+      - key: MAX_DAILY_POSTS
+        value: "10"
+      - key: AUTO_PUBLISH_ENABLED
+        value: "false"
+      - key: BRAND_NAME
+        value: Campus Confessions
+      - key: INSTAGRAM_HANDLE
+        value: "@campusconfessions_official"

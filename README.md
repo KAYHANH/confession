@@ -214,6 +214,35 @@ Both endpoints require the `CRON_SECRET` bearer header or `x-cron-secret` header
 
 ---
 
+## 🚀 Deploying on Render (24/7 Free Hosting)
+
+ConfessionFlow is fully configured for zero-downtime 24/7 operation on [Render](https://render.com).
+
+### Quick Deployment via Blueprint (`render.yaml`):
+1. Push this repository to your GitHub account (`https://github.com/KAYHANH/confession`).
+2. Log into [Render Dashboard](https://dashboard.render.com).
+3. Click **New +** &rarr; **Blueprint**.
+4. Select your `confession` repository. Render will automatically detect `render.yaml` and configure:
+   - **Environment**: Node.js
+   - **Build Command**: `npm install && npm run build`
+   - **Start Command**: `npm start` (dynamically binds to `0.0.0.0:$PORT`)
+   - **Health Check**: `/api/health`
+5. In the Environment Variables settings, provide your secret keys:
+   - `GROQ_API_KEY`: your Groq AI key
+   - `INSTAGRAM_ACCOUNT_ID` & `INSTAGRAM_ACCESS_TOKEN`: your Meta credentials
+6. Click **Apply** to deploy!
+
+### 24/7 Always-On Guarantee (No Sleep on Free Tier):
+Render free web services normally spin down after 15 minutes of inactivity. ConfessionFlow includes two layers to stay awake 24/7:
+1. **Built-in Self-Ping Engine**: `services/backgroundRunner.ts` automatically pings `https://confession-5ha2.onrender.com/api/health` every 9 minutes to reset Render's inactivity counter.
+2. **External Free Pinger (Recommended Fail-Safe)**:
+   - Go to [Cron-Job.org](https://cron-job.org) or [UptimeRobot](https://uptimerobot.com) (100% free).
+   - Create a monitor for: `https://confession-5ha2.onrender.com/api/health`
+   - Set interval: **Every 10 minutes** (or 5 minutes).
+   - This guarantees your service never sleeps, keeping your automated sheet ingestion and scheduled post publisher running around the clock!
+
+---
+
 ## 🔒 Security Summary
 
 - **Never Client-Exposed**: Service account private keys, Instagram access tokens, Groq API keys, and Supabase service role keys are strictly handled server-side.
@@ -225,3 +254,4 @@ Both endpoints require the `CRON_SECRET` bearer header or `x-cron-secret` header
 
 ## 📄 License
 MIT © ConfessionFlow
+

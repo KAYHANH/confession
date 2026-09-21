@@ -14,6 +14,7 @@ const nextConfig = {
     ],
   },
   experimental: {
+    instrumentationHook: true,
     serverComponentsExternalPackages: ['playwright'],
   },
 };
