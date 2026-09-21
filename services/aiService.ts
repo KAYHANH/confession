@@ -56,7 +56,7 @@ export class AIService {
       throw new Error('Groq client not initialized');
     }
 
-    const model = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+    const requestedModel = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
 
     const systemPrompt = `You are the lead AI editor and content strategist for "ConfessionFlow", a university/campus anonymous confession platform.
 Your task is to prepare user-submitted confessions for an official Instagram post.
@@ -90,15 +90,34 @@ CRITICAL RULES:
 Submitted Name: "${submittedName}"
 Is Anonymous: ${isAnonymous}`;
 
-    const completion = await this.groqClient.chat.completions.create({
-      model,
-      temperature: 0.2, // Low temperature for high fidelity and zero hallucinations
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-    });
+    let completion;
+    try {
+      completion = await this.groqClient.chat.completions.create({
+        model: requestedModel,
+        temperature: 0.2, // Low temperature for high fidelity and zero hallucinations
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      });
+    } catch (modelErr: any) {
+      if (modelErr?.message?.includes('model_not_found') || modelErr?.code === 'model_not_found') {
+        const fallbackModel = requestedModel === 'openai/gpt-oss-120b' ? 'llama-3.3-70b-versatile' : 'openai/gpt-oss-120b';
+        console.warn(`[AIService] Model ${requestedModel} not found, retrying with fallback model ${fallbackModel}...`);
+        completion = await this.groqClient.chat.completions.create({
+          model: fallbackModel,
+          temperature: 0.2,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+        });
+      } else {
+        throw modelErr;
+      }
+    }
 
     const content = completion.choices[0]?.message?.content;
     if (!content) {
