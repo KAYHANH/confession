@@ -185,7 +185,14 @@ class MockStore {
         const stat = fs.statSync(DATA_FILE);
         this.lastMtime = stat.mtimeMs;
         const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        if (parsed.instagram?.account_id === '17841400000000000') {
+          parsed.instagram.account_id = process.env.INSTAGRAM_ACCOUNT_ID || '';
+        }
+        if (parsed.instagram?.access_token === 'EAABwzL...') {
+          parsed.instagram.access_token = process.env.INSTAGRAM_ACCESS_TOKEN || '';
+        }
+        return parsed;
       }
     } catch (_e) {
       console.warn('[MockStore] Failed to read mock file, using defaults');
@@ -222,12 +229,12 @@ class MockStore {
         rows_imported: 0,
       },
       instagram: {
-        account_id: '17841400000000000',
+        account_id: process.env.INSTAGRAM_ACCOUNT_ID || '',
         username: 'campusconfessions_official',
-        access_token: 'EAABwzL...',
+        access_token: process.env.INSTAGRAM_ACCESS_TOKEN || '',
         token_expires_at: new Date(Date.now() + 60 * 86400000).toISOString(),
-        is_connected: true,
-        status: 'ACTIVE',
+        is_connected: !!(process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN),
+        status: (process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN) ? 'ACTIVE' : 'DISCONNECTED',
       },
       settings: { ...DEFAULT_SETTINGS },
     };
@@ -250,6 +257,7 @@ class MockStore {
   }
 
   public getConfessionById(id: string): Confession | undefined {
+    this.ensureFresh();
     return this.data.confessions.find((c) => c.id === id);
   }
 

@@ -151,6 +151,7 @@ function SettingsContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           accountId: instagramConfig.account_id,
+          accessToken: instagramConfig.access_token,
         }),
       });
       const data = await res.json();
@@ -482,8 +483,8 @@ function SettingsContent() {
                     }
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 font-mono text-xs"
                   />
-                  <p className="text-[11px] text-zinc-400 mt-1">
-                    Never exposed to client browsers. Stored and processed exclusively server-side.
+                  <p className="text-[11px] text-zinc-500 mt-1">
+                    Must be a Meta Graph API token starting with <span className="font-mono font-bold text-zinc-800">EAA...</span> with <span className="font-mono text-zinc-800">instagram_content_publish</span> permission. (Tokens starting with <span className="font-mono text-rose-600">IGAA</span> are Basic Display tokens and will not work).
                   </p>
                 </div>
               </div>

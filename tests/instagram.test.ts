@@ -56,8 +56,46 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
       '/generated/sample.png',
       'Test caption'
     );
-
     expect(result.success).toBe(false);
     expect(result.error).toContain('already published');
+  });
+
+  it('should reject IGAA tokens with clear explanatory guidance', async () => {
+    // Temporarily mock isMock to return false to test real validation logic
+    const origIsMock = instagramService.isMock;
+    instagramService.isMock = () => false;
+
+    try {
+      const connResult = await instagramService.testConnection('12345678', 'IGAAZAXT...');
+      expect(connResult.success).toBe(false);
+      expect(connResult.message).toContain('IGAA');
+      expect(connResult.message).toContain('EAA');
+
+      const pubResult = await instagramService.publishPost(
+        mockConfession,
+        'https://example.com/card.png',
+        'Caption',
+      );
+      // If token in env is IGAA, it will reject with IGAA message
+      if (process.env.INSTAGRAM_ACCESS_TOKEN?.startsWith('IGAA')) {
+        expect(pubResult.success).toBe(false);
+        expect(pubResult.error).toContain('IGAA');
+      }
+    } finally {
+      instagramService.isMock = origIsMock;
+    }
+  });
+
+  it('should return helpful configuration error if credentials missing and mock disabled', async () => {
+    const origIsMock = instagramService.isMock;
+    instagramService.isMock = () => false;
+
+    try {
+      const connResult = await instagramService.testConnection('', '');
+      expect(connResult.success).toBe(false);
+      expect(connResult.message).toContain('Missing Instagram Account ID or Access Token');
+    } finally {
+      instagramService.isMock = origIsMock;
+    }
   });
 });

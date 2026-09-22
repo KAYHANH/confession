@@ -1,4 +1,5 @@
 import { Confession } from '@/types';
+import { mockStore } from '@/lib/mockStore';
 
 export interface InstagramPublishResult {
   success: boolean;
@@ -22,8 +23,13 @@ export class InstagramService {
    * Test Instagram credentials and retrieve account profile info
    */
   public async testConnection(accountId?: string, accessToken?: string): Promise<{ success: boolean; username?: string; message: string }> {
-    const id = accountId || process.env.INSTAGRAM_ACCOUNT_ID;
-    const token = accessToken || process.env.INSTAGRAM_ACCESS_TOKEN;
+    const storeConfig = mockStore.getInstagramConfig();
+    const id = (accountId && accountId.trim()) ||
+      (process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCOUNT_ID.trim()) ||
+      (storeConfig.account_id && !storeConfig.account_id.startsWith('178414000000') ? storeConfig.account_id.trim() : '');
+    const token = (accessToken && accessToken.trim()) ||
+      (process.env.INSTAGRAM_ACCESS_TOKEN && process.env.INSTAGRAM_ACCESS_TOKEN.trim()) ||
+      (storeConfig.access_token && !storeConfig.access_token.startsWith('EAABwzL') ? storeConfig.access_token.trim() : '');
 
     if (this.isMock()) {
       return {
@@ -36,7 +42,14 @@ export class InstagramService {
     if (!id || !token) {
       return {
         success: false,
-        message: 'Missing Instagram Account ID or Access Token in configuration.',
+        message: 'Missing Instagram Account ID or Access Token in configuration. Please configure them in Render environment variables or Platform Settings.',
+      };
+    }
+
+    if (token.startsWith('IGAA')) {
+      return {
+        success: false,
+        message: 'Invalid Token Type: Your token starts with "IGAA" (Instagram Basic Display API). Instagram Publishing requires a Meta Graph API token starting with "EAA" from Meta Graph API Explorer.',
       };
     }
 
@@ -92,13 +105,50 @@ export class InstagramService {
       };
     }
 
-    const accountId = process.env.INSTAGRAM_ACCOUNT_ID;
-    const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
+    const storeConfig = mockStore.getInstagramConfig();
+    const accountId =
+      (process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCOUNT_ID.trim()) ||
+      (storeConfig.account_id && !storeConfig.account_id.startsWith('178414000000') ? storeConfig.account_id.trim() : '');
+    const accessToken =
+      (process.env.INSTAGRAM_ACCESS_TOKEN && process.env.INSTAGRAM_ACCESS_TOKEN.trim()) ||
+      (storeConfig.access_token && !storeConfig.access_token.startsWith('EAABwzL') ? storeConfig.access_token.trim() : '');
 
     if (!accountId || !accessToken) {
       return {
         success: false,
-        error: 'Instagram Account ID or Access Token is missing from server configuration.',
+        error: 'Instagram Account ID or Access Token is missing from server configuration. Please configure INSTAGRAM_ACCOUNT_ID and INSTAGRAM_ACCESS_TOKEN in Render environment variables or Platform Settings.',
+      };
+    }
+
+    if (accessToken.startsWith('IGAA')) {
+      return {
+        success: false,
+        error: 'Invalid Token Type: Your token starts with "IGAA" (Instagram Basic Display API). Instagram Publishing requires a Meta Graph API User or Page token starting with "EAA" from Meta Graph API Explorer.',
+      };
+    }
+
+    // Resolve relative URL to absolute URL for Meta's crawler
+    let resolvedImageUrl = imageUrl;
+    if (resolvedImageUrl.startsWith('/')) {
+      const appBaseUrl =
+        process.env.NEXT_PUBLIC_APP_URL ||
+        (process.env.RENDER_EXTERNAL_URL ? `https://${process.env.RENDER_EXTERNAL_URL}` : '');
+      if (appBaseUrl) {
+        resolvedImageUrl = `${appBaseUrl.replace(/\/$/, '')}${resolvedImageUrl}`;
+      }
+    }
+
+    if (!resolvedImageUrl.startsWith('http://') && !resolvedImageUrl.startsWith('https://')) {
+      return {
+        success: false,
+        error: `Image URL is not a valid web URL (${resolvedImageUrl}). Make sure NEXT_PUBLIC_APP_URL is set in your environment.`,
+      };
+    }
+
+    if (resolvedImageUrl.includes('localhost') || resolvedImageUrl.includes('127.0.0.1')) {
+      return {
+        success: false,
+        error: `Instagram cannot fetch images from local machine (${resolvedImageUrl}). Deploy your app to a public URL (like Render) or configure public image hosting.`,
       };
     }
 
@@ -110,7 +160,7 @@ export class InstagramService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          image_url: imageUrl,
+          image_url: resolvedImageUrl,
           caption: captionText,
           access_token: accessToken,
         }),
@@ -120,7 +170,7 @@ export class InstagramService {
       if (!containerResp.ok || containerData.error) {
         return {
           success: false,
-          error: `Failed to create Instagram media container: ${containerData.error?.message || 'Unknown Meta API error'}`,
+          error: `Failed to create Instagram media container: ${containerData.error?.message || 'Unknown Meta API error'} (code: ${containerData.error?.code || containerResp.status})`,
         };
       }
 
