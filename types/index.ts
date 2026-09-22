@@ -81,6 +81,7 @@ export interface ActivityLog {
     | 'SCHEDULED'
     | 'PUBLISH_STARTED'
     | 'PUBLISHED'
+    | 'AUTO_PUBLISHED'
     | 'PUBLISH_FAILED'
     | 'SHEET_SYNC'
     | 'INSTAGRAM_CONNECTED'
@@ -136,6 +137,9 @@ export interface SystemSettings {
   publishing_mode: 'MANUAL_APPROVAL' | 'AUTO_APPROVAL' | 'AUTO_PUBLISH';
   default_publishing_time: string; // e.g. "19:30"
   max_daily_posts: number;
+  auto_publish_interval_minutes?: number; // Minimum cooldown between posts in minutes (e.g. 60 or 120)
+  auto_publish_start_hour?: number; // Active window start hour in local time (0-23, e.g. 9 for 9 AM)
+  auto_publish_end_hour?: number; // Active window end hour in local time (0-23, e.g. 23 for 11 PM)
   enable_profanity_filter: boolean;
   enable_pii_detection: boolean;
   require_approval: boolean;

@@ -38,7 +38,31 @@ function SettingsContent() {
   const [testingInstagram, setTestingInstagram] = useState(false);
   const [instagramTestMessage, setInstagramTestMessage] = useState<{ success: boolean; text: string } | null>(null);
 
-  const { success, error } = useToast();
+  const { success, error, info } = useToast();
+  const [runningAutoPublish, setRunningAutoPublish] = useState(false);
+
+  const handleTriggerAutoPublish = async (force: boolean = true) => {
+    setRunningAutoPublish(true);
+    try {
+      const res = await fetch('/api/cron/auto-publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Auto-publish execution failed');
+      if (data.status === 'SUCCESS') {
+        success(`Auto-publish succeeded! Published confession #${data.confessionNumber}`);
+      } else {
+        info(data.reason || `Auto-publish status: ${data.status}`);
+      }
+      window.dispatchEvent(new CustomEvent('confessionflow:refresh'));
+    } catch (err: any) {
+      error(err?.message || 'Failed to trigger auto-publish');
+    } finally {
+      setRunningAutoPublish(false);
+    }
+  };
 
   const loadAllSettings = useCallback(async () => {
     setLoading(true);
@@ -693,10 +717,47 @@ function SettingsContent() {
           {activeTab === 'publishing' && (
             <div className="space-y-6">
               <div>
-                <h3 className="text-base font-bold text-zinc-900">Publishing Workflow & Limits</h3>
+                <h3 className="text-base font-bold text-zinc-900">24/7 Autonomous Publishing</h3>
                 <p className="text-xs text-zinc-500">
-                  Control automation pace, daily broadcast volume, and approval enforcement.
+                  Configure hands-free automated posting to Instagram so you never have to open the app manually.
                 </p>
+              </div>
+
+              {/* Master Auto-Publish Toggle Card */}
+              <div className="p-4 rounded-xl border border-purple-200 bg-gradient-to-br from-purple-50/60 to-pink-50/30 flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-bold text-sm text-zinc-900">Hands-Free 24/7 Auto-Publish</span>
+                    {generalSettings.auto_publish || generalSettings.publishing_mode === 'AUTO_PUBLISH' ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-600 text-white flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" /> ACTIVE
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-zinc-200 text-zinc-600">
+                        PAUSED
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-zinc-600 max-w-xl">
+                    When active, the server continuously pulls new submissions from your Google Sheet, moderates safety, formats the caption & hashtags with AI, renders the 1080x1080 card image, and broadcasts safe confessions directly to Instagram on schedule without needing to log in.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-1">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(generalSettings.auto_publish || generalSettings.publishing_mode === 'AUTO_PUBLISH')}
+                    onChange={(e) => {
+                      const enabled = e.target.checked;
+                      setGeneralSettings({
+                        ...generalSettings,
+                        auto_publish: enabled,
+                        publishing_mode: enabled ? 'AUTO_PUBLISH' : 'MANUAL_APPROVAL',
+                      });
+                    }}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                </label>
               </div>
 
               <div className="space-y-4 text-xs">
@@ -708,17 +769,43 @@ function SettingsContent() {
                       setGeneralSettings({
                         ...generalSettings,
                         publishing_mode: e.target.value as any,
+                        auto_publish: e.target.value === 'AUTO_PUBLISH',
                       })
                     }
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-semibold bg-white"
                   >
-                    <option value="MANUAL_APPROVAL">Manual Admin Approval Only (Recommended)</option>
-                    <option value="AUTO_APPROVAL">Auto-Approve Low Risk Confessions</option>
-                    <option value="AUTO_PUBLISH">Full Auto-Publish (Requires strict safety checks)</option>
+                    <option value="AUTO_PUBLISH">Full Auto-Publish (24/7 Hands-Free - Recommended)</option>
+                    <option value="AUTO_APPROVAL">Auto-Approve Safe Confessions (Wait for manual broadcast)</option>
+                    <option value="MANUAL_APPROVAL">Manual Admin Approval Only</option>
                   </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block font-semibold text-zinc-700 mb-1.5">
+                      Post Spacing / Cooldown
+                    </label>
+                    <select
+                      value={generalSettings.auto_publish_interval_minutes || 120}
+                      onChange={(e) =>
+                        setGeneralSettings({
+                          ...generalSettings,
+                          auto_publish_interval_minutes: parseInt(e.target.value, 10),
+                        })
+                      }
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
+                    >
+                      <option value={30}>Every 30 Minutes</option>
+                      <option value={60}>Every 1 Hour (60m)</option>
+                      <option value={120}>Every 2 Hours (120m - Recommended)</option>
+                      <option value={180}>Every 3 Hours (180m)</option>
+                      <option value={240}>Every 4 Hours (240m)</option>
+                    </select>
+                    <span className="text-[10px] text-zinc-500 mt-1 block">
+                      Minimum elapsed time between automated Instagram posts.
+                    </span>
+                  </div>
+
                   <div>
                     <label className="block font-semibold text-zinc-700 mb-1.5">
                       Maximum Daily Instagram Posts
@@ -736,33 +823,82 @@ function SettingsContent() {
                       }
                       className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
                     />
+                    <span className="text-[10px] text-zinc-500 mt-1 block">
+                      Hard limit to prevent spam flagging from Meta.
+                    </span>
                   </div>
 
                   <div>
                     <label className="block font-semibold text-zinc-700 mb-1.5">
-                      Default Scheduled Time (Local)
+                      Active Hours Window (Local)
                     </label>
-                    <input
-                      type="time"
-                      value={generalSettings.default_publishing_time}
-                      onChange={(e) =>
-                        setGeneralSettings({
-                          ...generalSettings,
-                          default_publishing_time: e.target.value,
-                        })
-                      }
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
-                    />
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={generalSettings.auto_publish_start_hour ?? 9}
+                        onChange={(e) =>
+                          setGeneralSettings({
+                            ...generalSettings,
+                            auto_publish_start_hour: parseInt(e.target.value, 10),
+                          })
+                        }
+                        className="w-1/2 px-2.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
+                      >
+                        {Array.from({ length: 24 }).map((_, h) => (
+                          <option key={h} value={h}>
+                            {String(h).padStart(2, '0')}:00
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-zinc-500">to</span>
+                      <select
+                        value={generalSettings.auto_publish_end_hour ?? 23}
+                        onChange={(e) =>
+                          setGeneralSettings({
+                            ...generalSettings,
+                            auto_publish_end_hour: parseInt(e.target.value, 10),
+                          })
+                        }
+                        className="w-1/2 px-2.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
+                      >
+                        {Array.from({ length: 24 }).map((_, h) => (
+                          <option key={h} value={h}>
+                            {String(h).padStart(2, '0')}:00
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <span className="text-[10px] text-zinc-500 mt-1 block">
+                      Prevents posting during overnight/sleep hours.
+                    </span>
                   </div>
+                </div>
+
+                {/* Instant Trigger Test Button */}
+                <div className="p-4 rounded-xl border border-zinc-200 bg-zinc-50 flex items-center justify-between gap-4 mt-4">
+                  <div>
+                    <h4 className="font-semibold text-zinc-900 text-xs">Manual Test Trigger</h4>
+                    <p className="text-[11px] text-zinc-500">
+                      Immediately trigger an automated publishing cycle right now to test post generation and publishing.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleTriggerAutoPublish(true)}
+                    disabled={runningAutoPublish}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow-sm transition-all disabled:opacity-60 cursor-pointer shrink-0"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${runningAutoPublish ? 'animate-spin' : ''}`} />
+                    <span>{runningAutoPublish ? 'Running...' : 'Run Auto-Publish Now'}</span>
+                  </button>
                 </div>
               </div>
 
               <div className="pt-4 border-t border-zinc-100 flex justify-end">
                 <button
                   onClick={() => handleSaveGeneral(generalSettings)}
-                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer"
+                  disabled={saving}
+                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
                 >
-                  Save Publishing Rules
+                  {saving ? 'Saving...' : 'Save Publishing Rules'}
                 </button>
               </div>
             </div>

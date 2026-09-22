@@ -67,13 +67,16 @@ export function startBackgroundRunner() {
   }, SYNC_INTERVAL);
   if (syncTimer.unref) syncTimer.unref();
 
-  // 3. Process Scheduled Posts (Runs every 1 minute)
+  // 3. Process Scheduled Posts & Autonomous Auto-Publishing (Runs every 1 minute)
   const PUBLISH_INTERVAL = 60 * 1000; // 1 minute
   publishTimer = setInterval(async () => {
     try {
-      await schedulingService.processDuePosts();
+      const cycleResult = await schedulingService.processAutoPublishCycle();
+      if (cycleResult.ran && cycleResult.status === 'SUCCESS') {
+        console.log(`[BackgroundRunner] Auto-publish cycle succeeded: ${cycleResult.reason}`);
+      }
     } catch (err: any) {
-      console.error('❌ [BackgroundRunner] Scheduled post publishing error:', err?.message || err);
+      console.error('❌ [BackgroundRunner] Auto-publish cycle error:', err?.message || err);
     }
   }, PUBLISH_INTERVAL);
   if (publishTimer.unref) publishTimer.unref();

@@ -12,6 +12,7 @@ interface HeaderProps {
 export function Header({ title, subtitle }: HeaderProps) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [sheetStatus, setSheetStatus] = useState<{ isLive: boolean }>({ isLive: false });
+  const [autoPublishActive, setAutoPublishActive] = useState(false);
   const { success, error } = useToast();
 
   React.useEffect(() => {
@@ -21,6 +22,15 @@ export function Header({ title, subtitle }: HeaderProps) {
         .then((data) => {
           const isConfigured = Boolean(data.spreadsheet_id && !data.spreadsheet_id.startsWith('mock'));
           setSheetStatus({ isLive: isConfigured });
+        })
+        .catch(() => {});
+
+      fetch('/api/settings')
+        .then((res) => res.json())
+        .then((settings) => {
+          setAutoPublishActive(
+            Boolean(settings.auto_publish === true || settings.publishing_mode === 'AUTO_PUBLISH')
+          );
         })
         .catch(() => {});
     };
@@ -71,6 +81,14 @@ export function Header({ title, subtitle }: HeaderProps) {
           <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 text-amber-800 text-xs font-semibold border border-amber-200">
             <Sparkles className="w-3.5 h-3.5 text-amber-600" />
             <span>Connect Your Sheet</span>
+          </div>
+        )}
+
+        {/* 24/7 Auto-Publish Badge */}
+        {autoPublishActive && (
+          <div className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-purple-50 text-purple-800 text-xs font-semibold border border-purple-200">
+            <span className="w-2 h-2 rounded-full bg-purple-600 animate-pulse"></span>
+            <span>24/7 Auto-Publish ON</span>
           </div>
         )}
 
