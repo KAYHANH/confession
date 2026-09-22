@@ -426,6 +426,7 @@ class MockStore {
       confessions: [...DEFAULT_CONFESSIONS],
       templates: [...DEFAULT_TEMPLATES],
       activityLogs: [],
+      publishedPosts: [],
       googleSheet: {
         spreadsheet_id: process.env.GOOGLE_SHEETS_SPREADSHEET_ID || '1S5HcRCh27paVdqyiCAqAI_1x-LCABtb73R6Fisn-QJs',
         sheet_name: process.env.GOOGLE_SHEETS_SHEET_NAME || 'Confessions',
