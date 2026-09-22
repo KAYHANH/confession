@@ -357,38 +357,8 @@ export class ImageService {
     const filename = `${confession.id}.png`;
     const localFilePath = path.join(this.outputDir, filename);
 
-    // Try Playwright rendering if browser binary is actually installed
-    let rendered = false;
-    try {
-      const { chromium } = await import('playwright');
-      const browserPath = chromium.executablePath();
-      if (fs.existsSync(browserPath)) {
-        const browser = await chromium.launch({
-          headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox'],
-          timeout: 5000,
-        });
-        const page = await browser.newPage({
-          viewport: { width: 1080, height: 1080 },
-          deviceScaleFactor: 1,
-        });
-
-        await page.setContent(htmlContent, { waitUntil: 'networkidle' });
-        await page.screenshot({ path: localFilePath, type: 'png' });
-        await browser.close();
-        rendered = true;
-      } else {
-        // Chromium not installed, seamlessly use Sharp engine
-        rendered = false;
-      }
-    } catch (err: any) {
-      console.warn('[ImageService] Playwright browser snapshot failed or unavailable, using high-fidelity Sharp engine:', err?.message);
-    }
-
-    // Fallback: If Playwright fails or is unavailable, create a standalone SVG/HTML card
-    if (!rendered || !fs.existsSync(localFilePath)) {
-      await this.generateSvgPngFallback(options, localFilePath);
-    }
+    // Use Sharp SVG engine directly — instant, no browser launch overhead
+    await this.generateSvgPngFallback(options, localFilePath);
 
     const publicUrl = `/generated/${filename}`;
 

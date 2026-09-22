@@ -270,10 +270,10 @@ export class InstagramService {
         };
       }
 
-      // Step 2: Poll container status until FINISHED
+      // Step 2: Poll container status until FINISHED (check immediately, then every 1s)
       let isReady = false;
       let attempts = 0;
-      const maxAttempts = 10;
+      const maxAttempts = 15;
 
       while (!isReady && attempts < maxAttempts) {
         attempts++;
@@ -294,9 +294,8 @@ export class InstagramService {
           };
         }
 
-        if (attempts < maxAttempts) {
-          await new Promise((resolve) => setTimeout(resolve, 2000)); // wait between checks
-        }
+        // Wait 1s between checks (first check has no delay — instant if already ready)
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
 
       if (!isReady) {
@@ -364,6 +363,23 @@ export class InstagramService {
       if (!fs.existsSync(filePath)) return null;
       const fileBytes = fs.readFileSync(filePath);
       const b64 = fileBytes.toString('base64');
+
+      // Try imgbb first (faster, reliable free CDN)
+      const imgbbKey = process.env.IMGBB_API_KEY || '';
+      if (imgbbKey) {
+        try {
+          const body = new FormData();
+          body.append('image', b64);
+          const res = await fetch(`https://api.imgbb.com/1/upload?key=${imgbbKey}`, {
+            method: 'POST',
+            body,
+          });
+          const data = await res.json();
+          if (data?.data?.url) return data.data.url;
+        } catch (_e) { /* fall through */ }
+      }
+
+      // Fallback: freeimage.host (no key required)
       const body = new URLSearchParams();
       body.append('key', '6d207e02198a847aa98d0a2a901485a5');
       body.append('action', 'upload');
@@ -375,9 +391,8 @@ export class InstagramService {
         body,
       });
       const data = await res.json();
-      if (data?.image?.url) {
-        return data.image.url;
-      }
+      if (data?.image?.url) return data.image.url;
+
       return null;
     } catch (err: any) {
       console.warn('[InstagramService] Public CDN upload fallback failed:', err?.message);
