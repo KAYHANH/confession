@@ -130,10 +130,12 @@ export class InstagramService {
       }
 
       // Account ID validation: Ensure configured account ID matches authenticated user ID
-      const authenticatedUserId = String(userData.id || userData.user_id).trim();
+      const authenticatedBusinessId = userData.user_id ? String(userData.user_id).trim() : null;
+      const authenticatedAppScopedId = userData.id ? String(userData.id).trim() : null;
+      const authenticatedUserId = authenticatedBusinessId || authenticatedAppScopedId || '';
       const configuredId = String(targetAccountId).trim();
 
-      if (configuredId && configuredId !== authenticatedUserId) {
+      if (configuredId && configuredId !== authenticatedBusinessId && configuredId !== authenticatedAppScopedId) {
         return {
           success: false,
           connected: false,
