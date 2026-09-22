@@ -18,7 +18,8 @@ export async function GET(
 
     // Sanitize filename to prevent directory traversal
     const safeFilename = path.basename(filename);
-    const filePath = path.resolve(process.cwd(), 'public/generated', safeFilename);
+    const generatedDir = path.join(process.cwd(), 'public', 'generated');
+    const filePath = path.join(generatedDir, safeFilename);
 
     if (fs.existsSync(filePath)) {
       const fileBuffer = fs.readFileSync(filePath);

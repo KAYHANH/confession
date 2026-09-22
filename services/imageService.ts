@@ -357,25 +357,32 @@ export class ImageService {
     const filename = `${confession.id}.png`;
     const localFilePath = path.join(this.outputDir, filename);
 
-    // Try Playwright rendering
+    // Try Playwright rendering if browser binary is actually installed
     let rendered = false;
     try {
       const { chromium } = await import('playwright');
-      const browser = await chromium.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
-      const page = await browser.newPage({
-        viewport: { width: 1080, height: 1080 },
-        deviceScaleFactor: 1,
-      });
+      const browserPath = chromium.executablePath();
+      if (fs.existsSync(browserPath)) {
+        const browser = await chromium.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox'],
+          timeout: 5000,
+        });
+        const page = await browser.newPage({
+          viewport: { width: 1080, height: 1080 },
+          deviceScaleFactor: 1,
+        });
 
-      await page.setContent(htmlContent, { waitUntil: 'networkidle' });
-      await page.screenshot({ path: localFilePath, type: 'png' });
-      await browser.close();
-      rendered = true;
+        await page.setContent(htmlContent, { waitUntil: 'networkidle' });
+        await page.screenshot({ path: localFilePath, type: 'png' });
+        await browser.close();
+        rendered = true;
+      } else {
+        // Chromium not installed, seamlessly use Sharp engine
+        rendered = false;
+      }
     } catch (err: any) {
-      console.warn('[ImageService] Playwright browser snapshot failed or downloading, using high-fidelity SVG snapshot engine:', err?.message);
+      console.warn('[ImageService] Playwright browser snapshot failed or unavailable, using high-fidelity Sharp engine:', err?.message);
     }
 
     // Fallback: If Playwright fails or is unavailable, create a standalone SVG/HTML card
@@ -513,7 +520,7 @@ export class ImageService {
       </text>
 
       ${showQuote ? `<!-- Quote Mark -->
-      <text x="70" y="${startY - 25}" font-family="Georgia, serif" font-size="76" fill="${template.accent_color}" opacity="0.85">&ldquo;</text>` : ''}
+      <text x="70" y="${startY - 25}" font-family="Georgia, serif" font-size="76" fill="${template.accent_color}" opacity="0.85">&#8220;</text>` : ''}
 
       <!-- Confession Text Lines -->
       ${displayLines.map((l, i) => `
@@ -532,7 +539,7 @@ export class ImageService {
       <!-- Footer Divider & Meta -->
       <line x1="70" y1="960" x2="1010" y2="960" stroke="${template.text_color}" stroke-opacity="0.18" stroke-width="1.5" />
       <text x="70" y="1005" font-family="system-ui, sans-serif" font-size="18" fill="${template.text_color}" opacity="0.7">
-        ${this.escapeHtml(brandName)} &bull; ${this.escapeHtml(instagramHandle)}
+        ${this.escapeHtml(brandName)} &#8226; ${this.escapeHtml(instagramHandle)}
       </text>
       <text x="1010" y="1005" font-family="system-ui, sans-serif" font-size="18" fill="${template.text_color}" opacity="0.5" text-anchor="end">
         ConfessionFlow
@@ -542,8 +549,16 @@ export class ImageService {
     // Save SVG file
     const svgPath = targetPath.replace(/\.png$/, '.svg');
     fs.writeFileSync(svgPath, svg, 'utf-8');
-    // Also save as targetPath (valid image representation)
-    fs.writeFileSync(targetPath, svg, 'utf-8');
+
+    // Convert SVG into a true binary PNG using sharp
+    try {
+      const sharp = (await import('sharp')).default || (await import('sharp'));
+      await sharp(Buffer.from(svg)).png().toFile(targetPath);
+    } catch (sharpErr: any) {
+      console.warn('[ImageService] Sharp conversion fallback warning:', sharpErr?.message);
+      // If sharp fails for any reason, write raw file as last resort
+      fs.writeFileSync(targetPath, svg, 'utf-8');
+    }
   }
 }
 

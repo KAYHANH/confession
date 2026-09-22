@@ -46,14 +46,16 @@ export class InstagramService {
     const storeConfig = mockStore.getInstagramConfig();
 
     const targetAccountId =
-      (accountId && accountId.trim()) ||
-      serverConfig.accountId ||
-      (storeConfig.account_id && !storeConfig.account_id.startsWith('178414000000') ? storeConfig.account_id.trim() : undefined);
+      accountId !== undefined
+        ? accountId.trim()
+        : serverConfig.accountId ||
+          (storeConfig.account_id && !storeConfig.account_id.startsWith('178414000000') ? storeConfig.account_id.trim() : undefined);
 
     const targetToken =
-      (accessToken && accessToken.trim()) ||
-      serverConfig.accessToken ||
-      (storeConfig.access_token && !storeConfig.access_token.startsWith('EAABwzL') ? storeConfig.access_token.trim() : undefined);
+      accessToken !== undefined
+        ? accessToken.trim()
+        : serverConfig.accessToken ||
+          (storeConfig.access_token && !storeConfig.access_token.startsWith('EAABwzL') ? storeConfig.access_token.trim() : undefined);
 
     if (!targetToken) {
       return {
@@ -229,13 +231,32 @@ export class InstagramService {
     // Resolve relative URL to absolute URL for Meta's crawler
     let resolvedImageUrl = imageUrl;
     if (resolvedImageUrl.startsWith('/')) {
+      const filename = resolvedImageUrl.replace(/^\/generated\//, '');
+      const path = await import('path');
+      const fs = await import('fs');
+      const localFilePath = path.join(process.cwd(), 'public', 'generated', filename);
+
       let appBaseUrl = process.env.NEXT_PUBLIC_APP_URL || '';
-      if (!appBaseUrl || appBaseUrl.includes('localhost') || appBaseUrl.includes('127.0.0.1')) {
-        appBaseUrl = process.env.RENDER_EXTERNAL_URL
-          ? `https://${process.env.RENDER_EXTERNAL_URL}`
-          : 'https://confession-5ha2.onrender.com';
+      const isLocal = !appBaseUrl || appBaseUrl.includes('localhost') || appBaseUrl.includes('127.0.0.1');
+
+      // If running locally and local image exists, upload to public CDN so Meta can access it
+      if (isLocal && fs.existsSync(localFilePath)) {
+        const cdnUrl = await this.uploadImageToPublicCdn(localFilePath);
+        if (cdnUrl) {
+          resolvedImageUrl = cdnUrl;
+        }
       }
-      resolvedImageUrl = `${appBaseUrl.replace(/\/$/, '')}${resolvedImageUrl}`;
+
+      if (resolvedImageUrl.startsWith('/')) {
+        if (!appBaseUrl || appBaseUrl.includes('localhost') || appBaseUrl.includes('127.0.0.1')) {
+          appBaseUrl = process.env.RENDER_EXTERNAL_URL
+            ? `https://${process.env.RENDER_EXTERNAL_URL}`
+            : '';
+        }
+        if (appBaseUrl) {
+          resolvedImageUrl = `${appBaseUrl.replace(/\/$/, '')}${resolvedImageUrl}`;
+        }
+      }
     }
 
     if (!resolvedImageUrl.startsWith('http://') && !resolvedImageUrl.startsWith('https://')) {
@@ -254,9 +275,10 @@ export class InstagramService {
       };
     }
 
+    const isInstagramLoginToken = accessToken.startsWith('IGAA');
+
     try {
       // Step 1: Create media container
-      // Try graph.instagram.com first, then fallback to graph.facebook.com
       let baseUrl = 'https://graph.instagram.com';
       let containerResp = await fetch(`${baseUrl}/v21.0/${accountId}/media`, {
         method: 'POST',
@@ -271,7 +293,9 @@ export class InstagramService {
       });
 
       let containerData = await containerResp.json().catch(() => ({}));
-      if (!containerResp.ok || containerData.error) {
+
+      // Only attempt fallback to graph.facebook.com for Facebook-type tokens (EAA...), NEVER for Instagram Login (IGAA...)
+      if (!isInstagramLoginToken && (!containerResp.ok || containerData.error)) {
         baseUrl = 'https://graph.facebook.com';
         containerResp = await fetch(`${baseUrl}/v21.0/${accountId}/media`, {
           method: 'POST',
@@ -286,10 +310,14 @@ export class InstagramService {
       }
 
       if (!containerResp.ok || containerData.error) {
+        let errorMsg = containerData.error?.message || 'Unknown Meta API error';
+        if (containerData.error?.code === 9004 || errorMsg.includes('photo or video can be accepted')) {
+          errorMsg = `Meta cannot download the card image from ${resolvedImageUrl}. Ensure the URL is publicly reachable and a valid JPEG/PNG.`;
+        }
         return {
           success: false,
           errorCode: 'CONTAINER_CREATION_FAILED',
-          error: `Failed to create Instagram media container: ${containerData.error?.message || 'Unknown Meta API error'}`,
+          error: `Failed to create Instagram media container: ${errorMsg}`,
         };
       }
 
@@ -384,6 +412,33 @@ export class InstagramService {
         errorCode: 'API_UNAVAILABLE',
         error: 'Instagram API could not be reached. Please try again.',
       };
+    }
+  }
+
+  private async uploadImageToPublicCdn(filePath: string): Promise<string | null> {
+    try {
+      const fs = await import('fs');
+      if (!fs.existsSync(filePath)) return null;
+      const fileBytes = fs.readFileSync(filePath);
+      const b64 = fileBytes.toString('base64');
+      const body = new URLSearchParams();
+      body.append('key', '6d207e02198a847aa98d0a2a901485a5');
+      body.append('action', 'upload');
+      body.append('source', b64);
+      body.append('format', 'json');
+
+      const res = await fetch('https://freeimage.host/api/1/upload', {
+        method: 'POST',
+        body,
+      });
+      const data = await res.json();
+      if (data?.image?.url) {
+        return data.image.url;
+      }
+      return null;
+    } catch (err: any) {
+      console.warn('[InstagramService] Public CDN upload fallback failed:', err?.message);
+      return null;
     }
   }
 }
