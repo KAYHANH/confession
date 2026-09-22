@@ -22,29 +22,55 @@ const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
-
-  const addToast = useCallback((message: string, type: ToastType = 'info') => {
-    const id = Math.random().toString(36).substring(2, 9);
-    setToasts((prev) => [...prev, { id, message, type }]);
-
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
-  }, []);
+  const recentToastsRef = React.useRef<Map<string, number>>(new Map());
 
   const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  const addToast = useCallback(
+    (message: string, type: ToastType = 'info') => {
+      if (!message) return;
+      const now = Date.now();
+      const key = `${type}:${message}`;
+      const lastTime = recentToastsRef.current.get(key) || 0;
+      // Debounce duplicate toasts within 2 seconds
+      if (now - lastTime < 2000) {
+        return;
+      }
+      recentToastsRef.current.set(key, now);
+
+      const id = Math.random().toString(36).substring(2, 9);
+      setToasts((prev) => {
+        const trimmed = prev.length >= 4 ? prev.slice(-3) : prev;
+        return [...trimmed, { id, message, type }];
+      });
+
+      setTimeout(() => {
+        removeToast(id);
+      }, 4000);
+    },
+    [removeToast]
+  );
+
+  const toast = useCallback(
+    (message: string, type?: ToastType) => {
+      addToast(message, type);
+    },
+    [addToast]
+  );
+
+  const success = useCallback((msg: string) => addToast(msg, 'success'), [addToast]);
+  const error = useCallback((msg: string) => addToast(msg, 'error'), [addToast]);
+  const info = useCallback((msg: string) => addToast(msg, 'info'), [addToast]);
+
+  const contextValue = React.useMemo(
+    () => ({ toast, success, error, info }),
+    [toast, success, error, info]
+  );
+
   return (
-    <ToastContext.Provider
-      value={{
-        toast: addToast,
-        success: (msg) => addToast(msg, 'success'),
-        error: (msg) => addToast(msg, 'error'),
-        info: (msg) => addToast(msg, 'info'),
-      }}
-    >
+    <ToastContext.Provider value={contextValue}>
       {children}
       <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-md w-full pointer-events-none px-4">
         {toasts.map((t) => (
@@ -64,7 +90,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             <span className="flex-1 leading-snug">{t.message}</span>
             <button
               onClick={() => removeToast(t.id)}
-              className="text-zinc-400 hover:text-zinc-600 transition-colors p-0.5 rounded"
+              className="text-zinc-400 hover:text-zinc-600 transition-colors p-0.5 rounded cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>

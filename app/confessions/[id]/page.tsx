@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowLeft,
@@ -28,9 +28,26 @@ import { useToast } from '@/components/ui/ToastContext';
 import { downloadCardAsPng, downloadAllSlides } from '@/lib/downloadCard';
 
 
-export default function ConfessionEditorPage({ params }: { params: { id: string } }) {
+export default function ConfessionEditorPage({
+  params,
+}: {
+  params?: Promise<{ id: string }> | { id: string };
+}) {
   const router = useRouter();
+  const routeParams = useParams();
   const { success, error, info } = useToast();
+
+  const [propId, setPropId] = useState<string>('');
+
+  useEffect(() => {
+    if (params) {
+      Promise.resolve(params).then((resolved) => {
+        if (resolved?.id) setPropId(resolved.id);
+      });
+    }
+  }, [params]);
+
+  const confessionId = (routeParams?.id as string) || propId || '';
 
   const [confession, setConfession] = useState<Confession | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -52,9 +69,11 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
   const [downloading, setDownloading] = useState(false);
 
   const loadData = useCallback(async () => {
+    if (!confessionId) return;
     try {
+      setLoading(true);
       const [confRes, tplRes] = await Promise.all([
-        fetch(`/api/confessions/${params.id}`),
+        fetch(`/api/confessions/${confessionId}`),
         fetch('/api/templates'),
       ]);
 
@@ -77,13 +96,16 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
     } finally {
       setLoading(false);
     }
-  }, [params.id, error]);
+  }, [confessionId, error]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (confessionId) {
+      loadData();
+    }
+  }, [confessionId, loadData]);
 
   const handleSave = async () => {
+    if (!confessionId) return;
     setSaving(true);
     try {
       const hashtags = hashtagsStr
@@ -92,7 +114,7 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
         .filter(Boolean)
         .map((t) => (t.startsWith('#') ? t : `#${t}`));
 
-      const res = await fetch(`/api/confessions/${params.id}`, {
+      const res = await fetch(`/api/confessions/${confessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -117,10 +139,11 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
   };
 
   const handleRegenerateAI = async () => {
+    if (!confessionId) return;
     setProcessingAI(true);
     try {
       info('AI is refining grammar, generating caption and tags...');
-      const res = await fetch(`/api/confessions/${params.id}/process`, {
+      const res = await fetch(`/api/confessions/${confessionId}/process`, {
         method: 'POST',
       });
       if (!res.ok) throw new Error('AI processing failed');
@@ -138,8 +161,9 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
   };
 
   const handleApprove = async () => {
+    if (!confessionId) return;
     try {
-      const res = await fetch(`/api/confessions/${params.id}/approve`, { method: 'POST' });
+      const res = await fetch(`/api/confessions/${confessionId}/approve`, { method: 'POST' });
       if (!res.ok) throw new Error('Approval failed');
       success('Approved for publishing');
       loadData();
@@ -149,10 +173,11 @@ export default function ConfessionEditorPage({ params }: { params: { id: string 
   };
 
   const handleReject = async () => {
+    if (!confessionId) return;
     const reason = prompt('Enter rejection reason:', 'Content does not meet guidelines');
     if (reason === null) return;
     try {
-      const res = await fetch(`/api/confessions/${params.id}/reject`, {
+      const res = await fetch(`/api/confessions/${confessionId}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason }),
