@@ -82,7 +82,10 @@ export class ConfessionService {
       // Sorting
       list.sort((a, b) => {
         if (sortBy === 'oldest') {
-          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+          return (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
+        }
+        if (sortBy === 'newest') {
+          return (b.google_sheet_row || 0) - (a.google_sheet_row || 0);
         }
         if (sortBy === 'scheduled') {
           return (a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0) - (b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0);
@@ -90,7 +93,8 @@ export class ConfessionService {
         if (sortBy === 'recently_published') {
           return (b.published_at ? new Date(b.published_at).getTime() : 0) - (a.published_at ? new Date(a.published_at).getTime() : 0);
         }
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        // Default: ascending row order (sheet row 2, 3, 4... = publish order)
+        return (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
       });
 
       const total = list.length;

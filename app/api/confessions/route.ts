@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     const moderationStatus = searchParams.get('moderationStatus') || undefined;
     const search = searchParams.get('search') || undefined;
     const templateId = searchParams.get('templateId') || undefined;
-    const sortBy = (searchParams.get('sortBy') as any) || 'newest';
+    const sortBy = (searchParams.get('sortBy') as any) || 'oldest'; // default: sheet row ascending (Row 2 first)
     const page = parseInt(searchParams.get('page') || '1', 10);
     const limit = parseInt(searchParams.get('limit') || '50', 10);
 
