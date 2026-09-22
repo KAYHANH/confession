@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { instagramService, INSTAGRAM_API_BASE_URL } from '../services/instagramService';
 import { getInstagramServerConfig, getInstagramSafeConfig, logInstagramStartupDiagnostics } from '../lib/config';
+import { mockStore } from '../lib/mockStore';
 import { Confession } from '../types';
 
 describe('InstagramService & Instagram Login Integration Tests', () => {
@@ -158,6 +159,13 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
     delete process.env.INSTAGRAM_ACCOUNT_ID;
     delete process.env.INSTAGRAM_ACCESS_TOKEN;
 
+    const storeSpy = vi.spyOn(mockStore, 'getInstagramConfig').mockReturnValue({
+      account_id: '',
+      username: '',
+      access_token: '',
+      is_connected: false,
+    });
+
     try {
       const result = await instagramService.publishPost(
         mockConfession,
@@ -167,6 +175,7 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe('Instagram credentials are not configured.');
     } finally {
+      storeSpy.mockRestore();
       process.env.INSTAGRAM_ACCOUNT_ID = origId;
       process.env.INSTAGRAM_ACCESS_TOKEN = origToken;
     }
