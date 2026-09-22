@@ -17,17 +17,28 @@ export interface PostCardPreviewProps {
   totalSlides?: number;
 }
 
-export function splitIntoSlides(t: string, max: number = 480): string[] {
-  if (!t || t.length <= max) return [t || ''];
+export function splitIntoSlides(t: string, maxWordsOrChars: number = 20): string[] {
+  if (!t) return [''];
+  // When called with small numbers (≤50), treat as word limit; larger = char limit (legacy)
+  const maxWords = maxWordsOrChars <= 50 ? maxWordsOrChars : 20;
+  const wordCount = t.trim().split(/\s+/).filter(Boolean).length;
+  if (wordCount <= maxWords) return [t];
+
+  // Split at sentence boundaries
   const sentences = t.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g) || [t];
   const slides: string[] = [];
   let cur = '';
+  let curWords = 0;
+
   for (const s of sentences) {
-    if ((cur + s).length > max && cur.length > 120) {
+    const sWords = s.trim().split(/\s+/).filter(Boolean).length;
+    if (curWords + sWords > maxWords && curWords >= 5) {
       slides.push(cur.trim());
       cur = s;
+      curWords = sWords;
     } else {
-      cur += s;
+      cur += (cur ? ' ' : '') + s.trimStart();
+      curWords += sWords;
     }
   }
   if (cur.trim()) slides.push(cur.trim());

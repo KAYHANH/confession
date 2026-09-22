@@ -41,10 +41,12 @@ export function PublishModal({
   const { success, error } = useToast();
 
   const fullText = confession.cleaned_text || confession.original_text || '';
-  const isLong = fullText.length > 400;
-  const slides = isLong ? splitIntoSlides(fullText, 480) : [fullText];
+  const wordCount = fullText.trim().split(/\s+/).filter(Boolean).length;
+  const isLong = wordCount > 20;
+  // Auto-split into slides: 20 words per slide for carousel
+  const slides = isLong ? splitIntoSlides(fullText, 20) : [fullText];
 
-  const [cardMode, setCardMode] = useState<'fit' | 'hook' | 'carousel'>('fit');
+  const [cardMode, setCardMode] = useState<'fit' | 'hook' | 'carousel'>(isLong ? 'carousel' : 'fit');
   const [currentSlide, setCurrentSlide] = useState(0);
   const [downloading, setDownloading] = useState(false);
 
@@ -158,7 +160,7 @@ export function PublishModal({
           <div className="mb-4 p-3 bg-brand-50/70 border border-brand-200/60 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
             <div className="flex items-center gap-2 text-xs font-semibold text-brand-900">
               <Layers className="w-4 h-4 text-brand-600 shrink-0" />
-              <span>Story Length: {fullText.length} chars ({fullText.split(/\s+/).length} words)</span>
+              <span>Story Length: {wordCount} words — Auto Carousel</span>
             </div>
             <div className="flex items-center gap-1 bg-white p-1 rounded-xl shadow-xs border border-brand-200 text-xs">
               <button
