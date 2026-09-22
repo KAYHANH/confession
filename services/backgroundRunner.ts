@@ -1,5 +1,6 @@
 import { schedulingService } from './schedulingService';
 import { mockStore } from '@/lib/mockStore';
+import { logInstagramStartupDiagnostics } from '@/lib/config';
 
 let isRunnerStarted = false;
 let keepAliveTimer: NodeJS.Timeout | null = null;
@@ -25,6 +26,7 @@ export function startBackgroundRunner() {
   isRunnerStarted = true;
 
   console.log('🚀 [BackgroundRunner] Initializing 24/7 background scheduler...');
+  logInstagramStartupDiagnostics();
 
   const getTargetUrl = () => {
     return (

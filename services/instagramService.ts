@@ -1,17 +1,25 @@
 import { Confession } from '@/types';
 import { mockStore } from '@/lib/mockStore';
+import { getInstagramServerConfig } from '@/lib/config';
+
+export interface InstagramTestResult {
+  success: boolean;
+  connected: boolean;
+  username?: string;
+  instagramUserId?: string;
+  errorCode?: string;
+  message: string;
+}
 
 export interface InstagramPublishResult {
   success: boolean;
   mediaId?: string;
   permalink?: string;
+  errorCode?: string;
   error?: string;
 }
 
 export class InstagramService {
-  private apiVersion = 'v21.0';
-  private baseUrl = 'https://graph.facebook.com';
-
   /**
    * Check if external APIs are explicitly mocked
    */
@@ -20,66 +28,152 @@ export class InstagramService {
   }
 
   /**
-   * Test Instagram credentials and retrieve account profile info
+   * Test Instagram credentials securely and validate account ID
+   * Supports both Instagram Login tokens (graph.instagram.com) and Meta Graph API tokens (graph.facebook.com)
    */
-  public async testConnection(accountId?: string, accessToken?: string): Promise<{ success: boolean; username?: string; message: string }> {
-    const storeConfig = mockStore.getInstagramConfig();
-    const id = (accountId && accountId.trim()) ||
-      (process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCOUNT_ID.trim()) ||
-      (storeConfig.account_id && !storeConfig.account_id.startsWith('178414000000') ? storeConfig.account_id.trim() : '');
-    const token = (accessToken && accessToken.trim()) ||
-      (process.env.INSTAGRAM_ACCESS_TOKEN && process.env.INSTAGRAM_ACCESS_TOKEN.trim()) ||
-      (storeConfig.access_token && !storeConfig.access_token.startsWith('EAABwzL') ? storeConfig.access_token.trim() : '');
-
+  public async testConnection(accountId?: string, accessToken?: string): Promise<InstagramTestResult> {
     if (this.isMock()) {
       return {
         success: true,
-        username: 'campusconfessions_official',
-        message: 'Mock Mode Active: Meta Graph API connection verified.',
+        connected: true,
+        username: '_hpsconfession_',
+        instagramUserId: '17841437796028856',
+        message: 'Mock Mode Active: Instagram connection verified.',
       };
     }
 
-    if (!id || !token) {
+    const serverConfig = getInstagramServerConfig();
+    const storeConfig = mockStore.getInstagramConfig();
+
+    const targetAccountId =
+      (accountId && accountId.trim()) ||
+      serverConfig.accountId ||
+      (storeConfig.account_id && !storeConfig.account_id.startsWith('178414000000') ? storeConfig.account_id.trim() : undefined);
+
+    const targetToken =
+      (accessToken && accessToken.trim()) ||
+      serverConfig.accessToken ||
+      (storeConfig.access_token && !storeConfig.access_token.startsWith('EAABwzL') ? storeConfig.access_token.trim() : undefined);
+
+    if (!targetToken) {
       return {
         success: false,
-        message: 'Missing Instagram Account ID or Access Token in configuration. Please configure them in Render environment variables or Platform Settings.',
+        connected: false,
+        errorCode: 'MISSING_ACCESS_TOKEN',
+        message: 'Instagram integration is not configured. Missing: INSTAGRAM_ACCESS_TOKEN.',
       };
     }
 
-    if (token.startsWith('IGAA')) {
+    if (!targetAccountId) {
       return {
         success: false,
-        message: 'Invalid Token Type: Your token starts with "IGAA" (Instagram Basic Display API). Instagram Publishing requires a Meta Graph API token starting with "EAA" from Meta Graph API Explorer.',
+        connected: false,
+        errorCode: 'MISSING_ACCOUNT_ID',
+        message: 'Instagram integration is not configured. Missing: INSTAGRAM_ACCOUNT_ID.',
       };
     }
 
     try {
-      const url = `${this.baseUrl}/${this.apiVersion}/${id}?fields=id,username,name,profile_picture_url&access_token=${encodeURIComponent(token)}`;
-      const resp = await fetch(url);
-      const data = await resp.json();
+      let userData: { user_id?: string; id?: string; username?: string } | null = null;
+      let apiError: string | null = null;
 
-      if (!resp.ok || data.error) {
+      // 1. Primary: Query graph.instagram.com/me using Authorization: Bearer header
+      try {
+        const igResp = await fetch('https://graph.instagram.com/me?fields=user_id,username', {
+          headers: { Authorization: `Bearer ${targetToken}` },
+        });
+        const igData = await igResp.json().catch(() => ({}));
+        if (igResp.ok && (igData.user_id || igData.id)) {
+          userData = igData;
+        } else if (igData.error?.message) {
+          apiError = igData.error.message;
+        }
+      } catch (err: any) {
+        apiError = err?.message || 'Network error';
+      }
+
+      // 2. Fallback: Query graph.instagram.com/me with query param if Authorization header was rejected
+      if (!userData) {
+        try {
+          const igResp2 = await fetch(
+            `https://graph.instagram.com/me?fields=user_id,username&access_token=${encodeURIComponent(targetToken)}`
+          );
+          const igData2 = await igResp2.json().catch(() => ({}));
+          if (igResp2.ok && (igData2.user_id || igData2.id)) {
+            userData = igData2;
+            apiError = null;
+          } else if (igData2.error?.message) {
+            apiError = igData2.error.message;
+          }
+        } catch {}
+      }
+
+      // 3. Fallback: Query graph.facebook.com for Meta Graph API Page/User tokens
+      if (!userData) {
+        try {
+          const fbResp = await fetch(
+            `https://graph.facebook.com/v21.0/${targetAccountId}?fields=id,username,name&access_token=${encodeURIComponent(targetToken)}`
+          );
+          const fbData = await fbResp.json().catch(() => ({}));
+          if (fbResp.ok && fbData.id) {
+            userData = { user_id: fbData.id, username: fbData.username || fbData.name };
+            apiError = null;
+          } else if (fbData.error?.message) {
+            apiError = fbData.error.message;
+          }
+        } catch {}
+      }
+
+      if (!userData) {
+        if (apiError && (apiError.toLowerCase().includes('network') || apiError.toLowerCase().includes('enotfound') || apiError.toLowerCase().includes('timeout'))) {
+          return {
+            success: false,
+            connected: false,
+            errorCode: 'API_UNAVAILABLE',
+            message: 'Instagram API could not be reached. Please try again.',
+          };
+        }
         return {
           success: false,
-          message: `Meta API Error (${data.error?.code}): ${data.error?.message || 'Unauthorized or invalid token'}`,
+          connected: false,
+          errorCode: 'INVALID_CREDENTIALS',
+          message: 'Instagram authentication failed. The configured access token was rejected.',
         };
       }
 
+      // Account ID validation: Ensure configured account ID matches authenticated user ID
+      const authenticatedUserId = String(userData.user_id || userData.id).trim();
+      const configuredId = String(targetAccountId).trim();
+
+      if (configuredId && configuredId !== authenticatedUserId) {
+        return {
+          success: false,
+          connected: false,
+          errorCode: 'ACCOUNT_MISMATCH',
+          message: 'The configured Instagram account ID does not match the authenticated Instagram account.',
+        };
+      }
+
+      const verifiedUsername = userData.username || '_hpsconfession_';
       return {
         success: true,
-        username: data.username,
-        message: `Connected successfully to @${data.username}`,
+        connected: true,
+        instagramUserId: authenticatedUserId,
+        username: verifiedUsername,
+        message: `Connected successfully to @${verifiedUsername}`,
       };
-    } catch (err: any) {
+    } catch {
       return {
         success: false,
-        message: `Network error connecting to Meta Graph API: ${err?.message || err}`,
+        connected: false,
+        errorCode: 'API_UNAVAILABLE',
+        message: 'Instagram API could not be reached. Please try again.',
       };
     }
   }
 
   /**
-   * Publish a confession photo post to Instagram Professional account using the official Content Publishing API
+   * Publish a confession photo post to Instagram Professional account using official Content Publishing
    */
   public async publishPost(
     confession: Confession,
@@ -90,6 +184,7 @@ export class InstagramService {
     if (confession.status === 'PUBLISHED' || confession.instagram_media_id) {
       return {
         success: false,
+        errorCode: 'DUPLICATE_PUBLICATION',
         error: `Confession ${confession.id} is already published (Media ID: ${confession.instagram_media_id}). Duplicate publication blocked.`,
       };
     }
@@ -105,35 +200,40 @@ export class InstagramService {
       };
     }
 
+    const serverConfig = getInstagramServerConfig();
     const storeConfig = mockStore.getInstagramConfig();
-    const accountId =
-      (process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCOUNT_ID.trim()) ||
-      (storeConfig.account_id && !storeConfig.account_id.startsWith('178414000000') ? storeConfig.account_id.trim() : '');
-    const accessToken =
-      (process.env.INSTAGRAM_ACCESS_TOKEN && process.env.INSTAGRAM_ACCESS_TOKEN.trim()) ||
-      (storeConfig.access_token && !storeConfig.access_token.startsWith('EAABwzL') ? storeConfig.access_token.trim() : '');
 
-    if (!accountId || !accessToken) {
+    const accountId =
+      serverConfig.accountId ||
+      (storeConfig.account_id && !storeConfig.account_id.startsWith('178414000000') ? storeConfig.account_id : undefined);
+    const accessToken =
+      serverConfig.accessToken ||
+      (storeConfig.access_token && !storeConfig.access_token.startsWith('EAABwzL') ? storeConfig.access_token : undefined);
+
+    if (!accessToken) {
       return {
         success: false,
-        error: 'Instagram Account ID or Access Token is missing from server configuration. Please configure INSTAGRAM_ACCOUNT_ID and INSTAGRAM_ACCESS_TOKEN in Render environment variables or Platform Settings.',
+        errorCode: 'MISSING_ACCESS_TOKEN',
+        error: 'Instagram integration is not configured. Missing: INSTAGRAM_ACCESS_TOKEN.',
       };
     }
 
-    if (accessToken.startsWith('IGAA')) {
+    if (!accountId) {
       return {
         success: false,
-        error: 'Invalid Token Type: Your token starts with "IGAA" (Instagram Basic Display API). Instagram Publishing requires a Meta Graph API User or Page token starting with "EAA" from Meta Graph API Explorer.',
+        errorCode: 'MISSING_ACCOUNT_ID',
+        error: 'Instagram integration is not configured. Missing: INSTAGRAM_ACCOUNT_ID.',
       };
     }
 
     // Resolve relative URL to absolute URL for Meta's crawler
     let resolvedImageUrl = imageUrl;
     if (resolvedImageUrl.startsWith('/')) {
-      // If running on localhost, fallback to public Render URL because Meta's CDN cannot reach localhost
       let appBaseUrl = process.env.NEXT_PUBLIC_APP_URL || '';
       if (!appBaseUrl || appBaseUrl.includes('localhost') || appBaseUrl.includes('127.0.0.1')) {
-        appBaseUrl = process.env.RENDER_EXTERNAL_URL ? `https://${process.env.RENDER_EXTERNAL_URL}` : 'https://confession-5ha2.onrender.com';
+        appBaseUrl = process.env.RENDER_EXTERNAL_URL
+          ? `https://${process.env.RENDER_EXTERNAL_URL}`
+          : 'https://confession-5ha2.onrender.com';
       }
       resolvedImageUrl = `${appBaseUrl.replace(/\/$/, '')}${resolvedImageUrl}`;
     }
@@ -141,6 +241,7 @@ export class InstagramService {
     if (!resolvedImageUrl.startsWith('http://') && !resolvedImageUrl.startsWith('https://')) {
       return {
         success: false,
+        errorCode: 'INVALID_IMAGE_URL',
         error: `Image URL is not a valid web URL (${resolvedImageUrl}). Make sure NEXT_PUBLIC_APP_URL is set in your environment.`,
       };
     }
@@ -148,29 +249,47 @@ export class InstagramService {
     if (resolvedImageUrl.includes('localhost') || resolvedImageUrl.includes('127.0.0.1')) {
       return {
         success: false,
+        errorCode: 'LOCAL_IMAGE_URL',
         error: `Instagram cannot fetch images from local machine (${resolvedImageUrl}). Deploy your app to a public URL (like Render) or configure public image hosting.`,
       };
     }
 
     try {
       // Step 1: Create media container
-      // POST /{ig-user-id}/media?image_url={image-url}&caption={caption}&access_token={access-token}
-      const createContainerUrl = `${this.baseUrl}/${this.apiVersion}/${accountId}/media`;
-      const containerResp = await fetch(createContainerUrl, {
+      // Try graph.instagram.com first, then fallback to graph.facebook.com
+      let baseUrl = 'https://graph.instagram.com';
+      let containerResp = await fetch(`${baseUrl}/v21.0/${accountId}/media`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
           image_url: resolvedImageUrl,
           caption: captionText,
-          access_token: accessToken,
         }),
       });
 
-      const containerData = await containerResp.json();
+      let containerData = await containerResp.json().catch(() => ({}));
+      if (!containerResp.ok || containerData.error) {
+        baseUrl = 'https://graph.facebook.com';
+        containerResp = await fetch(`${baseUrl}/v21.0/${accountId}/media`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_url: resolvedImageUrl,
+            caption: captionText,
+            access_token: accessToken,
+          }),
+        });
+        containerData = await containerResp.json().catch(() => ({}));
+      }
+
       if (!containerResp.ok || containerData.error) {
         return {
           success: false,
-          error: `Failed to create Instagram media container: ${containerData.error?.message || 'Unknown Meta API error'} (code: ${containerData.error?.code || containerResp.status})`,
+          errorCode: 'CONTAINER_CREATION_FAILED',
+          error: `Failed to create Instagram media container: ${containerData.error?.message || 'Unknown Meta API error'}`,
         };
       }
 
@@ -178,6 +297,7 @@ export class InstagramService {
       if (!creationId) {
         return {
           success: false,
+          errorCode: 'CONTAINER_CREATION_FAILED',
           error: 'Did not receive creation_id container from Meta Graph API.',
         };
       }
@@ -191,15 +311,18 @@ export class InstagramService {
         attempts++;
         await new Promise((resolve) => setTimeout(resolve, 3000)); // wait 3s between checks
 
-        const statusUrl = `${this.baseUrl}/${this.apiVersion}/${creationId}?fields=status_code&access_token=${encodeURIComponent(accessToken)}`;
-        const statusResp = await fetch(statusUrl);
-        const statusData = await statusResp.json();
+        const statusUrl = `${baseUrl}/v21.0/${creationId}?fields=status_code`;
+        const statusResp = await fetch(statusUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const statusData = await statusResp.json().catch(() => ({}));
 
         if (statusData.status_code === 'FINISHED') {
           isReady = true;
         } else if (statusData.status_code === 'ERROR' || statusData.status_code === 'EXPIRED') {
           return {
             success: false,
+            errorCode: 'CONTAINER_PROCESSING_FAILED',
             error: `Media container processing failed with status: ${statusData.status_code}`,
           };
         }
@@ -208,26 +331,29 @@ export class InstagramService {
       if (!isReady) {
         return {
           success: false,
+          errorCode: 'CONTAINER_TIMEOUT',
           error: 'Timed out waiting for Instagram media container to finish processing.',
         };
       }
 
       // Step 3: Publish container
-      // POST /{ig-user-id}/media_publish?creation_id={creation-id}&access_token={access-token}
-      const publishUrl = `${this.baseUrl}/${this.apiVersion}/${accountId}/media_publish`;
+      const publishUrl = `${baseUrl}/v21.0/${accountId}/media_publish`;
       const publishResp = await fetch(publishUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
           creation_id: creationId,
-          access_token: accessToken,
         }),
       });
 
-      const publishData = await publishResp.json();
+      const publishData = await publishResp.json().catch(() => ({}));
       if (!publishResp.ok || publishData.error) {
         return {
           success: false,
+          errorCode: 'PUBLISH_FAILED',
           error: `Failed to publish Instagram media container: ${publishData.error?.message || 'Publishing error'}`,
         };
       }
@@ -237,26 +363,26 @@ export class InstagramService {
       // Step 4: Fetch permalink
       let permalink = `https://www.instagram.com/p/${publishedMediaId}/`;
       try {
-        const permalinkUrl = `${this.baseUrl}/${this.apiVersion}/${publishedMediaId}?fields=permalink&access_token=${encodeURIComponent(accessToken)}`;
-        const permalinkResp = await fetch(permalinkUrl);
-        const permalinkData = await permalinkResp.json();
+        const permalinkUrl = `${baseUrl}/v21.0/${publishedMediaId}?fields=permalink`;
+        const permalinkResp = await fetch(permalinkUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const permalinkData = await permalinkResp.json().catch(() => ({}));
         if (permalinkData.permalink) {
           permalink = permalinkData.permalink;
         }
-      } catch (pErr) {
-        console.warn('[InstagramService] Could not retrieve permalink:', pErr);
-      }
+      } catch {}
 
       return {
         success: true,
         mediaId: publishedMediaId,
         permalink,
       };
-    } catch (err: any) {
-      console.error('[InstagramService] Publishing error:', err);
+    } catch {
       return {
         success: false,
-        error: `Unexpected network error during publishing: ${err?.message || err}`,
+        errorCode: 'API_UNAVAILABLE',
+        error: 'Instagram API could not be reached. Please try again.',
       };
     }
   }

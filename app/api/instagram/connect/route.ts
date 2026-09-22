@@ -4,18 +4,19 @@ import { instagramService } from '@/services/instagramService';
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     const { account_id, username, access_token } = body;
 
-    if (!account_id) {
-      return NextResponse.json({ error: 'Instagram Account ID is required' }, { status: 400 });
+    // Verify connection using provided or server credentials
+    const testResult = await instagramService.testConnection(account_id, access_token);
+    const resolvedAccountId = account_id || testResult.instagramUserId;
+
+    if (!resolvedAccountId && !testResult.connected) {
+      return NextResponse.json({ error: testResult.message || 'Instagram Account ID is required' }, { status: 400 });
     }
 
-    // Verify connection
-    const testResult = await instagramService.testConnection(account_id, access_token);
-
     const updated = mockStore.updateInstagramConfig({
-      account_id,
+      account_id: resolvedAccountId || 'connected_account',
       username: testResult.username || username || 'connected_account',
       access_token: access_token || undefined,
       is_connected: testResult.success,
