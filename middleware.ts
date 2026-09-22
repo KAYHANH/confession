@@ -21,10 +21,8 @@ export function middleware(request: NextRequest) {
   if (isProtected) {
     // Check session cookie
     const sessionCookie = request.cookies.get('confessionflow_session');
-    const isMock = process.env.MOCK_EXTERNAL_APIS === 'true';
 
-    // In dev mock mode or if cookie is present, allow access
-    if (!sessionCookie && !isMock) {
+    if (!sessionCookie) {
       const loginUrl = new URL('/login', request.url);
       loginUrl.searchParams.set('redirect', pathname);
       return NextResponse.redirect(loginUrl);

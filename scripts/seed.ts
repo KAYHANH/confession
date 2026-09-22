@@ -9,7 +9,7 @@ const templates = mockStore.getTemplates();
 const settings = mockStore.getSettings();
 
 console.log(`✅ Loaded ${templates.length} visual post templates.`);
-console.log(`✅ Seeded ${confessions.length} sample confessions.`);
+console.log(`✅ Initialized store with ${confessions.length} confessions.`);
 console.log(`✅ Default Brand: "${settings.brand_name}" (${settings.instagram_handle}).`);
 console.log(`✅ Default Timezone: ${settings.timezone}`);
-console.log('🎉 Seed complete! Ready for local development and demonstration.');
+console.log('🎉 Store reset complete!');

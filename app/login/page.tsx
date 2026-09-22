@@ -18,13 +18,13 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      // If mock mode active or placeholder Supabase, allow instant demo admin login
+      // Allow instant local admin session when Supabase is not configured
       if (
-        process.env.MOCK_EXTERNAL_APIS === 'true' ||
-        process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('placeholder')
+        !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+        process.env.NEXT_PUBLIC_SUPABASE_URL.includes('placeholder')
       ) {
         document.cookie = 'confessionflow_session=admin; path=/; max-age=86400';
-        success('Welcome back, Admin! (Demo Mode)');
+        success('Welcome back, Admin!');
         router.push('/dashboard');
         return;
       }
@@ -51,9 +51,9 @@ export default function LoginPage() {
     }
   };
 
-  const handleDemoLogin = () => {
+  const handleDirectAdminLogin = () => {
     document.cookie = 'confessionflow_session=admin; path=/; max-age=86400';
-    success('Logged in as Administrator (Instant Demo Access)');
+    success('Logged in as Administrator');
     router.push('/dashboard');
   };
 
@@ -134,18 +134,18 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Quick Demo Access Button */}
+          {/* Quick Admin Access Button */}
           <div className="mt-6 pt-6 border-t border-zinc-100">
             <button
-              onClick={handleDemoLogin}
+              onClick={handleDirectAdminLogin}
               type="button"
               className="w-full py-2.5 rounded-xl border border-brand-200 bg-brand-50/60 hover:bg-brand-100 text-brand-700 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <ShieldCheck className="w-4 h-4 text-brand-600" />
-              <span>Enter Demo Admin Session (One-Click)</span>
+              <span>Sign In as Admin (Local Session)</span>
             </button>
             <p className="text-[11px] text-center text-zinc-400 mt-2">
-              For local preview and testing without pre-registering Supabase email.
+              Instant access for local administrator management.
             </p>
           </div>
         </div>

@@ -25,20 +25,16 @@ export class AIService {
     const localMod = moderationService.analyzeContent(originalText);
     const maskedText = moderationService.maskSensitiveInformation(originalText, localMod.piiDetected);
 
-    // 2. Check if we should use Groq AI or fallback/mock
-    const useMock =
-      process.env.MOCK_EXTERNAL_APIS === 'true' ||
-      !this.groqClient;
-
-    if (useMock) {
-      return this.mockProcess(maskedText, submittedName, isAnonymous, confessionNumber, localMod);
+    // 2. Check if Groq client is configured
+    if (!this.groqClient) {
+      return this.ruleBasedProcess(maskedText, submittedName, isAnonymous, confessionNumber, localMod);
     }
 
     try {
       return await this.callGroq(maskedText, submittedName, isAnonymous, confessionNumber, localMod);
     } catch (err: any) {
       console.warn('[AIService] Groq API call failed, falling back to deterministic processing:', err?.message || err);
-      return this.mockProcess(maskedText, submittedName, isAnonymous, confessionNumber, localMod);
+      return this.ruleBasedProcess(maskedText, submittedName, isAnonymous, confessionNumber, localMod);
     }
   }
 
@@ -160,9 +156,9 @@ Is Anonymous: ${isAnonymous}`;
   }
 
   /**
-   * Deterministic mock engine for offline development, local demos, and unit testing
+   * Deterministic rule-based engine for offline formatting and safety fallback
    */
-  public mockProcess(
+  public ruleBasedProcess(
     text: string,
     submittedName: string,
     isAnonymous: boolean,
@@ -215,6 +211,16 @@ Is Anonymous: ${isAnonymous}`;
       moderationReason: localMod.reasons.length > 0 ? localMod.reasons.join(' | ') : 'Passed safety and privacy validation.',
       recommendedAction,
     };
+  }
+
+  public mockProcess(
+    text: string,
+    submittedName: string,
+    isAnonymous: boolean,
+    confessionNumber: number,
+    localMod: ReturnType<typeof moderationService.analyzeContent>
+  ): AIProcessedResult {
+    return this.ruleBasedProcess(text, submittedName, isAnonymous, confessionNumber, localMod);
   }
 }
 

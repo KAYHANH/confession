@@ -9,10 +9,8 @@ export async function GET() {
     const ig = mockStore.getInstagramConfig();
     const safeConfig = getInstagramSafeConfig();
 
-    const accountId =
-      safeConfig.accountId || (ig.account_id && !ig.account_id.startsWith('178414000000') ? ig.account_id : '');
-    const hasToken =
-      safeConfig.hasAccessToken || Boolean(ig.access_token && ig.access_token !== 'EAABwzL...');
+    const accountId = safeConfig.accountId || ig.account_id || '';
+    const hasToken = safeConfig.hasAccessToken || Boolean(ig.access_token);
 
     return NextResponse.json({
       account_id: accountId,

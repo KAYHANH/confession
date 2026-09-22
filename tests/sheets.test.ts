@@ -19,9 +19,9 @@ describe('GoogleSheetsService Column Mapping & Deduplication', () => {
     expect(googleSheetsService.indexToColumnLetter(27)).toBe('AB');
   });
 
-  it('should test connection successfully in mock mode', async () => {
+  it('should return error when spreadsheet ID is empty or not connected', async () => {
     const res = await googleSheetsService.testConnection({
-      spreadsheet_id: 'mock_123',
+      spreadsheet_id: '',
       sheet_name: 'Confessions',
       column_mapping: {
         timestampColumn: 'A',
@@ -35,7 +35,7 @@ describe('GoogleSheetsService Column Mapping & Deduplication', () => {
       },
     });
 
-    expect(res.success).toBe(true);
-    expect(res.message).toContain('Mock Mode Active');
+    expect(res.success).toBe(false);
+    expect(res.message).toContain('No Google Sheet connected');
   });
 });

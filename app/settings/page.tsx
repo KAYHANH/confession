@@ -591,7 +591,7 @@ function SettingsContent() {
               <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200/70 text-xs text-amber-900 flex items-start gap-3">
                 <Sparkles className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                 <div>
-                  <strong>Groq API Key Configured Server-Side:</strong> When <code>GROQ_API_KEY</code> is set in <code>.env.local</code>, requests will stream through high-speed hardware LPUs. If omitted or in mock mode, the deterministic safety engine handles processing.
+                  <strong>Groq API Key Configured Server-Side:</strong> When <code>GROQ_API_KEY</code> is set in <code>.env.local</code>, requests will stream through high-speed hardware LPUs. If omitted, the deterministic safety engine handles processing.
                 </div>
               </div>
 

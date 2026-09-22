@@ -45,32 +45,18 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
 
   // 1. Missing access token
   it('Test 1: should return error when access token is missing', async () => {
-    const origIsMock = instagramService.isMock;
-    instagramService.isMock = () => false;
-
-    try {
-      const result = await instagramService.testConnection('17841437796028856', '');
-      expect(result.connected).toBe(false);
-      expect(result.errorCode).toBe('MISSING_ACCESS_TOKEN');
-      expect(result.message).toBe('Instagram credentials are not configured.');
-    } finally {
-      instagramService.isMock = origIsMock;
-    }
+    const result = await instagramService.testConnection('17841437796028856', '');
+    expect(result.connected).toBe(false);
+    expect(result.errorCode).toBe('MISSING_ACCESS_TOKEN');
+    expect(result.message).toBe('Instagram credentials are not configured.');
   });
 
   // 2. Missing account ID
   it('Test 2: should return error when account ID is missing', async () => {
-    const origIsMock = instagramService.isMock;
-    instagramService.isMock = () => false;
-
-    try {
-      const result = await instagramService.testConnection('', 'fake_token_value');
-      expect(result.connected).toBe(false);
-      expect(result.errorCode).toBe('MISSING_ACCOUNT_ID');
-      expect(result.message).toBe('Instagram credentials are not configured.');
-    } finally {
-      instagramService.isMock = origIsMock;
-    }
+    const result = await instagramService.testConnection('', 'fake_token_value');
+    expect(result.connected).toBe(false);
+    expect(result.errorCode).toBe('MISSING_ACCOUNT_ID');
+    expect(result.message).toBe('Instagram credentials are not configured.');
   });
 
   // 3. Valid server configuration detection
@@ -100,9 +86,6 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
 
   // 4. Invalid or expired token
   it('Test 4: should reject invalid or expired token with standardized message', async () => {
-    const origIsMock = instagramService.isMock;
-    instagramService.isMock = () => false;
-
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
@@ -115,22 +98,15 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
       }),
     });
 
-    try {
-      const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_invalid_token');
-      expect(result.connected).toBe(false);
-      expect(result.errorCode).toBe('INVALID_CREDENTIALS');
-      expect(result.message).toBe('Instagram authentication failed. Please reconnect the Instagram account.');
-      expect(result.message).not.toContain('IGAA_fake_invalid_token');
-    } finally {
-      instagramService.isMock = origIsMock;
-    }
+    const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_invalid_token');
+    expect(result.connected).toBe(false);
+    expect(result.errorCode).toBe('INVALID_CREDENTIALS');
+    expect(result.message).toBe('Instagram authentication failed. Please reconnect the Instagram account.');
+    expect(result.message).not.toContain('IGAA_fake_invalid_token');
   });
 
   // 5. Configured account ID mismatch
   it('Test 5: should reject when configured account ID does not match authenticated user ID', async () => {
-    const origIsMock = instagramService.isMock;
-    instagramService.isMock = () => false;
-
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -140,21 +116,14 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
       }),
     });
 
-    try {
-      const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_valid_token');
-      expect(result.connected).toBe(false);
-      expect(result.errorCode).toBe('ACCOUNT_MISMATCH');
-      expect(result.message).toBe('The configured Instagram account does not match the authenticated account.');
-    } finally {
-      instagramService.isMock = origIsMock;
-    }
+    const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_valid_token');
+    expect(result.connected).toBe(false);
+    expect(result.errorCode).toBe('ACCOUNT_MISMATCH');
+    expect(result.message).toBe('The configured Instagram account does not match the authenticated account.');
   });
 
   // 6. Successful connection verification
   it('Test 6: should verify successfully when account ID matches authenticated user ID', async () => {
-    const origIsMock = instagramService.isMock;
-    instagramService.isMock = () => false;
-
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -164,39 +133,25 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
       }),
     });
 
-    try {
-      const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_valid_token');
-      expect(result.connected).toBe(true);
-      expect(result.instagramUserId).toBe('17841437796028856');
-      expect(result.username).toBe('_hpsconfession_');
-      expect(result.message).toContain('@_hpsconfession_');
-    } finally {
-      instagramService.isMock = origIsMock;
-    }
+    const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_valid_token');
+    expect(result.connected).toBe(true);
+    expect(result.instagramUserId).toBe('17841437796028856');
+    expect(result.username).toBe('_hpsconfession_');
+    expect(result.message).toContain('@_hpsconfession_');
   });
 
   // 7. Network / API error handling
   it('Test 7: should return standardized error on network or API failure', async () => {
-    const origIsMock = instagramService.isMock;
-    instagramService.isMock = () => false;
-
     global.fetch = vi.fn().mockRejectedValue(new Error('ENOTFOUND graph.instagram.com'));
 
-    try {
-      const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_token');
-      expect(result.connected).toBe(false);
-      expect(result.errorCode).toBe('API_UNAVAILABLE');
-      expect(result.message).toBe('Instagram API request failed.');
-    } finally {
-      instagramService.isMock = origIsMock;
-    }
+    const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_token');
+    expect(result.connected).toBe(false);
+    expect(result.errorCode).toBe('API_UNAVAILABLE');
+    expect(result.message).toBe('Instagram API request failed.');
   });
 
   // 8. Publishing failure with missing credentials
   it('Test 8: should reject publishing when server credentials are missing', async () => {
-    const origIsMock = instagramService.isMock;
-    instagramService.isMock = () => false;
-
     const origId = process.env.INSTAGRAM_ACCOUNT_ID;
     const origToken = process.env.INSTAGRAM_ACCESS_TOKEN;
 
@@ -214,15 +169,11 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
     } finally {
       process.env.INSTAGRAM_ACCOUNT_ID = origId;
       process.env.INSTAGRAM_ACCESS_TOKEN = origToken;
-      instagramService.isMock = origIsMock;
     }
   });
 
   // 9. Successful publishing using graph.instagram.com endpoints
   it('Test 9: should successfully create container, poll status, and publish via graph.instagram.com', async () => {
-    const origIsMock = instagramService.isMock;
-    instagramService.isMock = () => false;
-
     const origId = process.env.INSTAGRAM_ACCOUNT_ID;
     const origToken = process.env.INSTAGRAM_ACCESS_TOKEN;
     process.env.INSTAGRAM_ACCOUNT_ID = '17841437796028856';
@@ -281,7 +232,6 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
     } finally {
       process.env.INSTAGRAM_ACCOUNT_ID = origId;
       process.env.INSTAGRAM_ACCESS_TOKEN = origToken;
-      instagramService.isMock = origIsMock;
     }
   });
 
@@ -302,22 +252,10 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
     expect(result.error).toContain('already published');
   });
 
-  // 11. Mock mode fallback and token confidentiality
-  it('Test 11: should support mock mode and strictly protect token confidentiality', async () => {
-    // A: Mock mode publishing
-    const result = await instagramService.publishPost(
-      mockConfession,
-      'https://example.com/card.png',
-      'Test caption'
-    );
-    expect(result.success).toBe(true);
-    expect(result.mediaId).toBeDefined();
-    expect(result.permalink).toContain('instagram.com/p/');
-
-    // B: Token never exposed in testConnection or safeConfig
+  // 11. Strict token confidentiality
+  it('Test 11: should strictly protect token confidentiality in responses and logs', async () => {
+    // A: Token never exposed in testConnection or safeConfig
     const FAKE_SECRET_TOKEN = 'SUPER_SECRET_TOKEN_DO_NOT_EXPOSE_12345';
-    const origIsMock = instagramService.isMock;
-    instagramService.isMock = () => false;
 
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -328,17 +266,13 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
       }),
     });
 
-    try {
-      const connResult = await instagramService.testConnection('17841437796028856', FAKE_SECRET_TOKEN);
-      expect(JSON.stringify(connResult)).not.toContain(FAKE_SECRET_TOKEN);
+    const connResult = await instagramService.testConnection('17841437796028856', FAKE_SECRET_TOKEN);
+    expect(JSON.stringify(connResult)).not.toContain(FAKE_SECRET_TOKEN);
 
-      const safeConfig = getInstagramSafeConfig();
-      expect(JSON.stringify(safeConfig)).not.toContain(FAKE_SECRET_TOKEN);
-    } finally {
-      instagramService.isMock = origIsMock;
-    }
+    const safeConfig = getInstagramSafeConfig();
+    expect(JSON.stringify(safeConfig)).not.toContain(FAKE_SECRET_TOKEN);
 
-    // C: Diagnostic logger never exposes token
+    // B: Diagnostic logger never exposes token
     const origToken = process.env.INSTAGRAM_ACCESS_TOKEN;
     process.env.INSTAGRAM_ACCESS_TOKEN = FAKE_SECRET_TOKEN;
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});

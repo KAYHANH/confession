@@ -1,6 +1,5 @@
 import { google } from 'googleapis';
 import { ColumnMapping, GoogleSheetConfig, Confession } from '@/types';
-import { mockStore } from '@/lib/mockStore';
 
 export interface RawSheetRow {
   rowNumber: number;
@@ -357,9 +356,9 @@ export class GoogleSheetsService {
       }
     }
 
-    // Client not configured: check if a real spreadsheet_id is provided
+    // Client not configured: check if a spreadsheet_id is provided
     const spreadsheetId = this.sanitizeSpreadsheetId(config.spreadsheet_id);
-    if (spreadsheetId && !spreadsheetId.startsWith('mock')) {
+    if (spreadsheetId) {
       try {
         const publicRows = await this.fetchRowsFromPublicSheet(config);
         return publicRows;
@@ -367,11 +366,6 @@ export class GoogleSheetsService {
         console.warn('[GoogleSheetsService] Public sheet fetch failed:', err?.message || err);
         throw new Error(err?.message || 'Failed to fetch from Google Sheet');
       }
-    }
-
-    // If mock mode is explicitly enabled, return simulated rows
-    if (process.env.MOCK_EXTERNAL_APIS === 'true') {
-      return this.getMockRows(config);
     }
 
     throw new Error('No Google Sheet connected. Please enter your Google Sheet URL or ID in Settings -> Google Sheets.');
@@ -394,7 +388,6 @@ export class GoogleSheetsService {
     const client = this.getClient();
 
     if (!client) {
-      console.log(`[GoogleSheetsService Mock] Updated Row ${rowNumber} status -> ${updates.status}`);
       return true;
     }
 
@@ -504,64 +497,9 @@ export class GoogleSheetsService {
     }
 
     return {
-      success: true,
-      message: 'Mock Mode Active: Google Sheet simulated with 6 demo confessions. To connect your real sheet, enter your Spreadsheet ID above.',
-      title: 'Demo University Confessions (Mock)',
+      success: false,
+      message: 'No Google Sheet connected. Please enter a valid Spreadsheet ID in Settings.',
     };
-  }
-
-  /**
-   * Mock rows provider for offline local development
-   */
-  private getMockRows(_config: GoogleSheetConfig): RawSheetRow[] {
-    const existing = mockStore.getConfessions();
-    const maxRow = existing.reduce((max, c) => Math.max(max, c.google_sheet_row), 1);
-
-    return [
-      {
-        rowNumber: 2,
-        timestamp: '2026-09-20 10:14:22',
-        name: 'Rahul',
-        confession: 'I have liked my best friend for two years but never told her. Every time she talks about someone else my heart breaks a little.',
-        status: 'IMPORTED',
-      },
-      {
-        rowNumber: 3,
-        timestamp: '2026-09-20 11:32:05',
-        name: 'Anonymous',
-        confession: 'I accidentally replied to my professor on email instead of my friend saying "this guy never stops giving homework bro send help". He replied with "Noted, extra assignment for you on Monday".',
-        status: 'IMPORTED',
-      },
-      {
-        rowNumber: 4,
-        timestamp: '2026-09-20 14:05:51',
-        name: 'Pooja',
-        confession: 'My roommate keeps stealing my expensive coffee so I switched the coffee powder with decaf and cheap chicory. She hasn\'t noticed yet and thinks the brand lost quality haha.',
-        status: 'SCHEDULED',
-      },
-      {
-        rowNumber: 5,
-        timestamp: '2026-09-21 08:20:10',
-        name: 'Anonymous',
-        confession: 'Call me at 9876543210 if you want to know what actually happened at the farewell party with Priya from CSE branch.',
-        status: 'IMPORTED',
-      },
-      // Additional new mock submission simulating fresh row
-      {
-        rowNumber: maxRow + 1,
-        timestamp: new Date().toISOString(),
-        name: 'Aman S.',
-        confession: 'During the mid-term exams, our entire back row had a code word system using pen clicks. Got an A in Data Structures because of teamwork!',
-        status: 'NEW',
-      },
-      {
-        rowNumber: maxRow + 2,
-        timestamp: new Date().toISOString(),
-        name: 'Simran',
-        confession: 'I secretly leave sticky notes with motivational quotes on random lockers in the library every Friday night. Seeing someone smile reading one made my whole semester.',
-        status: 'NEW',
-      },
-    ];
   }
 }
 

@@ -19,8 +19,8 @@ export function Header({ title, subtitle }: HeaderProps) {
       fetch('/api/sheets/status')
         .then((res) => res.json())
         .then((data) => {
-          const isMock = !data.spreadsheet_id || data.spreadsheet_id.startsWith('mock') || data.spreadsheet_id === '';
-          setSheetStatus({ isLive: !isMock });
+          const isConfigured = Boolean(data.spreadsheet_id && !data.spreadsheet_id.startsWith('mock'));
+          setSheetStatus({ isLive: isConfigured });
         })
         .catch(() => {});
     };

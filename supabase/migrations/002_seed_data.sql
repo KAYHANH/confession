@@ -117,7 +117,7 @@ INSERT INTO settings (key, value)
 VALUES
   ('general', '{
     "brand_name": "Campus Confessions",
-    "instagram_handle": "@campusconfessions_official",
+    "instagram_handle": "@_hpsconfession_",
     "logo_url": "/logo.png",
     "default_template_id": "11111111-1111-1111-1111-111111111111",
     "timezone": "Asia/Kolkata"
@@ -144,65 +144,3 @@ VALUES
     ]
   }'::jsonb)
 ON CONFLICT (key) DO NOTHING;
-
--- 3. Insert Demo Confessions
-INSERT INTO confessions (
-  id, google_sheet_id, google_sheet_name, google_sheet_row,
-  name, original_text, cleaned_text, display_name, is_anonymous,
-  status, moderation_status, moderation_reason, ai_processed,
-  template_id, caption, hashtags, created_at
-)
-VALUES
-  (
-    'a1111111-0000-0000-0000-000000000001',
-    'mock_sheet_12345', 'Confessions', 2,
-    'Rahul',
-    'I have liked my best friend for two years but never told her. Every time she talks about someone else my heart breaks a little.',
-    'I have liked my best friend for two years, but I never told her. Every time she talks about someone else, my heart breaks a little.',
-    'Rahul', false,
-    'READY_FOR_REVIEW', 'LOW', 'Clear personal expression, no harm or PII detected.', true,
-    '44444444-4444-4444-4444-444444444444',
-    'Confession #001 💔\n\nSometimes the hardest words to say are the ones that matter the most. Would you risk a friendship to confess your feelings?\n\nShare your advice below 👇',
-    ARRAY['#confession', '#crush', '#bestfriend', '#secretfeelings'],
-    NOW() - INTERVAL '2 hours'
-  ),
-  (
-    'a1111111-0000-0000-0000-000000000002',
-    'mock_sheet_12345', 'Confessions', 3,
-    'Anonymous',
-    'I accidentally replied to my professor on email instead of my friend saying "this guy never stops giving homework bro send help". He replied with "Noted, extra assignment for you on Monday".',
-    'I accidentally replied to my professor on email instead of my friend saying "this guy never stops giving homework bro send help". He replied with "Noted, extra assignment for you on Monday".',
-    'Anonymous', true,
-    'APPROVED', 'LOW', 'Humorous student story, zero risk.', true,
-    '66666666-6666-6666-6666-666666666666',
-    'Confession #002 😭💀\n\nAlways double check the "To" field before hitting send! What is your most embarrassing email blunder?\n\nDrop it in the comments below!',
-    ARRAY['#collegelife', '#funnyconfession', '#studentproblems', '#oops'],
-    NOW() - INTERVAL '5 hours'
-  ),
-  (
-    'a1111111-0000-0000-0000-000000000003',
-    'mock_sheet_12345', 'Confessions', 4,
-    'Pooja',
-    'My roommate keeps stealing my expensive coffee so I switched the coffee powder with decaf and cheap chicory. She hasn''t noticed yet and thinks the brand lost quality haha.',
-    'My roommate keeps stealing my expensive coffee, so I switched the powder with decaf and cheap chicory. She hasn''t noticed yet and claims the brand lost quality!',
-    'Anonymous', true,
-    'SCHEDULED', 'LOW', 'Harmless petty roommate drama.', true,
-    '11111111-1111-1111-1111-111111111111',
-    'Confession #003 ☕\n\nPetty revenge or totally justified? What would you do if your roommate kept using your stuff without asking?\n\nTell us below 👇',
-    ARRAY['#roommatediaries', '#confession', '#pettyrevenge', '#hostellife'],
-    NOW() - INTERVAL '1 day'
-  ),
-  (
-    'a1111111-0000-0000-0000-000000000004',
-    'mock_sheet_12345', 'Confessions', 5,
-    'Anonymous',
-    'Call me at 9876543210 if you want to know what actually happened at the farewell party with Priya from CSE branch.',
-    'Call me at ********10 if you want to know what actually happened at the farewell party with Priya from CSE branch.',
-    'Anonymous', true,
-    'READY_FOR_REVIEW', 'HIGH', 'PII detected (phone number: 9876543210, specific person identification). Masked and flagged for admin discretion.', true,
-    '22222222-2222-2222-2222-222222222222',
-    'Confession #004 🤫\n\nCampus rumors are swirling. Remember to keep names and private contacts out of public submissions.',
-    ARRAY['#campusrumors', '#confessionflow'],
-    NOW() - INTERVAL '30 minutes'
-  )
-ON CONFLICT (id) DO NOTHING;

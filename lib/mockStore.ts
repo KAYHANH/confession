@@ -136,11 +136,11 @@ const DEFAULT_TEMPLATES: Template[] = [
 ];
 
 const DEFAULT_SETTINGS: SystemSettings = {
-  brand_name: 'Campus Confessions',
-  instagram_handle: '@campusconfessions_official',
+  brand_name: process.env.BRAND_NAME || 'Campus Confessions',
+  instagram_handle: process.env.INSTAGRAM_HANDLE || '@_hpsconfession_',
   logo_url: '/logo.png',
   default_template_id: '11111111-1111-1111-1111-111111111111',
-  timezone: 'Asia/Kolkata',
+  timezone: process.env.DEFAULT_TIMEZONE || 'Asia/Kolkata',
   auto_publish: false,
   publishing_mode: 'MANUAL_APPROVAL',
   default_publishing_time: '19:30',
@@ -186,16 +186,16 @@ class MockStore {
         this.lastMtime = stat.mtimeMs;
         const raw = fs.readFileSync(DATA_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
-        if (parsed.instagram?.account_id?.startsWith('178414000000')) {
-          parsed.instagram.account_id = process.env.INSTAGRAM_ACCOUNT_ID || '';
+        if (!parsed.instagram?.account_id && process.env.INSTAGRAM_ACCOUNT_ID) {
+          parsed.instagram.account_id = process.env.INSTAGRAM_ACCOUNT_ID;
         }
-        if (!parsed.instagram?.access_token || parsed.instagram.access_token.startsWith('EAABwzL')) {
-          parsed.instagram.access_token = process.env.INSTAGRAM_ACCESS_TOKEN || '';
+        if (!parsed.instagram?.access_token && process.env.INSTAGRAM_ACCESS_TOKEN) {
+          parsed.instagram.access_token = process.env.INSTAGRAM_ACCESS_TOKEN;
         }
         return parsed;
       }
     } catch (_e) {
-      console.warn('[MockStore] Failed to read mock file, using defaults');
+      console.warn('[MockStore] Failed to read store file, using defaults');
     }
 
     return {
@@ -211,8 +211,8 @@ class MockStore {
         },
       ],
       googleSheet: {
-        spreadsheet_id: '1S5HcRCh27paVdqyiCAqAI_1x-LCABtb73R6Fisn-QJs',
-        sheet_name: 'Confessions',
+        spreadsheet_id: process.env.GOOGLE_SHEETS_SPREADSHEET_ID || '1S5HcRCh27paVdqyiCAqAI_1x-LCABtb73R6Fisn-QJs',
+        sheet_name: process.env.GOOGLE_SHEETS_SHEET_NAME || 'Confessions',
         column_mapping: {
           timestampColumn: 'A',
           nameColumn: 'B',
@@ -223,16 +223,16 @@ class MockStore {
           processedAtColumn: 'G',
           errorColumn: 'H',
         },
-        service_account_email: 'service-account@confessionflow-demo.iam.gserviceaccount.com',
+        service_account_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '',
         last_sync_at: null,
         last_sync_status: null,
         rows_imported: 0,
       },
       instagram: {
         account_id: process.env.INSTAGRAM_ACCOUNT_ID || '',
-        username: 'campusconfessions_official',
+        username: process.env.INSTAGRAM_HANDLE?.replace('@', '') || '_hpsconfession_',
         access_token: process.env.INSTAGRAM_ACCESS_TOKEN || '',
-        token_expires_at: new Date(Date.now() + 60 * 86400000).toISOString(),
+        token_expires_at: null,
         is_connected: !!(process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN),
         status: (process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN) ? 'ACTIVE' : 'DISCONNECTED',
       },
@@ -400,28 +400,30 @@ class MockStore {
       templates: [...DEFAULT_TEMPLATES],
       activityLogs: [],
       googleSheet: {
-        spreadsheet_id: 'mock_sheet_12345',
-        sheet_name: 'Confessions',
+        spreadsheet_id: process.env.GOOGLE_SHEETS_SPREADSHEET_ID || '1S5HcRCh27paVdqyiCAqAI_1x-LCABtb73R6Fisn-QJs',
+        sheet_name: process.env.GOOGLE_SHEETS_SHEET_NAME || 'Confessions',
         column_mapping: {
           timestampColumn: 'A',
           nameColumn: 'B',
-          confessionColumn: 'C',
+          confessionColumn: 'E',
           statusColumn: 'D',
           postIdColumn: 'E',
           instagramUrlColumn: 'F',
           processedAtColumn: 'G',
           errorColumn: 'H',
         },
-        service_account_email: 'service-account@confessionflow-demo.iam.gserviceaccount.com',
+        service_account_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '',
         last_sync_at: null,
         last_sync_status: null,
         rows_imported: 0,
       },
       instagram: {
-        account_id: '17841400000000000',
-        username: 'campusconfessions_official',
-        is_connected: true,
-        status: 'ACTIVE',
+        account_id: process.env.INSTAGRAM_ACCOUNT_ID || '',
+        username: process.env.INSTAGRAM_HANDLE?.replace('@', '') || '_hpsconfession_',
+        access_token: process.env.INSTAGRAM_ACCESS_TOKEN || '',
+        token_expires_at: null,
+        is_connected: !!(process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN),
+        status: (process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN) ? 'ACTIVE' : 'DISCONNECTED',
       },
       settings: { ...DEFAULT_SETTINGS },
     };

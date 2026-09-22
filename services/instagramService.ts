@@ -23,41 +23,22 @@ export const INSTAGRAM_API_BASE_URL = 'https://graph.instagram.com';
 
 export class InstagramService {
   /**
-   * Check if external APIs are explicitly mocked
-   */
-  public isMock(): boolean {
-    return process.env.NODE_ENV === 'test' || process.env.MOCK_EXTERNAL_APIS === 'true';
-  }
-
-  /**
    * Test Instagram credentials securely and validate account ID using Instagram Login API
    * Uses https://graph.instagram.com/me?fields=id,username
    */
   public async testConnection(accountId?: string, accessToken?: string): Promise<InstagramTestResult> {
-    if (this.isMock()) {
-      return {
-        success: true,
-        connected: true,
-        username: '_hpsconfession_',
-        instagramUserId: '17841437796028856',
-        message: 'Mock Mode Active: Instagram connection verified.',
-      };
-    }
-
     const serverConfig = getInstagramServerConfig();
     const storeConfig = mockStore.getInstagramConfig();
 
     const targetAccountId =
       accountId !== undefined
         ? accountId.trim()
-        : serverConfig.accountId ||
-          (storeConfig.account_id && !storeConfig.account_id.startsWith('178414000000') ? storeConfig.account_id.trim() : undefined);
+        : serverConfig.accountId || (storeConfig.account_id ? storeConfig.account_id.trim() : undefined);
 
     const targetToken =
       accessToken !== undefined
         ? accessToken.trim()
-        : serverConfig.accessToken ||
-          (storeConfig.access_token && storeConfig.access_token !== 'EAABwzL...' ? storeConfig.access_token.trim() : undefined);
+        : serverConfig.accessToken || (storeConfig.access_token ? storeConfig.access_token.trim() : undefined);
 
     if (!targetToken) {
       return {
@@ -179,26 +160,11 @@ export class InstagramService {
       };
     }
 
-    // 2. Mock mode handling
-    if (this.isMock()) {
-      const mockId = `mock_ig_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      const mockSlug = Math.random().toString(36).substring(2, 10);
-      return {
-        success: true,
-        mediaId: mockId,
-        permalink: `https://www.instagram.com/p/C_${mockSlug}/`,
-      };
-    }
-
     const serverConfig = getInstagramServerConfig();
     const storeConfig = mockStore.getInstagramConfig();
 
-    const accountId =
-      serverConfig.accountId ||
-      (storeConfig.account_id && !storeConfig.account_id.startsWith('178414000000') ? storeConfig.account_id : undefined);
-    const accessToken =
-      serverConfig.accessToken ||
-      (storeConfig.access_token && storeConfig.access_token !== 'EAABwzL...' ? storeConfig.access_token : undefined);
+    const accountId = serverConfig.accountId || storeConfig.account_id || undefined;
+    const accessToken = serverConfig.accessToken || storeConfig.access_token || undefined;
 
     if (!accessToken) {
       return {
