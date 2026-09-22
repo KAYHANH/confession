@@ -179,14 +179,14 @@ export function PostCardPreview({
       className="relative overflow-hidden shadow-2xl rounded-2xl border border-zinc-200/80 select-none transition-transform"
       style={{
         width: 1080 * scale,
-        height: 1080 * scale,
+        height: 1350 * scale,
       }}
     >
       <div
         className="absolute top-0 left-0 flex flex-col justify-between"
         style={{
           width: 1080,
-          height: 1080,
+          height: 1350,
           transform: `scale(${scale})`,
           transformOrigin: 'top left',
           background: template.background,
@@ -241,7 +241,7 @@ export function PostCardPreview({
             alignItems: 'flex-start',
             marginTop: `${cfg.marginY}px`,
             marginBottom: `${cfg.marginY}px`,
-            maxHeight: '840px',
+            maxHeight: '1120px',
           }}
         >
           {template.layout_config?.quote_icon !== false && cfg.showBigQuote && (

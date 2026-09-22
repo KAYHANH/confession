@@ -144,7 +144,7 @@ export class ImageService {
   }
 
   /**
-   * Generate safe 1080x1080 HTML content for the template
+   * Generate 1080×1350 (4:5 portrait) HTML content for the template
    */
   public generateCardHtml(options: ImageGenerationOptions): string {
     const { confession, template, brandName = 'Campus Confessions', instagramHandle = '@campusconfessions', confessionNumber = 1 } = options;
@@ -175,7 +175,7 @@ export class ImageService {
     
     body {
       width: 1080px;
-      height: 1080px;
+      height: 1350px;
       overflow: hidden;
       background: ${template.background};
       color: ${template.text_color};
@@ -244,7 +244,7 @@ export class ImageService {
       align-items: flex-start;
       margin: ${cfg.marginY}px 0;
       z-index: 2;
-      max-height: 840px;
+      max-height: 1120px;
       overflow: hidden;
       width: 100%;
     }
@@ -414,32 +414,32 @@ export class ImageService {
     let charsPerLine = 38;
     let fontSize = 32;
     let lineSpacing = 44;
-    let startY = 320;
+    let startY = 400;   // pushed down — more vertical space in 4:5
     let showQuote = true;
 
     if (len < 250) {
       charsPerLine = 38;
-      fontSize = 32;
-      lineSpacing = 44;
-      startY = 320;
+      fontSize = 34;
+      lineSpacing = 48;
+      startY = 420;
       showQuote = true;
     } else if (len < 550) {
       charsPerLine = 48;
-      fontSize = 25;
-      lineSpacing = 34;
-      startY = 260;
+      fontSize = 27;
+      lineSpacing = 38;
+      startY = 360;
       showQuote = true;
     } else if (len < 1100) {
       charsPerLine = 60;
-      fontSize = 20;
-      lineSpacing = 27;
-      startY = 200;
+      fontSize = 21;
+      lineSpacing = 29;
+      startY = 280;
       showQuote = false;
     } else {
       charsPerLine = 72;
-      fontSize = 15.5;
-      lineSpacing = 21;
-      startY = 180;
+      fontSize = 16;
+      lineSpacing = 22;
+      startY = 240;
       showQuote = false;
     }
 
@@ -457,8 +457,9 @@ export class ImageService {
     }
     if (currentLine) lines.push(currentLine.trim());
 
-    // Calculate maximum lines that safely fit before footer (footer starts at y=950)
-    const maxAvailableHeight = 930 - startY - 70;
+    // Footer starts at y=1210 in 1350px canvas
+    const footerDividerY = 1210;
+    const maxAvailableHeight = footerDividerY - startY - 80;
     const maxLines = Math.floor(maxAvailableHeight / lineSpacing);
     const displayLines = lines.slice(0, maxLines);
     if (lines.length > maxLines && displayLines.length > 0) {
@@ -467,16 +468,16 @@ export class ImageService {
     }
 
     const lastLineY = startY + (displayLines.length - 1) * lineSpacing;
-    const signatureY = Math.min(920, lastLineY + 38);
+    const signatureY = Math.min(1170, lastLineY + 42);
 
-    const svg = `<svg width="1080" height="1080" viewBox="0 0 1080 1080" xmlns="http://www.w3.org/2000/svg">
+    const svg = `<svg width="1080" height="1350" viewBox="0 0 1080 1350" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" stop-color="${template.background.includes('linear') ? '#1e1b4b' : template.background}" />
           <stop offset="100%" stop-color="${template.background.includes('linear') ? '#4338ca' : '#f3f4f6'}" />
         </linearGradient>
       </defs>
-      <rect width="1080" height="1080" fill="url(#bgGrad)" />
+      <rect width="1080" height="1350" fill="url(#bgGrad)" />
       
       <!-- Header Badge -->
       <rect x="70" y="70" width="280" height="52" rx="26" fill="${template.accent_color}" fill-opacity="0.18" stroke="${template.accent_color}" stroke-width="2" />
@@ -490,7 +491,7 @@ export class ImageService {
       </text>
 
       ${showQuote ? `<!-- Quote Mark -->
-      <text x="70" y="${startY - 25}" font-family="Georgia, serif" font-size="76" fill="${template.accent_color}" opacity="0.85">&#8220;</text>` : ''}
+      <text x="70" y="${startY - 30}" font-family="Georgia, serif" font-size="86" fill="${template.accent_color}" opacity="0.85">&#8220;</text>` : ''}
 
       <!-- Confession Text Lines -->
       ${displayLines.map((l, i) => `
@@ -507,11 +508,11 @@ export class ImageService {
       </text>` : ''}
 
       <!-- Footer Divider & Meta -->
-      <line x1="70" y1="960" x2="1010" y2="960" stroke="${template.text_color}" stroke-opacity="0.18" stroke-width="1.5" />
-      <text x="70" y="1005" font-family="system-ui, sans-serif" font-size="18" fill="${template.text_color}" opacity="0.7">
+      <line x1="70" y1="${footerDividerY}" x2="1010" y2="${footerDividerY}" stroke="${template.text_color}" stroke-opacity="0.18" stroke-width="1.5" />
+      <text x="70" y="${footerDividerY + 46}" font-family="system-ui, sans-serif" font-size="18" fill="${template.text_color}" opacity="0.7">
         ${this.escapeHtml(brandName)} &#8226; ${this.escapeHtml(instagramHandle)}
       </text>
-      <text x="1010" y="1005" font-family="system-ui, sans-serif" font-size="18" fill="${template.text_color}" opacity="0.5" text-anchor="end">
+      <text x="1010" y="${footerDividerY + 46}" font-family="system-ui, sans-serif" font-size="18" fill="${template.text_color}" opacity="0.5" text-anchor="end">
         ConfessionFlow
       </text>
     </svg>`;

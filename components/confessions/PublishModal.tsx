@@ -107,7 +107,7 @@ export function PublishModal({
         slideIndex: currentSlide,
         totalSlides: cardMode === 'carousel' ? slides.length : 1,
       });
-      success('Post card downloaded as 1080x1080 PNG!');
+      success('Post card downloaded as 1080x1350 PNG (4:5)!');
     } catch (err: any) {
       error(err?.message || 'Download failed');
     } finally {
@@ -303,7 +303,7 @@ export function PublishModal({
                 <span className="font-bold text-emerald-700">Immediate Publish</span>
               </div>
               <div className="text-[11px] text-zinc-500">
-                {cardMode === 'fit' && '✨ Single 1080x1080 Post'}
+                {cardMode === 'fit' && '📸 Single 1080×1350 Post (4:5)'}
                 {cardMode === 'hook' && '📖 Hook + Full Caption'}
                 {cardMode === 'carousel' && `📑 ${slides.length}-Slide Carousel`}
               </div>
