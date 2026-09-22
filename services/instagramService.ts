@@ -130,12 +130,12 @@ export class InstagramService {
     // Resolve relative URL to absolute URL for Meta's crawler
     let resolvedImageUrl = imageUrl;
     if (resolvedImageUrl.startsWith('/')) {
-      const appBaseUrl =
-        process.env.NEXT_PUBLIC_APP_URL ||
-        (process.env.RENDER_EXTERNAL_URL ? `https://${process.env.RENDER_EXTERNAL_URL}` : '');
-      if (appBaseUrl) {
-        resolvedImageUrl = `${appBaseUrl.replace(/\/$/, '')}${resolvedImageUrl}`;
+      // If running on localhost, fallback to public Render URL because Meta's CDN cannot reach localhost
+      let appBaseUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+      if (!appBaseUrl || appBaseUrl.includes('localhost') || appBaseUrl.includes('127.0.0.1')) {
+        appBaseUrl = process.env.RENDER_EXTERNAL_URL ? `https://${process.env.RENDER_EXTERNAL_URL}` : 'https://confession-5ha2.onrender.com';
       }
+      resolvedImageUrl = `${appBaseUrl.replace(/\/$/, '')}${resolvedImageUrl}`;
     }
 
     if (!resolvedImageUrl.startsWith('http://') && !resolvedImageUrl.startsWith('https://')) {
