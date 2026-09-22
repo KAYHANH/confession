@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Confession, Template, ActivityLog, GoogleSheetConfig, InstagramAccountConfig, SystemSettings } from '@/types';
+import { Confession, Template, ActivityLog, GoogleSheetConfig, InstagramAccountConfig, SystemSettings, PublishedPost } from '@/types';
 
 const DATA_FILE = path.join(process.cwd(), '.mock_data.json');
 
@@ -8,6 +8,7 @@ export interface MockDatabase {
   confessions: Confession[];
   templates: Template[];
   activityLogs: ActivityLog[];
+  publishedPosts: PublishedPost[];
   googleSheet: GoogleSheetConfig;
   instagram: InstagramAccountConfig;
   settings: SystemSettings;
@@ -213,6 +214,7 @@ class MockStore {
           created_at: new Date(Date.now() - 7200000).toISOString(),
         },
       ],
+      publishedPosts: [],
       googleSheet: {
         spreadsheet_id: process.env.GOOGLE_SHEETS_SPREADSHEET_ID || '1S5HcRCh27paVdqyiCAqAI_1x-LCABtb73R6Fisn-QJs',
         sheet_name: process.env.GOOGLE_SHEETS_SHEET_NAME || 'Confessions',
@@ -359,6 +361,28 @@ class MockStore {
     }
     this.save();
     return newLog;
+  }
+
+  public getPublishedPosts(): PublishedPost[] {
+    if (!this.data.publishedPosts) this.data.publishedPosts = [];
+    return [...this.data.publishedPosts].sort(
+      (a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime()
+    );
+  }
+
+  public addPublishedPost(entry: Omit<PublishedPost, 'id'>): PublishedPost {
+    if (!this.data.publishedPosts) this.data.publishedPosts = [];
+    const newEntry: PublishedPost = {
+      ...entry,
+      id: `pub-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    };
+    this.data.publishedPosts.unshift(newEntry);
+    // Keep max 1000 records
+    if (this.data.publishedPosts.length > 1000) {
+      this.data.publishedPosts = this.data.publishedPosts.slice(0, 1000);
+    }
+    this.save();
+    return newEntry;
   }
 
   public getGoogleSheetConfig(): GoogleSheetConfig {

@@ -473,19 +473,28 @@ export class ConfessionService {
         error_message: null,
       });
 
-      // 7. Update Google Sheet
+      // 7. Update Google Sheet — status only (permalink stored internally, not in your spreadsheet)
       const sheetConfig = mockStore.getGoogleSheetConfig();
       if (confession.google_sheet_row) {
         await googleSheetsService.updateRowStatus(sheetConfig, confession.google_sheet_row, {
           status: 'PUBLISHED',
-          postId: publishResult.mediaId,
-          instagramUrl: publishResult.permalink,
           processedAt: publishedAt,
           error: '',
         });
       }
 
-      // 8. Log success
+      // 8. Save permalink to internal published posts log (not in Google Sheet)
+      mockStore.addPublishedPost({
+        confession_id: id,
+        confession_number: confession.google_sheet_row ?? 0,
+        instagram_media_id: publishResult.mediaId ?? '',
+        permalink: publishResult.permalink ?? '',
+        published_at: publishedAt,
+        template_name: mockStore.getTemplateById(confession.template_id ?? '')?.name,
+        preview_text: (confession.cleaned_text || confession.original_text || '').slice(0, 80),
+      });
+
+      // 9. Log success
       mockStore.addLog({
         action: 'PUBLISHED',
         entity_type: 'confession',

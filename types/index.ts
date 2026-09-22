@@ -92,6 +92,17 @@ export interface ActivityLog {
   created_at: string;
 }
 
+export interface PublishedPost {
+  id: string;
+  confession_id: string;
+  confession_number: number;
+  instagram_media_id: string;
+  permalink: string;
+  published_at: string;
+  template_name?: string;
+  preview_text?: string; // first ~80 chars of the confession
+}
+
 export interface ColumnMapping {
   timestampColumn: string;
   nameColumn: string;

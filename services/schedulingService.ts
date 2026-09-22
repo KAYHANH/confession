@@ -86,15 +86,15 @@ export class SchedulingService {
     const existing = mockStore.getConfessions();
 
     const existingRowSet = new Set(
-      existing.map((c) => `${c.google_sheet_id}_${c.google_sheet_row}`)
+      existing.map((c) => c.google_sheet_row)
     );
 
     const newConfessions: Confession[] = [];
     const now = new Date();
 
     for (const row of rows) {
-      const key = `${config.spreadsheet_id}_${row.rowNumber}`;
-      if (existingRowSet.has(key)) {
+      // Dedup by row number alone — protects against sheet ID changes causing re-imports
+      if (existingRowSet.has(row.rowNumber)) {
         continue;
       }
 
@@ -149,7 +149,7 @@ export class SchedulingService {
       };
 
       newConfessions.push(newConfession);
-      existingRowSet.add(key);
+      existingRowSet.add(row.rowNumber);
     }
 
     if (newConfessions.length > 0) {
