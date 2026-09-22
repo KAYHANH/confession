@@ -19,6 +19,8 @@ export interface InstagramPublishResult {
   error?: string;
 }
 
+export const INSTAGRAM_API_BASE_URL = 'https://graph.instagram.com';
+
 export class InstagramService {
   /**
    * Check if external APIs are explicitly mocked
@@ -28,8 +30,8 @@ export class InstagramService {
   }
 
   /**
-   * Test Instagram credentials securely and validate account ID
-   * Supports both Instagram Login tokens (graph.instagram.com) and Meta Graph API tokens (graph.facebook.com)
+   * Test Instagram credentials securely and validate account ID using Instagram Login API
+   * Uses https://graph.instagram.com/me?fields=id,username
    */
   public async testConnection(accountId?: string, accessToken?: string): Promise<InstagramTestResult> {
     if (this.isMock()) {
@@ -55,14 +57,14 @@ export class InstagramService {
       accessToken !== undefined
         ? accessToken.trim()
         : serverConfig.accessToken ||
-          (storeConfig.access_token && !storeConfig.access_token.startsWith('EAABwzL') ? storeConfig.access_token.trim() : undefined);
+          (storeConfig.access_token && storeConfig.access_token !== 'EAABwzL...' ? storeConfig.access_token.trim() : undefined);
 
     if (!targetToken) {
       return {
         success: false,
         connected: false,
         errorCode: 'MISSING_ACCESS_TOKEN',
-        message: 'Instagram integration is not configured. Missing: INSTAGRAM_ACCESS_TOKEN.',
+        message: 'Instagram credentials are not configured.',
       };
     }
 
@@ -71,7 +73,7 @@ export class InstagramService {
         success: false,
         connected: false,
         errorCode: 'MISSING_ACCOUNT_ID',
-        message: 'Instagram integration is not configured. Missing: INSTAGRAM_ACCOUNT_ID.',
+        message: 'Instagram credentials are not configured.',
       };
     }
 
@@ -81,11 +83,11 @@ export class InstagramService {
 
       // 1. Primary: Query graph.instagram.com/me using Authorization: Bearer header
       try {
-        const igResp = await fetch('https://graph.instagram.com/me?fields=user_id,username', {
+        const igResp = await fetch(`${INSTAGRAM_API_BASE_URL}/me?fields=id,username,user_id`, {
           headers: { Authorization: `Bearer ${targetToken}` },
         });
         const igData = await igResp.json().catch(() => ({}));
-        if (igResp.ok && (igData.user_id || igData.id)) {
+        if (igResp.ok && (igData.id || igData.user_id)) {
           userData = igData;
         } else if (igData.error?.message) {
           apiError = igData.error.message;
@@ -98,30 +100,14 @@ export class InstagramService {
       if (!userData) {
         try {
           const igResp2 = await fetch(
-            `https://graph.instagram.com/me?fields=user_id,username&access_token=${encodeURIComponent(targetToken)}`
+            `${INSTAGRAM_API_BASE_URL}/me?fields=id,username,user_id&access_token=${encodeURIComponent(targetToken)}`
           );
           const igData2 = await igResp2.json().catch(() => ({}));
-          if (igResp2.ok && (igData2.user_id || igData2.id)) {
+          if (igResp2.ok && (igData2.id || igData2.user_id)) {
             userData = igData2;
             apiError = null;
           } else if (igData2.error?.message) {
             apiError = igData2.error.message;
-          }
-        } catch {}
-      }
-
-      // 3. Fallback: Query graph.facebook.com for Meta Graph API Page/User tokens
-      if (!userData) {
-        try {
-          const fbResp = await fetch(
-            `https://graph.facebook.com/v21.0/${targetAccountId}?fields=id,username,name&access_token=${encodeURIComponent(targetToken)}`
-          );
-          const fbData = await fbResp.json().catch(() => ({}));
-          if (fbResp.ok && fbData.id) {
-            userData = { user_id: fbData.id, username: fbData.username || fbData.name };
-            apiError = null;
-          } else if (fbData.error?.message) {
-            apiError = fbData.error.message;
           }
         } catch {}
       }
@@ -132,19 +118,19 @@ export class InstagramService {
             success: false,
             connected: false,
             errorCode: 'API_UNAVAILABLE',
-            message: 'Instagram API could not be reached. Please try again.',
+            message: 'Instagram API request failed.',
           };
         }
         return {
           success: false,
           connected: false,
           errorCode: 'INVALID_CREDENTIALS',
-          message: 'Instagram authentication failed. The configured access token was rejected.',
+          message: 'Instagram authentication failed. Please reconnect the Instagram account.',
         };
       }
 
       // Account ID validation: Ensure configured account ID matches authenticated user ID
-      const authenticatedUserId = String(userData.user_id || userData.id).trim();
+      const authenticatedUserId = String(userData.id || userData.user_id).trim();
       const configuredId = String(targetAccountId).trim();
 
       if (configuredId && configuredId !== authenticatedUserId) {
@@ -152,7 +138,7 @@ export class InstagramService {
           success: false,
           connected: false,
           errorCode: 'ACCOUNT_MISMATCH',
-          message: 'The configured Instagram account ID does not match the authenticated Instagram account.',
+          message: 'The configured Instagram account does not match the authenticated account.',
         };
       }
 
@@ -169,7 +155,7 @@ export class InstagramService {
         success: false,
         connected: false,
         errorCode: 'API_UNAVAILABLE',
-        message: 'Instagram API could not be reached. Please try again.',
+        message: 'Instagram API request failed.',
       };
     }
   }
@@ -210,13 +196,13 @@ export class InstagramService {
       (storeConfig.account_id && !storeConfig.account_id.startsWith('178414000000') ? storeConfig.account_id : undefined);
     const accessToken =
       serverConfig.accessToken ||
-      (storeConfig.access_token && !storeConfig.access_token.startsWith('EAABwzL') ? storeConfig.access_token : undefined);
+      (storeConfig.access_token && storeConfig.access_token !== 'EAABwzL...' ? storeConfig.access_token : undefined);
 
     if (!accessToken) {
       return {
         success: false,
         errorCode: 'MISSING_ACCESS_TOKEN',
-        error: 'Instagram integration is not configured. Missing: INSTAGRAM_ACCESS_TOKEN.',
+        error: 'Instagram credentials are not configured.',
       };
     }
 
@@ -224,7 +210,7 @@ export class InstagramService {
       return {
         success: false,
         errorCode: 'MISSING_ACCOUNT_ID',
-        error: 'Instagram integration is not configured. Missing: INSTAGRAM_ACCOUNT_ID.',
+        error: 'Instagram credentials are not configured.',
       };
     }
 
@@ -275,12 +261,10 @@ export class InstagramService {
       };
     }
 
-    const isInstagramLoginToken = accessToken.startsWith('IGAA');
-
     try {
-      // Step 1: Create media container
-      let baseUrl = 'https://graph.instagram.com';
-      let containerResp = await fetch(`${baseUrl}/v21.0/${accountId}/media`, {
+      // Step 1: Create media container via graph.instagram.com
+      const mediaEndpoint = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media`;
+      const containerResp = await fetch(mediaEndpoint, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -292,25 +276,13 @@ export class InstagramService {
         }),
       });
 
-      let containerData = await containerResp.json().catch(() => ({}));
-
-      // Only attempt fallback to graph.facebook.com for Facebook-type tokens (EAA...), NEVER for Instagram Login (IGAA...)
-      if (!isInstagramLoginToken && (!containerResp.ok || containerData.error)) {
-        baseUrl = 'https://graph.facebook.com';
-        containerResp = await fetch(`${baseUrl}/v21.0/${accountId}/media`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            image_url: resolvedImageUrl,
-            caption: captionText,
-            access_token: accessToken,
-          }),
-        });
-        containerData = await containerResp.json().catch(() => ({}));
-      }
+      const containerData = await containerResp.json().catch(() => ({}));
 
       if (!containerResp.ok || containerData.error) {
-        let errorMsg = containerData.error?.message || 'Unknown Meta API error';
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn(`[InstagramService] Media container creation failed: Host: graph.instagram.com, Path: /v21.0/${accountId}/media, Method: POST, Status: ${containerResp.status}, Code: ${containerData.error?.code}, Message: ${containerData.error?.message}`);
+        }
+        let errorMsg = containerData.error?.message || 'Instagram API request failed.';
         if (containerData.error?.code === 9004 || errorMsg.includes('photo or video can be accepted')) {
           errorMsg = `Meta cannot download the card image from ${resolvedImageUrl}. Ensure the URL is publicly reachable and a valid JPEG/PNG.`;
         }
@@ -337,9 +309,7 @@ export class InstagramService {
 
       while (!isReady && attempts < maxAttempts) {
         attempts++;
-        await new Promise((resolve) => setTimeout(resolve, 3000)); // wait 3s between checks
-
-        const statusUrl = `${baseUrl}/v21.0/${creationId}?fields=status_code`;
+        const statusUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${creationId}?fields=status_code`;
         const statusResp = await fetch(statusUrl, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
@@ -347,12 +317,17 @@ export class InstagramService {
 
         if (statusData.status_code === 'FINISHED') {
           isReady = true;
+          break;
         } else if (statusData.status_code === 'ERROR' || statusData.status_code === 'EXPIRED') {
           return {
             success: false,
             errorCode: 'CONTAINER_PROCESSING_FAILED',
             error: `Media container processing failed with status: ${statusData.status_code}`,
           };
+        }
+
+        if (attempts < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 2000)); // wait between checks
         }
       }
 
@@ -365,7 +340,7 @@ export class InstagramService {
       }
 
       // Step 3: Publish container
-      const publishUrl = `${baseUrl}/v21.0/${accountId}/media_publish`;
+      const publishUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media_publish`;
       const publishResp = await fetch(publishUrl, {
         method: 'POST',
         headers: {
@@ -391,7 +366,7 @@ export class InstagramService {
       // Step 4: Fetch permalink
       let permalink = `https://www.instagram.com/p/${publishedMediaId}/`;
       try {
-        const permalinkUrl = `${baseUrl}/v21.0/${publishedMediaId}?fields=permalink`;
+        const permalinkUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${publishedMediaId}?fields=permalink`;
         const permalinkResp = await fetch(permalinkUrl, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
@@ -410,7 +385,7 @@ export class InstagramService {
       return {
         success: false,
         errorCode: 'API_UNAVAILABLE',
-        error: 'Instagram API could not be reached. Please try again.',
+        error: 'Instagram API request failed.',
       };
     }
   }

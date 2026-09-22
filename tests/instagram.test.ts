@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { instagramService } from '../services/instagramService';
+import { instagramService, INSTAGRAM_API_BASE_URL } from '../services/instagramService';
 import { getInstagramServerConfig, getInstagramSafeConfig, logInstagramStartupDiagnostics } from '../lib/config';
 import { Confession } from '../types';
 
-describe('InstagramService & Duplicate Publication Prevention', () => {
+describe('InstagramService & Instagram Login Integration Tests', () => {
   const mockConfession: Confession = {
     id: 'conf-ig-1',
     google_sheet_id: 'sheet_1',
@@ -19,7 +19,7 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
     moderation_reason: null,
     ai_processed: true,
     template_id: 'tpl-1',
-    generated_image_url: '/generated/sample.png',
+    generated_image_url: 'https://example.com/generated/sample.png',
     generated_image_path: null,
     caption: 'Test caption',
     hashtags: ['#test'],
@@ -43,51 +43,23 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
     global.fetch = origFetch;
   });
 
-  it('should publish successfully in mock mode with realistic media ID and permalink', async () => {
-    const result = await instagramService.publishPost(
-      mockConfession,
-      '/generated/sample.png',
-      'Test caption'
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.mediaId).toBeDefined();
-    expect(result.permalink).toContain('instagram.com/p/');
-  });
-
-  it('should strictly block duplicate publishing if already PUBLISHED or media ID exists', async () => {
-    const publishedConfession: Confession = {
-      ...mockConfession,
-      status: 'PUBLISHED',
-      instagram_media_id: 'existing_media_12345',
-    };
-
-    const result = await instagramService.publishPost(
-      publishedConfession,
-      '/generated/sample.png',
-      'Test caption'
-    );
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('already published');
-  });
-
-  // Requirement 1: Missing token
-  it('Requirement 1: should return MISSING_ACCESS_TOKEN error when token is missing', async () => {
+  // 1. Missing access token
+  it('Test 1: should return error when access token is missing', async () => {
     const origIsMock = instagramService.isMock;
     instagramService.isMock = () => false;
 
     try {
-      const result = await instagramService.testConnection('fake_account_id', '');
+      const result = await instagramService.testConnection('17841437796028856', '');
       expect(result.connected).toBe(false);
       expect(result.errorCode).toBe('MISSING_ACCESS_TOKEN');
-      expect(result.message).toContain('INSTAGRAM_ACCESS_TOKEN');
+      expect(result.message).toBe('Instagram credentials are not configured.');
     } finally {
       instagramService.isMock = origIsMock;
     }
   });
 
-  // Requirement 2: Missing account ID
-  it('Requirement 2: should return MISSING_ACCOUNT_ID error when account ID is missing', async () => {
+  // 2. Missing account ID
+  it('Test 2: should return error when account ID is missing', async () => {
     const origIsMock = instagramService.isMock;
     instagramService.isMock = () => false;
 
@@ -95,19 +67,19 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
       const result = await instagramService.testConnection('', 'fake_token_value');
       expect(result.connected).toBe(false);
       expect(result.errorCode).toBe('MISSING_ACCOUNT_ID');
-      expect(result.message).toContain('INSTAGRAM_ACCOUNT_ID');
+      expect(result.message).toBe('Instagram credentials are not configured.');
     } finally {
       instagramService.isMock = origIsMock;
     }
   });
 
-  // Requirement 3: Valid configuration
-  it('Requirement 3: should correctly validate server configuration presence', () => {
+  // 3. Valid server configuration detection
+  it('Test 3: should correctly validate server configuration presence without leaking token', () => {
     const origId = process.env.INSTAGRAM_ACCOUNT_ID;
     const origToken = process.env.INSTAGRAM_ACCESS_TOKEN;
 
     process.env.INSTAGRAM_ACCOUNT_ID = '17841437796028856';
-    process.env.INSTAGRAM_ACCESS_TOKEN = 'fake_valid_token_secret';
+    process.env.INSTAGRAM_ACCESS_TOKEN = 'IGAA_fake_valid_token_secret';
 
     try {
       const serverConfig = getInstagramServerConfig();
@@ -119,15 +91,15 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
       expect(safeConfig.configured).toBe(true);
       expect(safeConfig.hasAccountId).toBe(true);
       expect(safeConfig.hasAccessToken).toBe(true);
-      expect((safeConfig as any).accessToken).toBeUndefined(); // Token not leaked
+      expect((safeConfig as any).accessToken).toBeUndefined();
     } finally {
       process.env.INSTAGRAM_ACCOUNT_ID = origId;
       process.env.INSTAGRAM_ACCESS_TOKEN = origToken;
     }
   });
 
-  // Requirement 4: Invalid token
-  it('Requirement 4: should reject invalid token with safe error message', async () => {
+  // 4. Invalid or expired token
+  it('Test 4: should reject invalid or expired token with standardized message', async () => {
     const origIsMock = instagramService.isMock;
     instagramService.isMock = () => false;
 
@@ -144,19 +116,18 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
     });
 
     try {
-      const result = await instagramService.testConnection('17841437796028856', 'fake_invalid_token');
+      const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_invalid_token');
       expect(result.connected).toBe(false);
       expect(result.errorCode).toBe('INVALID_CREDENTIALS');
-      expect(result.message).toBe('Instagram authentication failed. The configured access token was rejected.');
-      // Guarantee token is not leaked in message
-      expect(result.message).not.toContain('fake_invalid_token');
+      expect(result.message).toBe('Instagram authentication failed. Please reconnect the Instagram account.');
+      expect(result.message).not.toContain('IGAA_fake_invalid_token');
     } finally {
       instagramService.isMock = origIsMock;
     }
   });
 
-  // Requirement 5: Instagram account ID mismatch
-  it('Requirement 5: should reject when configured account ID does not match authenticated user ID', async () => {
+  // 5. Configured account ID mismatch
+  it('Test 5: should reject when configured account ID does not match authenticated user ID', async () => {
     const origIsMock = instagramService.isMock;
     instagramService.isMock = () => false;
 
@@ -170,17 +141,17 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
     });
 
     try {
-      const result = await instagramService.testConnection('17841437796028856', 'fake_valid_token');
+      const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_valid_token');
       expect(result.connected).toBe(false);
       expect(result.errorCode).toBe('ACCOUNT_MISMATCH');
-      expect(result.message).toBe('The configured Instagram account ID does not match the authenticated Instagram account.');
+      expect(result.message).toBe('The configured Instagram account does not match the authenticated account.');
     } finally {
       instagramService.isMock = origIsMock;
     }
   });
 
-  // Requirement 6: Successful Instagram connection
-  it('Requirement 6: should verify successfully when account ID matches authenticated user ID', async () => {
+  // 6. Successful connection verification
+  it('Test 6: should verify successfully when account ID matches authenticated user ID', async () => {
     const origIsMock = instagramService.isMock;
     instagramService.isMock = () => false;
 
@@ -194,7 +165,7 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
     });
 
     try {
-      const result = await instagramService.testConnection('17841437796028856', 'fake_valid_token');
+      const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_valid_token');
       expect(result.connected).toBe(true);
       expect(result.instagramUserId).toBe('17841437796028856');
       expect(result.username).toBe('_hpsconfession_');
@@ -204,15 +175,31 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
     }
   });
 
-  // Requirement 7: Publishing code receives credentials server-side
-  it('Requirement 7: publishing code correctly accesses server configuration', async () => {
+  // 7. Network / API error handling
+  it('Test 7: should return standardized error on network or API failure', async () => {
+    const origIsMock = instagramService.isMock;
+    instagramService.isMock = () => false;
+
+    global.fetch = vi.fn().mockRejectedValue(new Error('ENOTFOUND graph.instagram.com'));
+
+    try {
+      const result = await instagramService.testConnection('17841437796028856', 'IGAA_fake_token');
+      expect(result.connected).toBe(false);
+      expect(result.errorCode).toBe('API_UNAVAILABLE');
+      expect(result.message).toBe('Instagram API request failed.');
+    } finally {
+      instagramService.isMock = origIsMock;
+    }
+  });
+
+  // 8. Publishing failure with missing credentials
+  it('Test 8: should reject publishing when server credentials are missing', async () => {
     const origIsMock = instagramService.isMock;
     instagramService.isMock = () => false;
 
     const origId = process.env.INSTAGRAM_ACCOUNT_ID;
     const origToken = process.env.INSTAGRAM_ACCESS_TOKEN;
 
-    // Test missing credentials path
     delete process.env.INSTAGRAM_ACCOUNT_ID;
     delete process.env.INSTAGRAM_ACCESS_TOKEN;
 
@@ -223,7 +210,7 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
         'Caption text'
       );
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Instagram integration is not configured');
+      expect(result.error).toBe('Instagram credentials are not configured.');
     } finally {
       process.env.INSTAGRAM_ACCOUNT_ID = origId;
       process.env.INSTAGRAM_ACCESS_TOKEN = origToken;
@@ -231,8 +218,103 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
     }
   });
 
-  // Requirement 8: Token is never returned in an API response
-  it('Requirement 8: token must never be present in testConnection or safe config response', async () => {
+  // 9. Successful publishing using graph.instagram.com endpoints
+  it('Test 9: should successfully create container, poll status, and publish via graph.instagram.com', async () => {
+    const origIsMock = instagramService.isMock;
+    instagramService.isMock = () => false;
+
+    const origId = process.env.INSTAGRAM_ACCOUNT_ID;
+    const origToken = process.env.INSTAGRAM_ACCESS_TOKEN;
+    process.env.INSTAGRAM_ACCOUNT_ID = '17841437796028856';
+    process.env.INSTAGRAM_ACCESS_TOKEN = 'IGAA_valid_test_token';
+
+    const calledUrls: string[] = [];
+    global.fetch = vi.fn().mockImplementation(async (url: string) => {
+      calledUrls.push(url);
+      if (url.includes('/media_publish')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: 'live_media_98765' }),
+        };
+      }
+      if (url.includes('/media') && !url.includes('media_publish')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: 'container_12345' }),
+        };
+      }
+      if (url.includes('/container_12345?fields=status_code')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ status_code: 'FINISHED' }),
+        };
+      }
+      if (url.includes('/live_media_98765?fields=permalink')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ permalink: 'https://www.instagram.com/p/live_code_123/' }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    try {
+      const result = await instagramService.publishPost(
+        mockConfession,
+        'https://example.com/card.png',
+        'Caption text'
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.mediaId).toBe('live_media_98765');
+      expect(result.permalink).toBe('https://www.instagram.com/p/live_code_123/');
+
+      // Ensure all calls used INSTAGRAM_API_BASE_URL (graph.instagram.com)
+      for (const callUrl of calledUrls) {
+        expect(callUrl).toContain(INSTAGRAM_API_BASE_URL);
+        expect(callUrl).not.toContain('graph.facebook.com');
+      }
+    } finally {
+      process.env.INSTAGRAM_ACCOUNT_ID = origId;
+      process.env.INSTAGRAM_ACCESS_TOKEN = origToken;
+      instagramService.isMock = origIsMock;
+    }
+  });
+
+  // 10. Duplicate publication prevention
+  it('Test 10: should strictly block duplicate publishing if already PUBLISHED or media ID exists', async () => {
+    const publishedConfession: Confession = {
+      ...mockConfession,
+      status: 'PUBLISHED',
+      instagram_media_id: 'existing_media_12345',
+    };
+
+    const result = await instagramService.publishPost(
+      publishedConfession,
+      'https://example.com/card.png',
+      'Test caption'
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('already published');
+  });
+
+  // 11. Mock mode fallback and token confidentiality
+  it('Test 11: should support mock mode and strictly protect token confidentiality', async () => {
+    // A: Mock mode publishing
+    const result = await instagramService.publishPost(
+      mockConfession,
+      'https://example.com/card.png',
+      'Test caption'
+    );
+    expect(result.success).toBe(true);
+    expect(result.mediaId).toBeDefined();
+    expect(result.permalink).toContain('instagram.com/p/');
+
+    // B: Token never exposed in testConnection or safeConfig
     const FAKE_SECRET_TOKEN = 'SUPER_SECRET_TOKEN_DO_NOT_EXPOSE_12345';
     const origIsMock = instagramService.isMock;
     instagramService.isMock = () => false;
@@ -247,30 +329,23 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
     });
 
     try {
-      const result = await instagramService.testConnection('17841437796028856', FAKE_SECRET_TOKEN);
-      const jsonString = JSON.stringify(result);
-      expect(jsonString).not.toContain(FAKE_SECRET_TOKEN);
+      const connResult = await instagramService.testConnection('17841437796028856', FAKE_SECRET_TOKEN);
+      expect(JSON.stringify(connResult)).not.toContain(FAKE_SECRET_TOKEN);
 
       const safeConfig = getInstagramSafeConfig();
       expect(JSON.stringify(safeConfig)).not.toContain(FAKE_SECRET_TOKEN);
     } finally {
       instagramService.isMock = origIsMock;
     }
-  });
 
-  // Requirement 9: Token is never written to logs
-  it('Requirement 9: diagnostic logger must never output the actual token', () => {
-    const FAKE_SECRET_TOKEN = 'SUPER_SECRET_TOKEN_DO_NOT_EXPOSE_99999';
+    // C: Diagnostic logger never exposes token
     const origToken = process.env.INSTAGRAM_ACCESS_TOKEN;
     process.env.INSTAGRAM_ACCESS_TOKEN = FAKE_SECRET_TOKEN;
-
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     try {
       vi.stubEnv('NODE_ENV', 'development');
-
       logInstagramStartupDiagnostics();
-
       const allLogCalls = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
       expect(allLogCalls).not.toContain(FAKE_SECRET_TOKEN);
       expect(allLogCalls).toContain('Access Token present:    true');
@@ -281,4 +356,3 @@ describe('InstagramService & Duplicate Publication Prevention', () => {
     }
   });
 });
-

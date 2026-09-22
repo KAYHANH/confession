@@ -155,24 +155,22 @@ Runs the test suite verifying:
    GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n..."
    ```
 
-### 3. Meta / Instagram Graph API Setup
-Use the official Meta Content Publishing API for Instagram Professional (Business or Creator) accounts:
+### 3. Meta / Instagram Graph API Setup (Instagram Login)
+Use the official Meta Content Publishing API for Instagram Professional (Business or Creator) accounts via Instagram Login:
 1. Ensure your Instagram account is switched to a **Business** or **Creator** account.
-2. Link your Instagram account to a **Facebook Page**.
-3. Open [Meta for Developers](https://developers.facebook.com/) and create a **Business** app.
-4. Add the **Instagram Graph API** product.
-5. In Graph API Explorer, request the following permissions:
-   - `instagram_basic`
-   - `instagram_content_publish`
-   - `pages_show_list`
-   - `pages_read_engagement`
-6. Generate a **Long-Lived User Access Token**.
-7. Retrieve your `INSTAGRAM_ACCOUNT_ID` via:
-   `GET https://graph.facebook.com/v21.0/me/accounts` &rarr; `GET /{page-id}?fields=instagram_business_account`
-8. Set in `.env.local`:
+2. Open [Meta for Developers](https://developers.facebook.com/) and configure your app with **Instagram API with Instagram Login** (or Business Login for Instagram).
+3. Ensure your access token has the required permissions:
+   - `instagram_business_basic`
+   - `instagram_business_content_publish`
+   - Optional: `instagram_business_manage_comments`, `instagram_business_manage_messages`
+4. Retrieve your Instagram User ID (`INSTAGRAM_ACCOUNT_ID`) and verify your token via:
+   `GET https://graph.instagram.com/me?fields=id,username`
+5. Set in `.env.local` (and in your production Render environment variables):
    ```env
-   INSTAGRAM_ACCOUNT_ID=your_instagram_account_id
-   INSTAGRAM_ACCESS_TOKEN=your_long_lived_token
+   INSTAGRAM_ACCOUNT_ID=your_instagram_user_id
+   INSTAGRAM_ACCESS_TOKEN=your_instagram_login_access_token
+   META_APP_ID=your_meta_app_id
+   META_APP_SECRET=your_meta_app_secret
    ```
 
 ### 4. Supabase PostgreSQL Setup

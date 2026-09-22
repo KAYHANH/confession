@@ -186,10 +186,10 @@ class MockStore {
         this.lastMtime = stat.mtimeMs;
         const raw = fs.readFileSync(DATA_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
-        if (parsed.instagram?.account_id === '17841400000000000') {
+        if (parsed.instagram?.account_id?.startsWith('178414000000')) {
           parsed.instagram.account_id = process.env.INSTAGRAM_ACCOUNT_ID || '';
         }
-        if (parsed.instagram?.access_token === 'EAABwzL...') {
+        if (!parsed.instagram?.access_token || parsed.instagram.access_token.startsWith('EAABwzL')) {
           parsed.instagram.access_token = process.env.INSTAGRAM_ACCESS_TOKEN || '';
         }
         return parsed;

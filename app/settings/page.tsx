@@ -178,6 +178,7 @@ function SettingsContent() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Connection failed');
       success(data.message || 'Instagram account saved successfully');
+      setInstagramConfig((prev: any) => ({ ...prev, access_token: '', has_token: true }));
       loadAllSettings();
     } catch (err: any) {
       error(err?.message || 'Failed to save Instagram credentials');
@@ -442,14 +443,21 @@ function SettingsContent() {
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-base font-bold text-zinc-900">Instagram Graph API Configuration</h3>
+                  <h3 className="text-base font-bold text-zinc-900">Instagram Graph API</h3>
                   <p className="text-xs text-zinc-500">
-                    Official Meta Content Publishing API for Instagram Business or Creator accounts.
+                    Official Meta API for Instagram Professional accounts.
                   </p>
                 </div>
-                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                  {instagramConfig.is_connected ? 'Connected' : 'Not Connected'}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-zinc-500">Status:</span>
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                    instagramConfig.is_connected
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                  }`}>
+                    {instagramConfig.is_connected ? 'Connected' : 'Not Connected'}
+                  </span>
+                </div>
               </div>
 
               <div className="space-y-4 text-xs">
@@ -459,24 +467,25 @@ function SettingsContent() {
                   </label>
                   <input
                     type="text"
-                    value={instagramConfig.account_id}
+                    value={instagramConfig.account_id || ''}
+                    placeholder="178414..."
                     onChange={(e) =>
                       setInstagramConfig({ ...instagramConfig, account_id: e.target.value })
                     }
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 font-mono text-xs"
                   />
                   <p className="text-[11px] text-zinc-400 mt-1">
-                    Meta Business ID for your connected Professional Instagram account
+                    Meta Business / Instagram User ID for your connected Professional Instagram account
                   </p>
                 </div>
 
                 <div>
                   <label className="block font-semibold text-zinc-700 mb-1.5">
-                    Long-Lived Meta Access Token
+                    Instagram Access Token
                   </label>
                   <input
                     type="password"
-                    placeholder="EAA..."
+                    placeholder={instagramConfig.has_token ? '••••••••••••••••••••••••••••••••' : 'Paste your Instagram Access Token'}
                     value={instagramConfig.access_token || ''}
                     onChange={(e) =>
                       setInstagramConfig({ ...instagramConfig, access_token: e.target.value })
@@ -484,7 +493,7 @@ function SettingsContent() {
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 font-mono text-xs"
                   />
                   <p className="text-[11px] text-zinc-500 mt-1">
-                    Must be a Meta Graph API token starting with <span className="font-mono font-bold text-zinc-800">EAA...</span> with <span className="font-mono text-zinc-800">instagram_content_publish</span> permission. (Tokens starting with <span className="font-mono text-rose-600">IGAA</span> are Basic Display tokens and will not work).
+                    Instagram User access token generated through Instagram Login.
                   </p>
                 </div>
               </div>

@@ -120,6 +120,9 @@ export interface InstagramAccountConfig {
   access_token?: string;
   token_expires_at?: string | null;
   is_connected: boolean;
+  has_token?: boolean;
+  configured_via_env?: boolean;
+  missing_env?: string[];
   status?: string;
 }
 
