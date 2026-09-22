@@ -139,7 +139,7 @@ const DEFAULT_SETTINGS: SystemSettings = {
   brand_name: process.env.BRAND_NAME || 'Campus Confessions',
   instagram_handle: process.env.INSTAGRAM_HANDLE || '@_hpsconfession_',
   logo_url: '/logo.png',
-  default_template_id: '11111111-1111-1111-1111-111111111111',
+  default_template_id: '77777777-7777-7777-7777-777777777777',
   timezone: process.env.DEFAULT_TIMEZONE || 'Asia/Kolkata',
   auto_publish: false,
   publishing_mode: 'MANUAL_APPROVAL',

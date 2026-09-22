@@ -167,7 +167,13 @@ export default function ConfessionsPage() {
   };
 
   const getTemplateForConfession = (tplId?: string) => {
-    return templates.find((t) => t.id === tplId) || templates[0];
+    // Use confession's assigned template, then system default (Deep Story), then first available
+    const DEFAULT_TEMPLATE_ID = '77777777-7777-7777-7777-777777777777';
+    return (
+      templates.find((t) => t.id === tplId) ||
+      templates.find((t) => t.id === DEFAULT_TEMPLATE_ID) ||
+      templates[0]
+    );
   };
 
   return (
