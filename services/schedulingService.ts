@@ -25,6 +25,8 @@ export interface AutoPublishCycleResult {
 export class SchedulingService {
   private isProcessingCron = false;
   private lastPublishedAtMs = 0;
+  // Natural human anti-bot jitter (randomized between 0 and 30 minutes, creating 60m-90m natural intervals)
+  private currentJitterMinutes = Math.floor(Math.random() * 30);
 
   /**
    * Run scheduled posts publisher check (called by /api/cron/publish-scheduled)
@@ -34,6 +36,25 @@ export class SchedulingService {
       console.log('[SchedulingService] Cron run already in progress, skipping concurrent trigger');
       return { published: [], errors: [] };
     }
+
+    const settings = mockStore.getSettings();
+
+    // Respect safe human daytime hours (9:00 AM to 10:00 PM) for scheduled posts
+    try {
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: settings.timezone || 'Asia/Kolkata',
+        hour: 'numeric',
+        hour12: false,
+      });
+      const currentHour = parseInt(formatter.format(new Date()), 10);
+      const startHour = settings.auto_publish_start_hour ?? 9;
+      const endHour = settings.auto_publish_end_hour ?? 22;
+
+      if (currentHour < startHour || currentHour >= endHour) {
+        console.log(`[SchedulingService] Outside active human hours (${currentHour}:00, safe daytime window is ${startHour}:00 - ${endHour}:00). Resting account overnight.`);
+        return { published: [], errors: [] };
+      }
+    } catch {}
 
     this.isProcessingCron = true;
     const published: string[] = [];
@@ -262,19 +283,21 @@ export class SchedulingService {
 
     try {
       const stats = await confessionService.getDashboardStats();
-      const maxDaily = settings.max_daily_posts || 10;
+      const maxDaily = settings.max_daily_posts || 8;
 
-      // 3. Daily volume guard
+      // 3. Daily volume guard (max 8 daily posts default)
       if (stats.publishedToday >= maxDaily && !force) {
-        console.warn(`[AutoPublisher] Daily post limit reached (${stats.publishedToday}/${maxDaily}). Stopping for today.`);
+        console.warn(`[AutoPublisher] Daily post limit reached (${stats.publishedToday}/${maxDaily}). Resting account until tomorrow.`);
         return {
           ran: false,
           status: 'DAILY_LIMIT_REACHED',
-          reason: `Daily post cap reached (${stats.publishedToday}/${maxDaily}).`,
+          reason: `Daily post cap reached (${stats.publishedToday}/${maxDaily}). Account is resting until tomorrow to avoid Meta spam detection.`,
         };
       }
 
       // 4. Active hours window guard (unless forced manually via button)
+      // Mimic human daytime schedule: 9:00 AM (09:00) to 10:00 PM (22:00)
+      // Avoids posting between 10:00 PM and 9:00 AM (resting account overnight)
       if (!force) {
         try {
           const formatter = new Intl.DateTimeFormat('en-US', {
@@ -284,14 +307,14 @@ export class SchedulingService {
           });
           const currentHour = parseInt(formatter.format(new Date()), 10);
           const startHour = settings.auto_publish_start_hour ?? 9;
-          const endHour = settings.auto_publish_end_hour ?? 23;
+          const endHour = settings.auto_publish_end_hour ?? 22;
 
           if (currentHour < startHour || currentHour >= endHour) {
-            console.log(`[AutoPublisher] Outside active hours (${currentHour}:00, window is ${startHour}:00 - ${endHour}:00). Skipping.`);
+            console.log(`[AutoPublisher] Outside active human hours (${currentHour}:00, safe daytime window is ${startHour}:00 - ${endHour}:00). Resting account.`);
             return {
               ran: false,
               status: 'OUTSIDE_HOURS',
-              reason: `Outside active hours (${currentHour}:00 in ${settings.timezone || 'Asia/Kolkata'}). Active window is ${startHour}:00 - ${endHour}:00.`,
+              reason: `Outside active human hours (${currentHour}:00 in ${settings.timezone || 'Asia/Kolkata'}). Safe daytime window is ${startHour}:00 - ${endHour}:00. Overnight account rest active.`,
             };
           }
         } catch {
@@ -299,20 +322,23 @@ export class SchedulingService {
         }
       }
 
-      // 5. Cooldown / Post Spacing Guard (unless forced)
-      const intervalMinutes = settings.auto_publish_interval_minutes ?? 30;
-      const minIntervalMs = intervalMinutes * 60 * 1000;
+      // 5. Cooldown / Post Spacing Guard with Anti-Robotic Human Jitter (unless forced)
+      // Meta safety: strictly enforce at least 60 minutes minimum gap between uploads
+      const baseInterval = Math.max(60, settings.auto_publish_interval_minutes || 60);
+      // Natural human variance: add randomized jitter (+0 to +30 min) so timestamps are never exact/robotic
+      const effectiveIntervalMinutes = baseInterval + (this.currentJitterMinutes || 0);
+      const minIntervalMs = effectiveIntervalMinutes * 60 * 1000;
 
       // In-memory guard check
       if (!force && this.lastPublishedAtMs > 0) {
         const elapsedSinceLastRun = Date.now() - this.lastPublishedAtMs;
         if (elapsedSinceLastRun < minIntervalMs) {
           const remainingMinutes = Math.ceil((minIntervalMs - elapsedSinceLastRun) / 60000);
-          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedSinceLastRun / 60000)}m since last run, interval is ${intervalMinutes}m). Next post in ${remainingMinutes}m.`);
+          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedSinceLastRun / 60000)}m since last run, dynamic natural gap is ${effectiveIntervalMinutes}m). Next post in ${remainingMinutes}m.`);
           return {
             ran: false,
             status: 'RATE_LIMITED',
-            reason: `Post spacing cooldown active. Last post was ${Math.floor(elapsedSinceLastRun / 60000)}m ago. Next post permitted in ${remainingMinutes}m.`,
+            reason: `Post spacing cooldown active. Last post was ${Math.floor(elapsedSinceLastRun / 60000)}m ago. Natural human gap is ${effectiveIntervalMinutes}m. Next post permitted in ${remainingMinutes}m.`,
           };
         }
       }
@@ -333,11 +359,11 @@ export class SchedulingService {
         const elapsedMs = Date.now() - mostRecentPublishMs;
         if (elapsedMs < minIntervalMs) {
           const remainingMinutes = Math.ceil((minIntervalMs - elapsedMs) / 60000);
-          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedMs / 60000)}m since last post, interval is ${intervalMinutes}m). Next post in ${remainingMinutes}m.`);
+          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedMs / 60000)}m since last post, dynamic natural gap is ${effectiveIntervalMinutes}m). Next post in ${remainingMinutes}m.`);
           return {
             ran: false,
             status: 'RATE_LIMITED',
-            reason: `Post spacing cooldown active. Last post was ${Math.floor(elapsedMs / 60000)}m ago. Next post permitted in ${remainingMinutes}m.`,
+            reason: `Post spacing cooldown active. Last post was ${Math.floor(elapsedMs / 60000)}m ago. Natural human gap is ${effectiveIntervalMinutes}m. Next post permitted in ${remainingMinutes}m.`,
           };
         }
       }
@@ -451,6 +477,8 @@ export class SchedulingService {
       console.log(`[AutoPublisher] Publishing confession #${candidate.google_sheet_row} to Instagram...`);
       const publishedConfession = await confessionService.publishConfession(candidate.id);
       this.lastPublishedAtMs = Date.now();
+      // Rotate natural human jitter for next post (0 to 30 min, yielding a 60-90m natural gap)
+      this.currentJitterMinutes = Math.floor(Math.random() * 30);
 
       mockStore.addLog({
         action: 'AUTO_PUBLISHED',

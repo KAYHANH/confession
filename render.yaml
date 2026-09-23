@@ -49,13 +49,13 @@ services:
       - key: DEFAULT_TIMEZONE
         value: Asia/Kolkata
       - key: MAX_DAILY_POSTS
-        value: "20"
+        value: "8"
       - key: AUTO_PUBLISH_INTERVAL_MINUTES
-        value: "30"
+        value: "60"
       - key: AUTO_PUBLISH_START_HOUR
-        value: "0"
+        value: "9"
       - key: AUTO_PUBLISH_END_HOUR
-        value: "23"
+        value: "22"
       - key: AUTO_PUBLISH_ENABLED
         value: "true"
       - key: BRAND_NAME

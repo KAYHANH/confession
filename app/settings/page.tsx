@@ -8,6 +8,7 @@ import {
   Instagram,
   Sparkles,
   ShieldAlert,
+  ShieldCheck,
   Send,
   Hash,
   RefreshCw,
@@ -786,7 +787,7 @@ function SettingsContent() {
                       Post Spacing / Cooldown
                     </label>
                     <select
-                      value={generalSettings.auto_publish_interval_minutes || 30}
+                      value={generalSettings.auto_publish_interval_minutes || 60}
                       onChange={(e) =>
                         setGeneralSettings({
                           ...generalSettings,
@@ -795,14 +796,14 @@ function SettingsContent() {
                       }
                       className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
                     >
-                      <option value={30}>Every 30 Minutes</option>
-                      <option value={60}>Every 1 Hour (60m)</option>
+                      <option value={60}>Every 1 Hour (60m - Safe Default)</option>
+                      <option value={90}>Every 1.5 Hours (90m - Highly Recommended)</option>
                       <option value={120}>Every 2 Hours (120m)</option>
                       <option value={180}>Every 3 Hours (180m)</option>
                       <option value={240}>Every 4 Hours (240m)</option>
                     </select>
                     <span className="text-[10px] text-zinc-500 mt-1 block">
-                      Minimum elapsed time between automated Instagram posts.
+                      Enforces dynamic natural human gap (60-90m) to evade Meta bot rate limits.
                     </span>
                   </div>
 
@@ -814,17 +815,17 @@ function SettingsContent() {
                       type="number"
                       min={1}
                       max={50}
-                      value={generalSettings.max_daily_posts ?? 20}
+                      value={generalSettings.max_daily_posts ?? 8}
                       onChange={(e) =>
                         setGeneralSettings({
                           ...generalSettings,
-                          max_daily_posts: parseInt(e.target.value || '20', 10),
+                          max_daily_posts: parseInt(e.target.value || '8', 10),
                         })
                       }
                       className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
                     />
                     <span className="text-[10px] text-zinc-500 mt-1 block">
-                      Hard limit to prevent spam flagging from Meta.
+                      Safe limit: 8 posts/day avoids spam blocking from Meta Graph API.
                     </span>
                   </div>
 
@@ -834,7 +835,7 @@ function SettingsContent() {
                     </label>
                     <div className="flex items-center gap-2">
                       <select
-                        value={generalSettings.auto_publish_start_hour ?? 0}
+                        value={generalSettings.auto_publish_start_hour ?? 9}
                         onChange={(e) =>
                           setGeneralSettings({
                             ...generalSettings,
@@ -845,13 +846,13 @@ function SettingsContent() {
                       >
                         {Array.from({ length: 24 }).map((_, h) => (
                           <option key={h} value={h}>
-                            {String(h).padStart(2, '0')}:00
+                            {String(h).padStart(2, '0')}:00 {h === 9 ? '(9 AM - Recommended)' : ''}
                           </option>
                         ))}
                       </select>
                       <span className="text-zinc-500">to</span>
                       <select
-                        value={generalSettings.auto_publish_end_hour ?? 23}
+                        value={generalSettings.auto_publish_end_hour ?? 22}
                         onChange={(e) =>
                           setGeneralSettings({
                             ...generalSettings,
@@ -862,14 +863,36 @@ function SettingsContent() {
                       >
                         {Array.from({ length: 24 }).map((_, h) => (
                           <option key={h} value={h}>
-                            {String(h).padStart(2, '0')}:00
+                            {String(h).padStart(2, '0')}:00 {h === 22 ? '(10 PM - Overnight Rest)' : ''}
                           </option>
                         ))}
                       </select>
                     </div>
                     <span className="text-[10px] text-zinc-500 mt-1 block">
-                      Prevents posting during overnight/sleep hours.
+                      Mimics human daytime schedule. Rests the account overnight (10 PM - 9 AM).
                     </span>
+                  </div>
+                </div>
+
+                {/* Meta Account Safety & Trust Score Guide */}
+                <div className="p-4 rounded-xl border border-amber-200/80 bg-gradient-to-r from-amber-50 to-orange-50 text-amber-950 space-y-2 mt-4">
+                  <div className="flex items-center gap-2 font-bold text-xs text-amber-900">
+                    <ShieldCheck className="w-4 h-4 text-amber-600" />
+                    <span>Meta Anti-Ban & Human Behavior Protection Active</span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px] pt-1 text-amber-900/90 leading-relaxed">
+                    <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/60 shadow-xs">
+                      <p className="font-semibold text-zinc-900 mb-0.5">☀️ Daytime Schedule</p>
+                      <p className="text-zinc-600">Active 9:00 AM to 10:00 PM only. Shuts down overnight to mimic natural human sleep cycles.</p>
+                    </div>
+                    <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/60 shadow-xs">
+                      <p className="font-semibold text-zinc-900 mb-0.5">⏱️ Anti-Bot Natural Jitter</p>
+                      <p className="text-zinc-600">60–90 minute randomized gaps between posts. Never publishes at exact mechanical minute marks.</p>
+                    </div>
+                    <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/60 shadow-xs">
+                      <p className="font-semibold text-zinc-900 mb-0.5">📱 Mobile App Activity</p>
+                      <p className="text-zinc-600">Open <strong className="font-semibold">@_hpsconfession_</strong> on your phone for 30s daily (like a post/story) to register real device sessions.</p>
+                    </div>
                   </div>
                 </div>
 

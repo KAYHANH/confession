@@ -743,7 +743,7 @@ export class ConfessionService {
       rejected: all.filter((c) => c.status === 'REJECTED').length,
       failed: all.filter((c) => c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION').length,
       publishedToday,
-      maxDailyPosts: settings.max_daily_posts || 10,
+      maxDailyPosts: settings.max_daily_posts || 8,
     };
   }
 }

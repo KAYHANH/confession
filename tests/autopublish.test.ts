@@ -270,6 +270,7 @@ describe('24/7 Autonomous Auto-Publish Engine', () => {
     };
 
     vi.spyOn(mockStore, 'getConfessions').mockReturnValue([mockCandidate]);
+    vi.spyOn(confessionService, 'updateConfession').mockResolvedValue(mockCandidate);
     vi.spyOn(confessionService, 'publishConfession').mockResolvedValue({
       ...mockCandidate,
       status: 'PUBLISHED',
