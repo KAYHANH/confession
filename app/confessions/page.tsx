@@ -15,6 +15,8 @@ import {
   Clock,
   CheckCircle2,
   ListTodo,
+  RotateCcw,
+  AlertTriangle,
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -92,6 +94,12 @@ export default function ConfessionsPage() {
   );
   const scheduledConfessions = allConfessions.filter((c) => c.status === 'SCHEDULED');
   const publishedConfessions = allConfessions.filter((c) => c.status === 'PUBLISHED');
+  const failedConfessions = allConfessions.filter(
+    (c) =>
+      (c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION') &&
+      !c.instagram_media_id &&
+      !c.published_at
+  );
 
   // Apply search + risk filter to the active tab list
   const applyFilters = (list: Confession[]) => {
@@ -199,6 +207,39 @@ export default function ConfessionsPage() {
     } catch { error('Delete failed'); }
   };
 
+  const [restartingQueue, setRestartingQueue] = useState(false);
+
+  const handleRestartQueue = async (targetIds?: string[]) => {
+    const isSingle = Boolean(targetIds && targetIds.length === 1);
+    const count = targetIds ? targetIds.length : failedConfessions.length;
+    if (!isSingle && count > 0 && !confirm(`Restart queue for ${count} failed confession(s)? Rejected and already published posts will NOT be touched.`)) {
+      return;
+    }
+    setRestartingQueue(true);
+    try {
+      const res = await fetch('/api/confessions/restart-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: targetIds, triggerPublish: true }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to restart queue');
+      }
+      success(data.message || `Restarted ${data.restartedCount} confessions`);
+      setSelectedIds([]);
+      await loadData();
+    } catch (err: any) {
+      error(err?.message || 'Failed to restart queue');
+    } finally {
+      setRestartingQueue(false);
+    }
+  };
+
+  const handleBulkRetry = async () => {
+    await handleRestartQueue(selectedIds);
+  };
+
   // ─── Tab config ───────────────────────────────────────────────────────────
   const tabs: { id: TabType; label: string; icon: React.ReactNode; count: number; color: string }[] = [
     {
@@ -260,22 +301,65 @@ export default function ConfessionsPage() {
       <div className="p-6 max-w-7xl mx-auto space-y-6">
 
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-4">
           <div>
             <h1 className="text-2xl font-bold text-zinc-900">Confessions</h1>
             <p className="text-sm text-zinc-500 mt-0.5">
               {allConfessions.length} total · {queueConfessions.length} queued · {publishedConfessions.length} published
+              {failedConfessions.length > 0 && (
+                <span className="ml-2 font-semibold text-rose-600">· {failedConfessions.length} failed</span>
+              )}
             </p>
           </div>
-          <button
-            onClick={loadData}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-zinc-700 bg-white border border-zinc-200 rounded-xl hover:bg-zinc-50 transition-colors"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            {failedConfessions.length > 0 && (
+              <button
+                onClick={() => handleRestartQueue()}
+                disabled={restartingQueue}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm transition-all disabled:opacity-50"
+                title="Restart queue for failed confessions (never touches rejected or published posts)"
+              >
+                <RotateCcw className={`w-4 h-4 ${restartingQueue ? 'animate-spin' : ''}`} />
+                {restartingQueue ? 'Restarting…' : `Restart Queue (${failedConfessions.length})`}
+              </button>
+            )}
+            <button
+              onClick={loadData}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-zinc-700 bg-white border border-zinc-200 rounded-xl hover:bg-zinc-50 transition-colors"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
         </div>
+
+        {/* ── Failed Alert & Quick Restart Banner ── */}
+        {failedConfessions.length > 0 && (
+          <div className="flex items-center justify-between p-4 bg-rose-50/90 border border-rose-200 rounded-2xl text-rose-900 gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-rose-100 rounded-xl text-rose-600 shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="font-semibold text-sm">
+                  {failedConfessions.length} confession{failedConfessions.length > 1 ? 's' : ''} failed to publish
+                </div>
+                <div className="text-xs text-rose-700 mt-0.5">
+                  Click <strong>Restart Queue</strong> to re-attempt publishing. Rejected posts and already published posts will strictly <strong>never</strong> be re-uploaded.
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => handleRestartQueue()}
+              disabled={restartingQueue}
+              className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm transition-all disabled:opacity-50 ml-auto"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} />
+              {restartingQueue ? 'Restarting Queue…' : `Restart Failed Queue (${failedConfessions.length})`}
+            </button>
+          </div>
+        )}
 
         {/* ── 3 Tabs ── */}
         <div className="flex gap-2 border-b border-zinc-200">
@@ -328,10 +412,13 @@ export default function ConfessionsPage() {
           {selectedIds.length > 0 && (
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-sm text-zinc-600 font-medium">{selectedIds.length} selected</span>
-              <button onClick={handleBulkApprove} disabled={bulkProcessing} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
+              <button onClick={handleBulkApprove} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
                 <Check className="w-3.5 h-3.5" /> Approve All
               </button>
-              <button onClick={handleBulkReject} disabled={bulkProcessing} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors">
+              <button onClick={handleBulkRetry} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors" title="Restart and retry selected failed confessions">
+                <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} /> Retry Selected
+              </button>
+              <button onClick={handleBulkReject} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors">
                 <X className="w-3.5 h-3.5" /> Reject All
               </button>
             </div>
@@ -462,6 +549,16 @@ export default function ConfessionsPage() {
                         {/* Actions */}
                         <td className="py-3.5 px-4 text-right whitespace-nowrap pr-6">
                           <div className="flex items-center justify-end gap-2">
+                            {c.status === 'FAILED' && (
+                              <button
+                                onClick={() => handleRestartQueue([c.id])}
+                                disabled={restartingQueue}
+                                className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-50 transition-colors"
+                                title="Restart & Retry this confession"
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                              </button>
+                            )}
                             <Link href={`/confessions/${c.id}`} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors" title="View">
                               <Eye className="w-4 h-4" />
                             </Link>

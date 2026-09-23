@@ -83,6 +83,7 @@ export interface ActivityLog {
     | 'PUBLISHED'
     | 'AUTO_PUBLISHED'
     | 'PUBLISH_FAILED'
+    | 'QUEUE_RESTARTED'
     | 'SHEET_SYNC'
     | 'INSTAGRAM_CONNECTED'
     | 'SETTINGS_UPDATED';

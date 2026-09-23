@@ -35,7 +35,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ processed, failed });
     }
 
-    return NextResponse.json({ error: 'Invalid action. Supported: approve, reject, process' }, { status: 400 });
+    if (action === 'retry' || action === 'restart') {
+      const result = await confessionService.restartFailedQueue(ids);
+      return NextResponse.json(result);
+    }
+
+    return NextResponse.json({ error: 'Invalid action. Supported: approve, reject, process, retry' }, { status: 400 });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Bulk operation failed' }, { status: 500 });
   }

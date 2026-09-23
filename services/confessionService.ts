@@ -17,8 +17,8 @@ export const ALLOWED_TRANSITIONS: Record<ConfessionStatus, ConfessionStatus[]> =
   SCHEDULED: ['PUBLISHING', 'APPROVED', 'REJECTED'], // allow rescheduling/cancelling
   PUBLISHING: ['PUBLISHED', 'FAILED'],
   PUBLISHED: [], // Terminal state, no further publishing
-  FAILED: ['PUBLISHING', 'FAILED_REQUIRES_ACTION', 'REJECTED'],
-  FAILED_REQUIRES_ACTION: ['PUBLISHING', 'REJECTED'],
+  FAILED: ['APPROVED', 'READY_FOR_REVIEW', 'PUBLISHING', 'FAILED_REQUIRES_ACTION', 'REJECTED'],
+  FAILED_REQUIRES_ACTION: ['APPROVED', 'READY_FOR_REVIEW', 'PUBLISHING', 'REJECTED'],
 };
 
 export class ConfessionService {
@@ -583,6 +583,92 @@ export class ConfessionService {
     }
 
     return { rejected, failed };
+  }
+
+  /**
+   * Restart failed confessions in queue.
+   * STRICT SAFETY GUARANTEES:
+   * - NEVER uploads or resets REJECTED confessions.
+   * - NEVER uploads or resets already PUBLISHED confessions (or confessions with an instagram_media_id).
+   */
+  public async restartFailedQueue(targetIds?: string[]): Promise<{
+    success: boolean;
+    restartedCount: number;
+    restartedIds: string[];
+    skippedRejected: number;
+    skippedPublished: number;
+  }> {
+    const all = mockStore.getConfessions();
+    const settings = mockStore.getSettings();
+    const sheetConfig = mockStore.getGoogleSheetConfig();
+
+    const candidates = targetIds && targetIds.length > 0
+      ? all.filter((c) => targetIds.includes(c.id))
+      : all.filter((c) => c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION');
+
+    const restartedIds: string[] = [];
+    let skippedRejected = 0;
+    let skippedPublished = 0;
+
+    const nextStatus: ConfessionStatus =
+      settings.auto_publish || settings.publishing_mode === 'AUTO_PUBLISH'
+        ? 'APPROVED'
+        : 'READY_FOR_REVIEW';
+
+    for (const confession of candidates) {
+      // 1. Strict guard: NEVER touch or upload REJECTED confessions
+      if (confession.status === 'REJECTED' || confession.moderation_status === 'HIGH') {
+        skippedRejected++;
+        continue;
+      }
+
+      // 2. Strict guard: NEVER touch or upload already PUBLISHED confessions
+      if (confession.status === 'PUBLISHED' || confession.instagram_media_id || confession.published_at) {
+        skippedPublished++;
+        continue;
+      }
+
+      // 3. Reset failed confession back into queue
+      try {
+        await this.updateConfession(confession.id, {
+          status: nextStatus,
+          error_message: null,
+          retry_count: 0,
+        });
+
+        // 4. Update Google Sheet row status back to QUEUED if present
+        if (confession.google_sheet_row) {
+          googleSheetsService.updateRowStatus(sheetConfig, confession.google_sheet_row, {
+            status: 'QUEUED',
+            error: '',
+          }).catch((err) => {
+            console.warn(`[ConfessionService] Failed to reset sheet row #${confession.google_sheet_row}:`, err?.message || err);
+          });
+        }
+
+        restartedIds.push(confession.id);
+      } catch (err: any) {
+        console.error(`[ConfessionService] Error restarting confession ${confession.id}:`, err?.message || err);
+      }
+    }
+
+    mockStore.addLog({
+      action: 'QUEUE_RESTARTED',
+      entity_type: 'confession',
+      metadata: {
+        restartedCount: restartedIds.length,
+        skippedRejected,
+        skippedPublished,
+      },
+    });
+
+    return {
+      success: true,
+      restartedCount: restartedIds.length,
+      restartedIds,
+      skippedRejected,
+      skippedPublished,
+    };
   }
 
   /**

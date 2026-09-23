@@ -16,6 +16,7 @@ import {
   X,
   Instagram,
   RefreshCw,
+  RotateCcw,
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Confession, DashboardStats, ActivityLog, Template } from '@/types';
@@ -96,6 +97,32 @@ export default function DashboardPage() {
     }
   };
 
+  const [restartingQueue, setRestartingQueue] = useState(false);
+
+  const handleRestartQueue = async () => {
+    if (!confirm('Restart failed confessions queue? Rejected and already published posts will NOT be touched.')) {
+      return;
+    }
+    setRestartingQueue(true);
+    try {
+      const res = await fetch('/api/confessions/restart-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ triggerPublish: true }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to restart queue');
+      }
+      success(data.message || `Restarted ${data.restartedCount} confessions`);
+      loadDashboardData();
+    } catch (err: any) {
+      error(err?.message || 'Failed to restart queue');
+    } finally {
+      setRestartingQueue(false);
+    }
+  };
+
   const getTemplateForConfession = (tplId?: string) => {
     return templates.find((t) => t.id === tplId) || templates[0];
   };
@@ -124,6 +151,33 @@ export default function DashboardPage() {
 
   return (
     <DashboardLayout title="Platform Overview" subtitle="Monitor confession imports, AI moderation, and Instagram broadcast queue">
+      {/* Failed Posts Alert Banner */}
+      {stats && stats.failed > 0 && (
+        <div className="flex items-center justify-between p-4 bg-rose-50/90 border border-rose-200 rounded-2xl text-rose-900 mb-6 gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-rose-100 rounded-xl text-rose-600 shrink-0">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="font-semibold text-sm">
+                {stats.failed} confession{stats.failed > 1 ? 's' : ''} failed to publish
+              </div>
+              <div className="text-xs text-rose-700 mt-0.5">
+                Restarting will re-queue all failed confessions. Rejected and already published posts are strictly protected and will never be touched.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleRestartQueue}
+            disabled={restartingQueue}
+            className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm transition-all disabled:opacity-50 ml-auto"
+          >
+            <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} />
+            {restartingQueue ? 'Restarting…' : `Restart Failed Queue (${stats.failed})`}
+          </button>
+        </div>
+      )}
+
       {/* KPI Stats Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
         <div className="bg-white p-4 rounded-2xl border border-zinc-200/80 shadow-sm">
