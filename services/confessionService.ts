@@ -11,7 +11,7 @@ export const ALLOWED_TRANSITIONS: Record<ConfessionStatus, ConfessionStatus[]> =
   NEW: ['IMPORTED'],
   IMPORTED: ['PROCESSING'],
   PROCESSING: ['READY_FOR_REVIEW', 'REJECTED'],
-  READY_FOR_REVIEW: ['APPROVED', 'REJECTED'],
+  READY_FOR_REVIEW: ['APPROVED', 'REJECTED', 'PUBLISHING'],
   APPROVED: ['SCHEDULED', 'PUBLISHING', 'REJECTED'],
   REJECTED: ['READY_FOR_REVIEW', 'APPROVED'], // allow admin to overturn rejection
   SCHEDULED: ['PUBLISHING', 'APPROVED', 'REJECTED'], // allow rescheduling/cancelling
