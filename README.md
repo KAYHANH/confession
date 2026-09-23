@@ -17,7 +17,7 @@ ConfessionFlow bridges the gap between raw, anonymous Google Sheet submissions a
 - 🎨 **1080x1080 HTML/CSS Post Card Engine**:
   - Deterministic rendering — zero AI-hallucinated spelling errors on the visual graphic.
   - Dynamic font scaling and line-height fitting based on character length.
-  - 7 Built-in Templates: *Classic Monochrome*, *Dark Velvet*, *Minimalist Serif*, *Love & Romance*, *Campus & College*, *Funny & Relatable*, *Deep Story*.
+  - 6 Built-in Templates: *Classic Monochrome*, *Dark Velvet*, *Minimalist Serif*, *Love & Romance* (Default), *Campus & College*, *Funny & Relatable*.
 - 🔒 **Safe-by-Default Policy**:
   - Auto-publish is **disabled by default**.
   - Pipeline enforces: `NEW` &rarr; `IMPORTED` &rarr; `PROCESSING` &rarr; `READY_FOR_REVIEW` &rarr; `APPROVED` &rarr; `PUBLISHING` &rarr; `PUBLISHED`.

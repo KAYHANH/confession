@@ -226,8 +226,8 @@ export class ConfessionService {
       }
 
       // 2. Fetch default template if none assigned
-      const templateId = confession.template_id || mockStore.getSettings().default_template_id || (mockStore.getTemplates()[0]?.id ?? '77777777-7777-7777-7777-777777777777');
-      const template = mockStore.getTemplateById(templateId) || mockStore.getTemplates().find(t => t.id === '77777777-7777-7777-7777-777777777777') || mockStore.getTemplates()[0];
+      const templateId = confession.template_id || mockStore.getSettings().default_template_id || (mockStore.getTemplates()[0]?.id ?? '44444444-4444-4444-4444-444444444444');
+      const template = mockStore.getTemplateById(templateId) || mockStore.getTemplates().find(t => t.id === '44444444-4444-4444-4444-444444444444') || mockStore.getTemplates()[0];
 
       // 3. Generate initial preview card
       const settings = mockStore.getSettings();
@@ -441,7 +441,7 @@ export class ConfessionService {
       // 4. Ensure card image is generated
       let imageUrl = confession.generated_image_url;
       if (!imageUrl) {
-        const template = mockStore.getTemplateById(confession.template_id) || mockStore.getTemplateById(mockStore.getSettings().default_template_id) || mockStore.getTemplates().find(t => t.id === '77777777-7777-7777-7777-777777777777') || mockStore.getTemplates()[0];
+        const template = mockStore.getTemplateById(confession.template_id) || mockStore.getTemplateById(mockStore.getSettings().default_template_id) || mockStore.getTemplates().find(t => t.id === '44444444-4444-4444-4444-444444444444') || mockStore.getTemplates()[0];
         const settings = mockStore.getSettings();
         const imgRes = await imageService.generatePostImage({
           confession,

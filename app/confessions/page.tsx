@@ -521,19 +521,20 @@ export default function ConfessionsPage() {
           confession={selectedForPublish}
           template={
             templates.find((t) => t.id === selectedForPublish.template_id) ||
+            templates.find((t) => t.id === '44444444-4444-4444-4444-444444444444') ||
             templates[0] || {
-              id: '77777777-7777-7777-7777-777777777777',
-              name: 'Deep Story',
-              description: 'Moody deep indigo with purple glow',
-              background: 'linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%)',
-              text_color: '#f8fafc',
-              accent_color: '#a855f7',
-              font_family: 'sans-serif',
-              font_size: 28,
+              id: '44444444-4444-4444-4444-444444444444',
+              name: 'Love & Romance',
+              description: 'Soft blush rose gradient designed for secret crushes, confessions, and heartbreak',
+              background: 'linear-gradient(135deg, #fff1f2 0%, #ffe4e6 50%, #fecdd3 100%)',
+              text_color: '#881337',
+              accent_color: '#f43f5e',
+              font_family: 'serif',
+              font_size: 44,
               show_branding: true,
               show_confession_number: true,
               show_name: true,
-              layout_config: { padding: 80, border_radius: 0 },
+              layout_config: { padding: 80, quote_icon: true, header_style: 'badge', watermark_opacity: 0.06 },
             }
           }
           onClose={() => setSelectedForPublish(null)}

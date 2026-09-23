@@ -165,7 +165,7 @@ export class SchedulingService {
           ? moderationResult.reasons.join('; ') 
           : 'Passed safety validation.',
         ai_processed: false,
-        template_id: '77777777-7777-7777-7777-777777777777',
+        template_id: '44444444-4444-4444-4444-444444444444',
         generated_image_url: null,
         generated_image_path: null,
         caption: `Confession #${row.rowNumber} 💭\n\n${cleanedText.length > 250 ? cleanedText.slice(0, 247) + '...' : cleanedText}\n\nShare your thoughts below 👇`,

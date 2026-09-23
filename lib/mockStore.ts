@@ -117,30 +117,13 @@ const DEFAULT_TEMPLATES: Template[] = [
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   },
-  {
-    id: '77777777-7777-7777-7777-777777777777',
-    name: 'Deep Story',
-    description: 'Immersive twilight gradient suited for reflective, emotional confessions',
-    background: 'linear-gradient(135deg, #1e1b4b 0%, #312e81 60%, #4338ca 100%)',
-    text_color: '#e0e7ff',
-    accent_color: '#818cf8',
-    font_family: 'serif',
-    font_size: 42,
-    show_branding: true,
-    show_confession_number: true,
-    show_name: true,
-    layout_config: { padding: 84, quote_icon: true, header_style: 'badge', watermark_opacity: 0.06 },
-    active: true,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  },
 ];
 
 const DEFAULT_SETTINGS: SystemSettings = {
   brand_name: process.env.BRAND_NAME || 'Campus Confessions',
   instagram_handle: process.env.INSTAGRAM_HANDLE || '@_hpsconfession_',
   logo_url: '/logo.png',
-  default_template_id: '77777777-7777-7777-7777-777777777777',
+  default_template_id: '44444444-4444-4444-4444-444444444444',
   timezone: process.env.DEFAULT_TIMEZONE || 'Asia/Kolkata',
   auto_publish: process.env.AUTO_PUBLISH_ENABLED !== 'false',
   publishing_mode: process.env.AUTO_PUBLISH_ENABLED === 'false' ? 'MANUAL_APPROVAL' : 'AUTO_PUBLISH',
@@ -207,8 +190,20 @@ class MockStore {
             }
           }
         }
-        if (process.env.MAX_DAILY_POSTS && parsed.settings) {
-          parsed.settings.max_daily_posts = parseInt(process.env.MAX_DAILY_POSTS, 10);
+        if (parsed.templates) {
+          parsed.templates = parsed.templates.filter((t: any) => t.id !== '77777777-7777-7777-7777-777777777777');
+        }
+        if (parsed.settings) {
+          if (!parsed.settings.default_template_id || parsed.settings.default_template_id === '77777777-7777-7777-7777-777777777777') {
+            parsed.settings.default_template_id = '44444444-4444-4444-4444-444444444444';
+          }
+        }
+        if (parsed.confessions) {
+          parsed.confessions.forEach((c: any) => {
+            if (c.template_id === '77777777-7777-7777-7777-777777777777') {
+              c.template_id = '44444444-4444-4444-4444-444444444444';
+            }
+          });
         }
         return parsed;
       }
@@ -322,10 +317,15 @@ class MockStore {
   }
 
   public getTemplates(): Template[] {
-    return [...this.data.templates];
+    this.ensureFresh();
+    return this.data.templates.filter((t) => t.id !== '77777777-7777-7777-7777-777777777777');
   }
 
   public getTemplateById(id: string): Template | undefined {
+    this.ensureFresh();
+    if (id === '77777777-7777-7777-7777-777777777777') {
+      return this.data.templates.find((t) => t.id === '44444444-4444-4444-4444-444444444444');
+    }
     return this.data.templates.find((t) => t.id === id);
   }
 
@@ -447,6 +447,9 @@ class MockStore {
     }
     if (this.data.settings.max_daily_posts === undefined || this.data.settings.max_daily_posts === 15) {
       this.data.settings.max_daily_posts = 20;
+    }
+    if (!this.data.settings.default_template_id || this.data.settings.default_template_id === '77777777-7777-7777-7777-777777777777') {
+      this.data.settings.default_template_id = '44444444-4444-4444-4444-444444444444';
     }
     return { ...this.data.settings };
   }
