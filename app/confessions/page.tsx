@@ -515,16 +515,41 @@ export default function ConfessionsPage() {
       {/* Modals */}
       {selectedForPublish && (
         <PublishModal
+          isOpen={Boolean(selectedForPublish)}
           confession={selectedForPublish}
-          templates={templates}
-          onClose={() => { setSelectedForPublish(null); loadData(); }}
+          template={
+            templates.find((t) => t.id === selectedForPublish.template_id) ||
+            templates[0] || {
+              id: '77777777-7777-7777-7777-777777777777',
+              name: 'Deep Story',
+              description: 'Moody deep indigo with purple glow',
+              background: 'linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%)',
+              text_color: '#f8fafc',
+              accent_color: '#a855f7',
+              font_family: 'sans-serif',
+              font_size: 28,
+              show_branding: true,
+              show_confession_number: true,
+              show_name: true,
+              layout_config: { padding: 80, border_radius: 0 },
+            }
+          }
+          onClose={() => setSelectedForPublish(null)}
+          onSuccess={() => {
+            setSelectedForPublish(null);
+            loadData();
+          }}
         />
       )}
       {selectedForSchedule && (
         <ScheduleModal
+          isOpen={Boolean(selectedForSchedule)}
           confession={selectedForSchedule}
-          onClose={() => { setSelectedForSchedule(null); loadData(); }}
-          onScheduled={() => { setSelectedForSchedule(null); loadData(); }}
+          onClose={() => setSelectedForSchedule(null)}
+          onSuccess={() => {
+            setSelectedForSchedule(null);
+            loadData();
+          }}
         />
       )}
     </DashboardLayout>
