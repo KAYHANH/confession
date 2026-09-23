@@ -43,6 +43,11 @@ export default function ConfessionsPage() {
   const [selectedForPublish, setSelectedForPublish] = useState<Confession | null>(null);
   const [selectedForSchedule, setSelectedForSchedule] = useState<Confession | null>(null);
 
+  // Auto-publish settings for ETA calculation
+  const [publishSettings, setPublishSettings] = useState<{
+    interval: number; startHour: number; endHour: number; enabled: boolean;
+  }>({ interval: 120, startHour: 9, endHour: 23, enabled: false });
+
   const { success, error } = useToast();
 
   const loadData = useCallback(async () => {
@@ -57,16 +62,25 @@ export default function ConfessionsPage() {
       params.set('page', page.toString());
       params.set('limit', '20');
 
-      const [res, tplRes] = await Promise.all([
+      const [res, tplRes, settingsRes] = await Promise.all([
         fetch(`/api/confessions?${params.toString()}`),
         fetch('/api/templates'),
+        fetch('/api/settings'),
       ]);
 
-      const [data, tpls] = await Promise.all([res.json(), tplRes.json()]);
+      const [data, tpls, settings] = await Promise.all([res.json(), tplRes.json(), settingsRes.json()]);
 
       setConfessions(data.confessions || []);
       setTotalPages(data.totalPages || 1);
       setTemplates(tpls || []);
+      if (settings) {
+        setPublishSettings({
+          interval: settings.auto_publish_interval_minutes ?? 120,
+          startHour: settings.auto_publish_start_hour ?? 9,
+          endHour: settings.auto_publish_end_hour ?? 23,
+          enabled: settings.auto_publish_enabled ?? false,
+        });
+      }
     } catch (err: any) {
       error('Failed to load confessions');
     } finally {
@@ -77,6 +91,54 @@ export default function ConfessionsPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  /**
+   * Compute estimated upload time for a confession given its queue position (0-indexed).
+   * Skips slots that fall outside active hours (startHour–endHour IST).
+   */
+  const computeETA = (queueIndex: number): Date => {
+    const { interval, startHour, endHour } = publishSettings;
+    let slotTime = new Date();
+    // Round up to next slot boundary
+    const msInterval = interval * 60 * 1000;
+    slotTime = new Date(Math.ceil(slotTime.getTime() / msInterval) * msInterval);
+
+    let slotsRemaining = queueIndex + 1;
+    let safety = 0;
+    while (slotsRemaining > 0 && safety < 500) {
+      safety++;
+      const hour = parseInt(
+        new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(slotTime),
+        10,
+      );
+      if (hour >= startHour && hour < endHour) {
+        slotsRemaining--;
+        if (slotsRemaining === 0) break;
+      }
+      slotTime = new Date(slotTime.getTime() + msInterval);
+    }
+    return slotTime;
+  };
+
+  const formatETA = (date: Date): string => {
+    const now = new Date();
+    const diff = date.getTime() - now.getTime();
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+    const timeStr = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+    const dateStr = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
+
+    if (diff < 60000) return 'Any moment now';
+    if (diff < 3600000) return `~${mins}m from now`;
+    return `${dateStr}, ${timeStr}`;
+  };
+
+  // Build queue index map: only unpublished confessions in ascending row order
+  const pendingQueue = confessions.filter(
+    (c) => !['PUBLISHED', 'REJECTED', 'PUBLISHING'].includes(c.status)
+  );
 
   // Bulk Handlers
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -313,6 +375,7 @@ export default function ConfessionsPage() {
                   <th className="py-3 px-4 max-w-sm">Confession Text</th>
                   <th className="py-3 px-4">Risk</th>
                   <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4">📅 Upload Time</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -374,6 +437,38 @@ export default function ConfessionsPage() {
                       <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-700 border border-zinc-200">
                         {c.status.replace(/_/g, ' ')}
                       </span>
+                    </td>
+
+                    {/* Upload Time / ETA */}
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      {c.status === 'PUBLISHED' && c.published_at ? (
+                        <div className="text-[11px]">
+                          <div className="text-emerald-600 font-semibold">✅ Published</div>
+                          <div className="text-zinc-400">
+                            {new Date(c.published_at).toLocaleString('en-IN', {
+                              day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata'
+                            })}
+                          </div>
+                        </div>
+                      ) : c.status === 'REJECTED' ? (
+                        <span className="text-[11px] text-rose-400">—</span>
+                      ) : c.status === 'PUBLISHING' ? (
+                        <span className="text-[11px] text-blue-500 font-semibold animate-pulse">⏳ Uploading…</span>
+                      ) : publishSettings.enabled ? (
+                        (() => {
+                          const qIdx = pendingQueue.findIndex((q) => q.id === c.id);
+                          if (qIdx === -1) return <span className="text-[11px] text-zinc-300">—</span>;
+                          const eta = computeETA(qIdx);
+                          return (
+                            <div className="text-[11px]">
+                              <div className="text-indigo-600 font-semibold">{formatETA(eta)}</div>
+                              <div className="text-zinc-400">Queue #{qIdx + 1} • every {publishSettings.interval}m</div>
+                            </div>
+                          );
+                        })()
+                      ) : (
+                        <span className="text-[11px] text-zinc-400">Auto-publish OFF</span>
+                      )}
                     </td>
 
                     <td className="py-3.5 px-4 text-right whitespace-nowrap">
