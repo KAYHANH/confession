@@ -2,7 +2,7 @@ import { confessionService } from './confessionService';
 import { googleSheetsService } from './googleSheetsService';
 import { moderationService } from './moderationService';
 import { mockStore } from '@/lib/mockStore';
-import { Confession, ModerationRisk } from '@/types';
+import { Confession, ModerationRisk, ConfessionStatus } from '@/types';
 
 export interface AutoPublishCycleResult {
   ran: boolean;
@@ -93,8 +93,30 @@ export class SchedulingService {
     const now = new Date();
 
     for (const row of rows) {
-      // Dedup by row number alone — protects against sheet ID changes causing re-imports
+      const rawStatus = (row.status || '').trim().toUpperCase();
+      const isAlreadyPublished = rawStatus === 'PUBLISHED' || rawStatus === 'POSTED';
+      const isRejected = rawStatus === 'REJECTED';
+      const isScheduled = rawStatus === 'SCHEDULED';
+
+      // If row already exists in memory, sync any updated status from the sheet (e.g. if marked PUBLISHED or REJECTED)
       if (existingRowSet.has(row.rowNumber)) {
+        if (isAlreadyPublished) {
+          const existingConf = existing.find((c) => c.google_sheet_row === row.rowNumber);
+          if (existingConf && existingConf.status !== 'PUBLISHED') {
+            mockStore.updateConfession(existingConf.id, {
+              status: 'PUBLISHED',
+              published_at: row.processedAt || existingConf.published_at || new Date().toISOString(),
+              instagram_media_id: row.postId || existingConf.instagram_media_id || 'sheet-imported-published',
+            });
+          }
+        } else if (isRejected) {
+          const existingConf = existing.find((c) => c.google_sheet_row === row.rowNumber);
+          if (existingConf && existingConf.status !== 'REJECTED') {
+            mockStore.updateConfession(existingConf.id, {
+              status: 'REJECTED',
+            });
+          }
+        }
         continue;
       }
 
@@ -117,6 +139,14 @@ export class SchedulingService {
 
       const displayName = isAnon ? 'Anonymous' : (row.name || 'Anonymous');
 
+      const initialStatus: ConfessionStatus = isAlreadyPublished
+        ? 'PUBLISHED'
+        : isRejected
+        ? 'REJECTED'
+        : isScheduled
+        ? 'SCHEDULED'
+        : 'READY_FOR_REVIEW';
+
       const newConfession: Confession = {
         id: newId,
         google_sheet_id: config.spreadsheet_id,
@@ -127,21 +157,21 @@ export class SchedulingService {
         cleaned_text: cleanedText,
         display_name: displayName,
         is_anonymous: isAnon,
-        status: 'READY_FOR_REVIEW',
+        status: initialStatus,
         moderation_status: moderationResult.risk,
         moderation_reason: moderationResult.reasons.length > 0 
           ? moderationResult.reasons.join('; ') 
           : 'Passed safety validation.',
         ai_processed: false,
-        template_id: '11111111-1111-1111-1111-111111111111',
+        template_id: '77777777-7777-7777-7777-777777777777',
         generated_image_url: null,
         generated_image_path: null,
         caption: `Confession #${row.rowNumber} 💭\n\n${cleanedText.length > 250 ? cleanedText.slice(0, 247) + '...' : cleanedText}\n\nShare your thoughts below 👇`,
         hashtags: ['#confession', '#campuslife', '#studentconfessions'],
         scheduled_at: null,
-        published_at: null,
-        instagram_media_id: null,
-        instagram_permalink: null,
+        published_at: isAlreadyPublished ? (row.processedAt || row.timestamp || new Date().toISOString()) : null,
+        instagram_media_id: isAlreadyPublished ? (row.postId || 'sheet-imported-published') : null,
+        instagram_permalink: isAlreadyPublished ? (row.instagramUrl || null) : null,
         retry_count: 0,
         error_message: null,
         created_at: new Date(now.getTime() - (rows.length - row.rowNumber) * 1000).toISOString(),
@@ -301,9 +331,12 @@ export class SchedulingService {
       const eligibleCandidates = allConfessions
         .filter(
           (c) =>
+            c.status !== 'PUBLISHED' &&
+            c.status !== 'REJECTED' &&
             (c.status === 'APPROVED' || c.status === 'READY_FOR_REVIEW') &&
             allowedRisks.includes(c.moderation_status) &&
-            !c.instagram_media_id
+            !c.instagram_media_id &&
+            !c.published_at
         )
         .sort((a, b) => {
           // APPROVED first, then lowest row number

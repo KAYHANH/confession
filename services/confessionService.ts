@@ -480,11 +480,21 @@ export class ConfessionService {
       // 7. Update Google Sheet — status only (permalink stored internally, not in your spreadsheet)
       const sheetConfig = mockStore.getGoogleSheetConfig();
       if (confession.google_sheet_row) {
-        await googleSheetsService.updateRowStatus(sheetConfig, confession.google_sheet_row, {
-          status: 'PUBLISHED',
-          processedAt: publishedAt,
-          error: '',
-        });
+        try {
+          console.log(`[ConfessionService] Marking Google Sheet row #${confession.google_sheet_row} as PUBLISHED...`);
+          const sheetOk = await googleSheetsService.updateRowStatus(sheetConfig, confession.google_sheet_row, {
+            status: 'PUBLISHED',
+            processedAt: publishedAt,
+            error: '',
+          });
+          if (sheetOk) {
+            console.log(`[ConfessionService] Successfully marked row #${confession.google_sheet_row} as PUBLISHED on Google Sheet.`);
+          } else {
+            console.warn(`[ConfessionService] Warning: Could not write PUBLISHED status to row #${confession.google_sheet_row} on Google Sheet.`);
+          }
+        } catch (sheetErr: any) {
+          console.error(`[ConfessionService] Error updating Google Sheet row #${confession.google_sheet_row}:`, sheetErr?.message || sheetErr);
+        }
       }
 
       // 8. Save permalink to internal published posts log (not in Google Sheet)
