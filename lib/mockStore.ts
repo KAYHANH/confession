@@ -196,6 +196,13 @@ class MockStore {
         if (!parsed.instagram?.access_token && process.env.INSTAGRAM_ACCESS_TOKEN) {
           parsed.instagram.access_token = process.env.INSTAGRAM_ACCESS_TOKEN;
         }
+        // Always let env vars override stored settings for critical flags
+        if (process.env.AUTO_PUBLISH_ENABLED !== undefined && parsed.settings) {
+          parsed.settings.auto_publish = process.env.AUTO_PUBLISH_ENABLED === 'true';
+        }
+        if (process.env.MAX_DAILY_POSTS && parsed.settings) {
+          parsed.settings.max_daily_posts = parseInt(process.env.MAX_DAILY_POSTS, 10);
+        }
         return parsed;
       }
     } catch (_e) {
