@@ -6,7 +6,11 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     const settings = mockStore.getSettings();
-    return NextResponse.json(settings);
+    // Return with aliased field for frontend compatibility
+    return NextResponse.json({
+      ...settings,
+      auto_publish_enabled: settings.auto_publish,
+    });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Failed to fetch settings' }, { status: 500 });
   }

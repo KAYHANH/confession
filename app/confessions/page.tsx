@@ -454,7 +454,7 @@ export default function ConfessionsPage() {
                         <span className="text-[11px] text-rose-400">—</span>
                       ) : c.status === 'PUBLISHING' ? (
                         <span className="text-[11px] text-blue-500 font-semibold animate-pulse">⏳ Uploading…</span>
-                      ) : publishSettings.enabled ? (
+                      ) : (
                         (() => {
                           const qIdx = pendingQueue.findIndex((q) => q.id === c.id);
                           if (qIdx === -1) return <span className="text-[11px] text-zinc-300">—</span>;
@@ -466,8 +466,6 @@ export default function ConfessionsPage() {
                             </div>
                           );
                         })()
-                      ) : (
-                        <span className="text-[11px] text-zinc-400">Auto-publish OFF</span>
                       )}
                     </td>
 
