@@ -728,9 +728,9 @@ function SettingsContent() {
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <span className="font-bold text-sm text-zinc-900">Hands-Free 24/7 Auto-Publish</span>
-                    {generalSettings.auto_publish || generalSettings.publishing_mode === 'AUTO_PUBLISH' ? (
+                    {generalSettings.auto_publish !== false && generalSettings.publishing_mode !== 'MANUAL_APPROVAL' ? (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-600 text-white flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" /> ACTIVE
+                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" /> ACTIVE (ALWAYS ON)
                       </span>
                     ) : (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-zinc-200 text-zinc-600">
@@ -739,13 +739,13 @@ function SettingsContent() {
                     )}
                   </div>
                   <p className="text-xs text-zinc-600 max-w-xl">
-                    When active, the server continuously pulls new submissions from your Google Sheet, moderates safety, formats the caption & hashtags with AI, renders the 1080x1080 card image, and broadcasts safe confessions directly to Instagram on schedule without needing to log in.
+                    When active, the server continuously pulls new submissions from your Google Sheet, moderates safety, formats the caption & hashtags with AI, renders the 1080x1350 (4:5) portrait card image, and broadcasts safe confessions directly to Instagram on schedule without needing to log in.
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-1">
                   <input
                     type="checkbox"
-                    checked={Boolean(generalSettings.auto_publish || generalSettings.publishing_mode === 'AUTO_PUBLISH')}
+                    checked={generalSettings.auto_publish !== false && generalSettings.publishing_mode !== 'MANUAL_APPROVAL'}
                     onChange={(e) => {
                       const enabled = e.target.checked;
                       setGeneralSettings({
@@ -764,7 +764,7 @@ function SettingsContent() {
                 <div>
                   <label className="block font-semibold text-zinc-700 mb-1.5">Publishing Mode</label>
                   <select
-                    value={generalSettings.publishing_mode}
+                    value={generalSettings.publishing_mode || 'AUTO_PUBLISH'}
                     onChange={(e) =>
                       setGeneralSettings({
                         ...generalSettings,

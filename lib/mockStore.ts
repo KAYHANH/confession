@@ -142,8 +142,8 @@ const DEFAULT_SETTINGS: SystemSettings = {
   logo_url: '/logo.png',
   default_template_id: '77777777-7777-7777-7777-777777777777',
   timezone: process.env.DEFAULT_TIMEZONE || 'Asia/Kolkata',
-  auto_publish: process.env.AUTO_PUBLISH_ENABLED === 'true',
-  publishing_mode: 'MANUAL_APPROVAL',
+  auto_publish: process.env.AUTO_PUBLISH_ENABLED !== 'false',
+  publishing_mode: process.env.AUTO_PUBLISH_ENABLED === 'false' ? 'MANUAL_APPROVAL' : 'AUTO_PUBLISH',
   default_publishing_time: '19:30',
   max_daily_posts: parseInt(process.env.MAX_DAILY_POSTS || '15', 10),
   auto_publish_interval_minutes: parseInt(process.env.AUTO_PUBLISH_INTERVAL_MINUTES || '120', 10),
@@ -196,9 +196,16 @@ class MockStore {
         if (!parsed.instagram?.access_token && process.env.INSTAGRAM_ACCESS_TOKEN) {
           parsed.instagram.access_token = process.env.INSTAGRAM_ACCESS_TOKEN;
         }
-        // Always let env vars override stored settings for critical flags
-        if (process.env.AUTO_PUBLISH_ENABLED !== undefined && parsed.settings) {
-          parsed.settings.auto_publish = process.env.AUTO_PUBLISH_ENABLED === 'true';
+        // Always enforce 24/7 auto-publish ON by default unless explicitly set to 'false'
+        if (parsed.settings) {
+          if (process.env.AUTO_PUBLISH_ENABLED === 'false') {
+            parsed.settings.auto_publish = false;
+          } else {
+            parsed.settings.auto_publish = true;
+            if (!parsed.settings.publishing_mode || parsed.settings.publishing_mode === 'MANUAL_APPROVAL') {
+              parsed.settings.publishing_mode = 'AUTO_PUBLISH';
+            }
+          }
         }
         if (process.env.MAX_DAILY_POSTS && parsed.settings) {
           parsed.settings.max_daily_posts = parseInt(process.env.MAX_DAILY_POSTS, 10);
@@ -418,6 +425,18 @@ class MockStore {
 
   public getSettings(): SystemSettings {
     this.ensureFresh();
+    if (!this.data.settings) {
+      this.data.settings = { ...DEFAULT_SETTINGS };
+    }
+    // Guarantee 24/7 auto publish is on unless explicitly set to false
+    if (process.env.AUTO_PUBLISH_ENABLED === 'false') {
+      this.data.settings.auto_publish = false;
+    } else if (this.data.settings.auto_publish === undefined || this.data.settings.auto_publish === false) {
+      this.data.settings.auto_publish = true;
+      if (!this.data.settings.publishing_mode || this.data.settings.publishing_mode === 'MANUAL_APPROVAL') {
+        this.data.settings.publishing_mode = 'AUTO_PUBLISH';
+      }
+    }
     return { ...this.data.settings };
   }
 

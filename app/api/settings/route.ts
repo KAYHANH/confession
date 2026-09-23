@@ -19,13 +19,22 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    if (body.auto_publish_enabled !== undefined && body.auto_publish === undefined) {
+      body.auto_publish = Boolean(body.auto_publish_enabled);
+    }
+    if (body.auto_publish && (!body.publishing_mode || body.publishing_mode === 'MANUAL_APPROVAL')) {
+      body.publishing_mode = 'AUTO_PUBLISH';
+    }
     const updated = mockStore.updateSettings(body);
     mockStore.addLog({
       action: 'SETTINGS_UPDATED',
       entity_type: 'settings',
       metadata: { fields: Object.keys(body) },
     });
-    return NextResponse.json(updated);
+    return NextResponse.json({
+      ...updated,
+      auto_publish_enabled: updated.auto_publish,
+    });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Failed to update settings' }, { status: 500 });
   }
