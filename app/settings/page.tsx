@@ -810,30 +810,54 @@ function SettingsContent() {
                   </select>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                   <div>
                     <label className="block font-semibold text-zinc-700 mb-1.5">
-                      Post Spacing / Cooldown
+                      Base Post Cooldown
                     </label>
                     <select
                       value={generalSettings.auto_publish_interval_minutes || 60}
                       onChange={(e) => updateSettingField('auto_publish_interval_minutes', parseInt(e.target.value, 10))}
                       className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
                     >
-                      <option value={60}>Every 1 Hour (60m - Safe Default)</option>
-                      <option value={90}>Every 1.5 Hours (90m - Highly Recommended)</option>
-                      <option value={120}>Every 2 Hours (120m)</option>
-                      <option value={180}>Every 3 Hours (180m)</option>
-                      <option value={240}>Every 4 Hours (240m)</option>
+                      <option value={60}>Every 1 Hour (60m - Safe Base)</option>
+                      <option value={90}>Every 1.5 Hours (90m Base)</option>
+                      <option value={120}>Every 2 Hours (120m Base)</option>
+                      <option value={180}>Every 3 Hours (180m Base)</option>
+                      <option value={240}>Every 4 Hours (240m Base)</option>
                     </select>
                     <span className="text-[10px] text-zinc-500 mt-1 block">
-                      Enforces dynamic natural human gap (60-90m) to evade Meta bot rate limits.
+                      Minimum required gap between uploads.
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block font-semibold text-zinc-700">
+                        Anti-Bot Natural Jitter
+                      </label>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
+                        +{generalSettings.current_jitter_minutes ?? 14}m active
+                      </span>
+                    </div>
+                    <select
+                      value={generalSettings.anti_bot_jitter_minutes ?? 30}
+                      onChange={(e) => updateSettingField('anti_bot_jitter_minutes', parseInt(e.target.value, 10))}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
+                    >
+                      <option value={30}>+0 to +30 min (Default: ~64m, ~78m, ~85m)</option>
+                      <option value={15}>+0 to +15 min (Mild: ~60m to ~75m)</option>
+                      <option value={45}>+0 to +45 min (Extended: ~60m to ~105m)</option>
+                      <option value={0}>0 min (Disabled - Fixed robotic intervals)</option>
+                    </select>
+                    <span className="text-[10px] text-zinc-500 mt-1 block">
+                      Completely eliminates robotic fixed timestamps.
                     </span>
                   </div>
 
                   <div>
                     <label className="block font-semibold text-zinc-700 mb-1.5">
-                      Maximum Daily Instagram Posts
+                      Maximum Daily Posts
                     </label>
                     <input
                       type="number"
@@ -896,7 +920,9 @@ function SettingsContent() {
                     </div>
                     <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/60 shadow-xs">
                       <p className="font-semibold text-zinc-900 mb-0.5">⏱️ Anti-Bot Natural Jitter</p>
-                      <p className="text-zinc-600">60–90 minute randomized gaps between posts. Never publishes at exact mechanical minute marks.</p>
+                      <p className="text-zinc-600">
+                        <strong className="text-emerald-700 font-semibold">+{generalSettings.current_jitter_minutes ?? 14}m dynamic variance</strong> applied to next post. Completely eliminates robotic fixed timestamps (e.g. posts won't fire at exact clockwork intervals like 60m 00s; instead, gaps vary between ~64m, ~78m, ~85m, etc.).
+                      </p>
                     </div>
                     <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/60 shadow-xs">
                       <p className="font-semibold text-zinc-900 mb-0.5">📱 Mobile App Activity</p>

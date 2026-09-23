@@ -132,6 +132,8 @@ const DEFAULT_SETTINGS: SystemSettings = {
   auto_publish_interval_minutes: parseInt(process.env.AUTO_PUBLISH_INTERVAL_MINUTES || '60', 10),
   auto_publish_start_hour: parseInt(process.env.AUTO_PUBLISH_START_HOUR || '9', 10),
   auto_publish_end_hour: parseInt(process.env.AUTO_PUBLISH_END_HOUR || '22', 10),
+  anti_bot_jitter_minutes: 30,
+  current_jitter_minutes: Math.floor(Math.random() * 31),
   enable_profanity_filter: true,
   enable_pii_detection: false,
   require_approval: true,

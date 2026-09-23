@@ -152,6 +152,8 @@ export interface SystemSettings {
   auto_publish_interval_minutes?: number; // Minimum cooldown between posts in minutes (e.g. 60 or 120)
   auto_publish_start_hour?: number; // Active window start hour in local time (0-23, e.g. 9 for 9 AM)
   auto_publish_end_hour?: number; // Active window end hour in local time (0-23, e.g. 23 for 11 PM)
+  anti_bot_jitter_minutes?: number; // Anti-Bot Natural Jitter max dynamic variance (e.g. +0 to +30 min, default 30)
+  current_jitter_minutes?: number; // Current dynamic variance applied to the upcoming post interval
   enable_profanity_filter: boolean;
   enable_pii_detection: boolean;
   require_approval: boolean;

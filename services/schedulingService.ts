@@ -325,8 +325,19 @@ export class SchedulingService {
       // 5. Cooldown / Post Spacing Guard with Anti-Robotic Human Jitter (unless forced)
       // Meta safety: strictly enforce at least 60 minutes minimum gap between uploads
       const baseInterval = Math.max(60, settings.auto_publish_interval_minutes || 60);
+      const maxJitter = settings.anti_bot_jitter_minutes !== undefined ? settings.anti_bot_jitter_minutes : 30;
+
+      // Persisted dynamic jitter (+0 to +30 min) so variance survives reboots and cron calls
+      let jitter = settings.current_jitter_minutes;
+      if (jitter === undefined || jitter === null || isNaN(jitter)) {
+        jitter = maxJitter > 0 ? Math.floor(Math.random() * (maxJitter + 1)) : 0;
+        mockStore.updateSettings({ current_jitter_minutes: jitter });
+      }
+      this.currentJitterMinutes = jitter;
+
       // Natural human variance: add randomized jitter (+0 to +30 min) so timestamps are never exact/robotic
-      const effectiveIntervalMinutes = baseInterval + (this.currentJitterMinutes || 0);
+      // (e.g. gaps vary naturally between ~64m, ~78m, ~85m, etc.)
+      const effectiveIntervalMinutes = baseInterval + jitter;
       const minIntervalMs = effectiveIntervalMinutes * 60 * 1000;
 
       // In-memory guard check
@@ -334,11 +345,11 @@ export class SchedulingService {
         const elapsedSinceLastRun = Date.now() - this.lastPublishedAtMs;
         if (elapsedSinceLastRun < minIntervalMs) {
           const remainingMinutes = Math.ceil((minIntervalMs - elapsedSinceLastRun) / 60000);
-          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedSinceLastRun / 60000)}m since last run, dynamic natural gap is ${effectiveIntervalMinutes}m). Next post in ${remainingMinutes}m.`);
+          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedSinceLastRun / 60000)}m since last run, Anti-Bot Natural Jitter: +${jitter}m, dynamic gap: ${effectiveIntervalMinutes}m). Next post in ${remainingMinutes}m.`);
           return {
             ran: false,
             status: 'RATE_LIMITED',
-            reason: `Post spacing cooldown active. Last post was ${Math.floor(elapsedSinceLastRun / 60000)}m ago. Natural human gap is ${effectiveIntervalMinutes}m. Next post permitted in ${remainingMinutes}m.`,
+            reason: `Post spacing cooldown active (Anti-Bot Natural Jitter: +${jitter}m applied). Last post was ${Math.floor(elapsedSinceLastRun / 60000)}m ago. Natural human gap is ${effectiveIntervalMinutes}m. Next post permitted in ${remainingMinutes}m.`,
           };
         }
       }
@@ -359,11 +370,11 @@ export class SchedulingService {
         const elapsedMs = Date.now() - mostRecentPublishMs;
         if (elapsedMs < minIntervalMs) {
           const remainingMinutes = Math.ceil((minIntervalMs - elapsedMs) / 60000);
-          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedMs / 60000)}m since last post, dynamic natural gap is ${effectiveIntervalMinutes}m). Next post in ${remainingMinutes}m.`);
+          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedMs / 60000)}m since last post, Anti-Bot Natural Jitter: +${jitter}m, dynamic gap: ${effectiveIntervalMinutes}m). Next post in ${remainingMinutes}m.`);
           return {
             ran: false,
             status: 'RATE_LIMITED',
-            reason: `Post spacing cooldown active. Last post was ${Math.floor(elapsedMs / 60000)}m ago. Natural human gap is ${effectiveIntervalMinutes}m. Next post permitted in ${remainingMinutes}m.`,
+            reason: `Post spacing cooldown active (Anti-Bot Natural Jitter: +${jitter}m applied). Last post was ${Math.floor(elapsedMs / 60000)}m ago. Natural human gap is ${effectiveIntervalMinutes}m. Next post permitted in ${remainingMinutes}m.`,
           };
         }
       }
@@ -477,8 +488,12 @@ export class SchedulingService {
       console.log(`[AutoPublisher] Publishing confession #${candidate.google_sheet_row} to Instagram...`);
       const publishedConfession = await confessionService.publishConfession(candidate.id);
       this.lastPublishedAtMs = Date.now();
-      // Rotate natural human jitter for next post (0 to 30 min, yielding a 60-90m natural gap)
-      this.currentJitterMinutes = Math.floor(Math.random() * 30);
+      // Rotate natural human jitter for next post (+0 to +30 min dynamic variance)
+      // Completely eliminates robotic fixed timestamps (e.g. posts won't fire at exact clockwork intervals like 60m 00s; instead, gaps vary between ~64m, ~78m, ~85m, etc.)
+      const nextMaxJitter = settings.anti_bot_jitter_minutes !== undefined ? settings.anti_bot_jitter_minutes : 30;
+      const nextJitter = nextMaxJitter > 0 ? Math.floor(Math.random() * (nextMaxJitter + 1)) : 0;
+      this.currentJitterMinutes = nextJitter;
+      mockStore.updateSettings({ current_jitter_minutes: nextJitter });
 
       mockStore.addLog({
         action: 'AUTO_PUBLISHED',
@@ -488,6 +503,10 @@ export class SchedulingService {
           row: candidate.google_sheet_row,
           permalink: publishedConfession.instagram_permalink,
           mediaId: publishedConfession.instagram_media_id,
+          jitterAppliedMinutes: jitter,
+          effectiveIntervalMinutes: effectiveIntervalMinutes,
+          nextJitterMinutes: nextJitter,
+          nextIntervalMinutes: baseInterval + nextJitter,
         },
       });
 

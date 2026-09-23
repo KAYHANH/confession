@@ -286,4 +286,82 @@ describe('24/7 Autonomous Auto-Publish Engine', () => {
     expect(result.confessionNumber).toBe(10);
     expect(result.instagramPermalink).toBe('https://www.instagram.com/p/test12345/');
   });
+
+  it('Test 6: should apply Anti-Bot Natural Jitter dynamic variance (+0 to +30 min) to eliminate robotic timestamps', async () => {
+    // With 60m base interval and 20m jitter, effective interval is 80m
+    vi.spyOn(mockStore, 'getSettings').mockReturnValue({
+      brand_name: 'Test',
+      instagram_handle: '@test',
+      logo_url: '/logo.png',
+      default_template_id: 'tpl-1',
+      timezone: 'Asia/Kolkata',
+      auto_publish: true,
+      publishing_mode: 'AUTO_PUBLISH',
+      default_publishing_time: '19:30',
+      max_daily_posts: 10,
+      auto_publish_interval_minutes: 60,
+      auto_publish_start_hour: 0,
+      auto_publish_end_hour: 24,
+      anti_bot_jitter_minutes: 30,
+      current_jitter_minutes: 20,
+      enable_profanity_filter: true,
+      enable_pii_detection: true,
+      require_approval: true,
+      risk_threshold: 'LOW',
+      default_hashtags: ['#test'],
+    });
+
+    vi.spyOn(confessionService, 'getDashboardStats').mockResolvedValue({
+      total: 10,
+      pendingReview: 5,
+      approved: 2,
+      scheduled: 0,
+      published: 3,
+      rejected: 0,
+      failed: 0,
+      publishedToday: 1,
+      maxDailyPosts: 10,
+    });
+
+    // Post was published 70 minutes ago.
+    // Base is 60m, but jitter is +20m -> total required cooldown is 80m!
+    // So even after 70 minutes, it MUST be rate-limited due to natural human jitter variance!
+    const seventyMinutesAgo = new Date(Date.now() - 70 * 60 * 1000).toISOString();
+    vi.spyOn(mockStore, 'getConfessions').mockReturnValue([
+      {
+        id: 'conf-published-prev',
+        google_sheet_id: 'sheet_1',
+        google_sheet_name: 'Confessions',
+        google_sheet_row: 1,
+        name: 'Anonymous',
+        original_text: 'Prior post',
+        cleaned_text: 'Prior post',
+        display_name: 'Anonymous',
+        is_anonymous: true,
+        status: 'PUBLISHED',
+        moderation_status: 'LOW',
+        moderation_reason: 'Passed',
+        ai_processed: true,
+        template_id: 'tpl-1',
+        generated_image_url: 'https://example.com/img.png',
+        generated_image_path: null,
+        caption: 'Cap',
+        hashtags: ['#test'],
+        scheduled_at: null,
+        published_at: seventyMinutesAgo,
+        instagram_media_id: '12345',
+        instagram_permalink: 'https://instagram.com/p/12345',
+        retry_count: 0,
+        error_message: null,
+        created_at: seventyMinutesAgo,
+        updated_at: seventyMinutesAgo,
+      },
+    ]);
+
+    const result = await schedulingService.processAutoPublishCycle();
+    expect(result.ran).toBe(false);
+    expect(result.status).toBe('RATE_LIMITED');
+    expect(result.reason).toContain('Anti-Bot Natural Jitter: +20m');
+    expect(result.reason).toContain('Natural human gap is 80m');
+  });
 });
