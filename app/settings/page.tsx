@@ -80,7 +80,32 @@ function SettingsContent() {
         igRes.json(),
       ]);
 
-      setGeneralSettings(genData);
+      // Check browser localStorage for persistent user preference backups
+      let effectiveGenData = genData;
+      if (typeof window !== 'undefined') {
+        const localBackup = localStorage.getItem('confessionflow_custom_settings');
+        if (localBackup) {
+          try {
+            const parsed = JSON.parse(localBackup);
+            const needsSync = Object.entries(parsed).some(
+              ([k, v]) => v !== undefined && v !== (genData as any)[k]
+            );
+            if (needsSync) {
+              effectiveGenData = { ...genData, ...parsed };
+              // Sync back to server in background so server adopts user's persistent choices
+              fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(effectiveGenData),
+              }).catch(() => {});
+            }
+          } catch {}
+        } else {
+          localStorage.setItem('confessionflow_custom_settings', JSON.stringify(genData));
+        }
+      }
+
+      setGeneralSettings(effectiveGenData);
       setSheetConfig(sheetData);
       setInstagramConfig(igData);
     } catch {
@@ -99,10 +124,19 @@ function SettingsContent() {
     if (tabParam) setActiveTab(tabParam);
   }, [searchParams]);
 
-  // Save General & Publishing & Moderation Settings
-  const handleSaveGeneral = async (updates: Partial<SystemSettings>) => {
-    setSaving(true);
+  // Save General & Publishing & Moderation Settings (with dual server + localStorage persistence)
+  const handleSaveGeneral = async (updates: Partial<SystemSettings>, silent: boolean = false) => {
+    if (!silent) setSaving(true);
     try {
+      // 1. Immediately persist to localStorage
+      if (typeof window !== 'undefined') {
+        const existing = localStorage.getItem('confessionflow_custom_settings');
+        const currentLocal = existing ? JSON.parse(existing) : {};
+        const newBackup = { ...currentLocal, ...updates };
+        localStorage.setItem('confessionflow_custom_settings', JSON.stringify(newBackup));
+      }
+
+      // 2. Persist to server
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -111,12 +145,23 @@ function SettingsContent() {
       if (!res.ok) throw new Error('Failed to update settings');
       const saved = await res.json();
       setGeneralSettings(saved);
-      success('Settings updated successfully!');
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('confessionflow_custom_settings', JSON.stringify(saved));
+      }
+      if (!silent) success('Settings saved permanently as default!');
     } catch (err: any) {
-      error(err?.message || 'Error saving settings');
+      if (!silent) error(err?.message || 'Error saving settings');
     } finally {
-      setSaving(false);
+      if (!silent) setSaving(false);
     }
+  };
+
+  // Instant auto-save helper for toggles, selects, and inputs
+  const updateSettingField = <K extends keyof SystemSettings>(key: K, value: SystemSettings[K]) => {
+    if (!generalSettings) return;
+    const updated = { ...generalSettings, [key]: value };
+    setGeneralSettings(updated);
+    handleSaveGeneral(updated, true);
   };
 
   // Google Sheets Handlers
@@ -279,9 +324,7 @@ function SettingsContent() {
                   <input
                     type="text"
                     value={generalSettings.brand_name}
-                    onChange={(e) =>
-                      setGeneralSettings({ ...generalSettings, brand_name: e.target.value })
-                    }
+                    onChange={(e) => updateSettingField('brand_name', e.target.value)}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
                   />
                 </div>
@@ -291,9 +334,7 @@ function SettingsContent() {
                   <input
                     type="text"
                     value={generalSettings.instagram_handle}
-                    onChange={(e) =>
-                      setGeneralSettings({ ...generalSettings, instagram_handle: e.target.value })
-                    }
+                    onChange={(e) => updateSettingField('instagram_handle', e.target.value)}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
                   />
                 </div>
@@ -302,9 +343,7 @@ function SettingsContent() {
                   <label className="block font-semibold text-zinc-700 mb-1.5">Operating Timezone</label>
                   <select
                     value={generalSettings.timezone}
-                    onChange={(e) =>
-                      setGeneralSettings({ ...generalSettings, timezone: e.target.value })
-                    }
+                    onChange={(e) => updateSettingField('timezone', e.target.value)}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-semibold bg-white"
                   >
                     <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
@@ -652,12 +691,7 @@ function SettingsContent() {
                   <input
                     type="checkbox"
                     checked={generalSettings.enable_pii_detection}
-                    onChange={(e) =>
-                      setGeneralSettings({
-                        ...generalSettings,
-                        enable_pii_detection: e.target.checked,
-                      })
-                    }
+                    onChange={(e) => updateSettingField('enable_pii_detection', e.target.checked)}
                     className="w-4 h-4 rounded border-zinc-300 text-brand-600"
                   />
                 </div>
@@ -672,12 +706,7 @@ function SettingsContent() {
                   <input
                     type="checkbox"
                     checked={generalSettings.enable_profanity_filter}
-                    onChange={(e) =>
-                      setGeneralSettings({
-                        ...generalSettings,
-                        enable_profanity_filter: e.target.checked,
-                      })
-                    }
+                    onChange={(e) => updateSettingField('enable_profanity_filter', e.target.checked)}
                     className="w-4 h-4 rounded border-zinc-300 text-brand-600"
                   />
                 </div>
@@ -688,12 +717,7 @@ function SettingsContent() {
                   </label>
                   <select
                     value={generalSettings.risk_threshold}
-                    onChange={(e) =>
-                      setGeneralSettings({
-                        ...generalSettings,
-                        risk_threshold: e.target.value as any,
-                      })
-                    }
+                    onChange={(e) => updateSettingField('risk_threshold', e.target.value as any)}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-semibold bg-white"
                   >
                     <option value="LOW">Low (Flag anything above Low)</option>
@@ -749,11 +773,13 @@ function SettingsContent() {
                     checked={generalSettings.auto_publish !== false && generalSettings.publishing_mode !== 'MANUAL_APPROVAL'}
                     onChange={(e) => {
                       const enabled = e.target.checked;
-                      setGeneralSettings({
+                      const updated = {
                         ...generalSettings,
                         auto_publish: enabled,
-                        publishing_mode: enabled ? 'AUTO_PUBLISH' : 'MANUAL_APPROVAL',
-                      });
+                        publishing_mode: enabled ? ('AUTO_PUBLISH' as const) : ('MANUAL_APPROVAL' as const),
+                      };
+                      setGeneralSettings(updated);
+                      handleSaveGeneral(updated, true);
                     }}
                     className="sr-only peer"
                   />
@@ -766,13 +792,16 @@ function SettingsContent() {
                   <label className="block font-semibold text-zinc-700 mb-1.5">Publishing Mode</label>
                   <select
                     value={generalSettings.publishing_mode || 'AUTO_PUBLISH'}
-                    onChange={(e) =>
-                      setGeneralSettings({
+                    onChange={(e) => {
+                      const mode = e.target.value as any;
+                      const updated = {
                         ...generalSettings,
-                        publishing_mode: e.target.value as any,
-                        auto_publish: e.target.value === 'AUTO_PUBLISH',
-                      })
-                    }
+                        publishing_mode: mode,
+                        auto_publish: mode === 'AUTO_PUBLISH',
+                      };
+                      setGeneralSettings(updated);
+                      handleSaveGeneral(updated, true);
+                    }}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-semibold bg-white"
                   >
                     <option value="AUTO_PUBLISH">Full Auto-Publish (24/7 Hands-Free - Recommended)</option>
@@ -788,12 +817,7 @@ function SettingsContent() {
                     </label>
                     <select
                       value={generalSettings.auto_publish_interval_minutes || 60}
-                      onChange={(e) =>
-                        setGeneralSettings({
-                          ...generalSettings,
-                          auto_publish_interval_minutes: parseInt(e.target.value, 10),
-                        })
-                      }
+                      onChange={(e) => updateSettingField('auto_publish_interval_minutes', parseInt(e.target.value, 10))}
                       className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
                     >
                       <option value={60}>Every 1 Hour (60m - Safe Default)</option>
@@ -816,12 +840,7 @@ function SettingsContent() {
                       min={1}
                       max={50}
                       value={generalSettings.max_daily_posts ?? 8}
-                      onChange={(e) =>
-                        setGeneralSettings({
-                          ...generalSettings,
-                          max_daily_posts: parseInt(e.target.value || '8', 10),
-                        })
-                      }
+                      onChange={(e) => updateSettingField('max_daily_posts', parseInt(e.target.value || '8', 10))}
                       className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
                     />
                     <span className="text-[10px] text-zinc-500 mt-1 block">
@@ -836,12 +855,7 @@ function SettingsContent() {
                     <div className="flex items-center gap-2">
                       <select
                         value={generalSettings.auto_publish_start_hour ?? 9}
-                        onChange={(e) =>
-                          setGeneralSettings({
-                            ...generalSettings,
-                            auto_publish_start_hour: parseInt(e.target.value, 10),
-                          })
-                        }
+                        onChange={(e) => updateSettingField('auto_publish_start_hour', parseInt(e.target.value, 10))}
                         className="w-1/2 px-2.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
                       >
                         {Array.from({ length: 24 }).map((_, h) => (
@@ -853,12 +867,7 @@ function SettingsContent() {
                       <span className="text-zinc-500">to</span>
                       <select
                         value={generalSettings.auto_publish_end_hour ?? 22}
-                        onChange={(e) =>
-                          setGeneralSettings({
-                            ...generalSettings,
-                            auto_publish_end_hour: parseInt(e.target.value, 10),
-                          })
-                        }
+                        onChange={(e) => updateSettingField('auto_publish_end_hour', parseInt(e.target.value, 10))}
                         className="w-1/2 px-2.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
                       >
                         {Array.from({ length: 24 }).map((_, h) => (

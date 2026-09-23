@@ -133,7 +133,7 @@ const DEFAULT_SETTINGS: SystemSettings = {
   auto_publish_start_hour: parseInt(process.env.AUTO_PUBLISH_START_HOUR || '9', 10),
   auto_publish_end_hour: parseInt(process.env.AUTO_PUBLISH_END_HOUR || '22', 10),
   enable_profanity_filter: true,
-  enable_pii_detection: true,
+  enable_pii_detection: false,
   require_approval: true,
   risk_threshold: 'MEDIUM',
   default_hashtags: [
@@ -179,14 +179,13 @@ class MockStore {
         if (!parsed.instagram?.access_token && process.env.INSTAGRAM_ACCESS_TOKEN) {
           parsed.instagram.access_token = process.env.INSTAGRAM_ACCESS_TOKEN;
         }
-        // Always enforce 24/7 auto-publish ON by default unless explicitly set to 'false'
-        if (parsed.settings) {
-          if (process.env.AUTO_PUBLISH_ENABLED === 'false') {
-            parsed.settings.auto_publish = false;
-          } else {
-            parsed.settings.auto_publish = true;
-            if (!parsed.settings.publishing_mode || parsed.settings.publishing_mode === 'MANUAL_APPROVAL') {
-              parsed.settings.publishing_mode = 'AUTO_PUBLISH';
+        if (!parsed.settings) {
+          parsed.settings = { ...DEFAULT_SETTINGS };
+        } else {
+          // Fill in only genuinely missing fields without overriding user settings
+          for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+            if ((parsed.settings as any)[key] === undefined) {
+              (parsed.settings as any)[key] = value;
             }
           }
         }
@@ -427,41 +426,19 @@ class MockStore {
     this.ensureFresh();
     if (!this.data.settings) {
       this.data.settings = { ...DEFAULT_SETTINGS };
-    }
-    // Guarantee 24/7 auto publish is on unless explicitly set to false
-    if (process.env.AUTO_PUBLISH_ENABLED === 'false') {
-      this.data.settings.auto_publish = false;
-    } else if (this.data.settings.auto_publish === undefined || this.data.settings.auto_publish === false) {
-      this.data.settings.auto_publish = true;
-      if (!this.data.settings.publishing_mode || this.data.settings.publishing_mode === 'MANUAL_APPROVAL') {
-        this.data.settings.publishing_mode = 'AUTO_PUBLISH';
-      }
-    }
-
-    // Ensure safe daytime anti-ban default parameters are applied
-    let changed = false;
-    if (!this.data.settings.auto_publish_interval_minutes || this.data.settings.auto_publish_interval_minutes < 60 || this.data.settings.auto_publish_interval_minutes === 30 || this.data.settings.auto_publish_interval_minutes === 120) {
-      this.data.settings.auto_publish_interval_minutes = 60;
-      changed = true;
-    }
-    if (this.data.settings.auto_publish_start_hour === undefined || this.data.settings.auto_publish_start_hour === 0) {
-      this.data.settings.auto_publish_start_hour = 9;
-      changed = true;
-    }
-    if (this.data.settings.auto_publish_end_hour === undefined || this.data.settings.auto_publish_end_hour === 23) {
-      this.data.settings.auto_publish_end_hour = 22;
-      changed = true;
-    }
-    if (this.data.settings.max_daily_posts === undefined || this.data.settings.max_daily_posts > 8 || this.data.settings.max_daily_posts === 20 || this.data.settings.max_daily_posts === 15 || this.data.settings.max_daily_posts === 10) {
-      this.data.settings.max_daily_posts = 8;
-      changed = true;
-    }
-    if (!this.data.settings.default_template_id || this.data.settings.default_template_id === '77777777-7777-7777-7777-777777777777') {
-      this.data.settings.default_template_id = '44444444-4444-4444-4444-444444444444';
-      changed = true;
-    }
-    if (changed) {
       this.save();
+    } else {
+      // Preserve every user-configured setting! Only populate genuinely missing (undefined) keys.
+      let hasMissing = false;
+      for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+        if ((this.data.settings as any)[key] === undefined) {
+          (this.data.settings as any)[key] = value;
+          hasMissing = true;
+        }
+      }
+      if (hasMissing) {
+        this.save();
+      }
     }
     return { ...this.data.settings };
   }
