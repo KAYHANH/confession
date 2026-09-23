@@ -786,7 +786,7 @@ function SettingsContent() {
                       Post Spacing / Cooldown
                     </label>
                     <select
-                      value={generalSettings.auto_publish_interval_minutes || 120}
+                      value={generalSettings.auto_publish_interval_minutes || 30}
                       onChange={(e) =>
                         setGeneralSettings({
                           ...generalSettings,
@@ -797,7 +797,7 @@ function SettingsContent() {
                     >
                       <option value={30}>Every 30 Minutes</option>
                       <option value={60}>Every 1 Hour (60m)</option>
-                      <option value={120}>Every 2 Hours (120m - Recommended)</option>
+                      <option value={120}>Every 2 Hours (120m)</option>
                       <option value={180}>Every 3 Hours (180m)</option>
                       <option value={240}>Every 4 Hours (240m)</option>
                     </select>
@@ -814,11 +814,11 @@ function SettingsContent() {
                       type="number"
                       min={1}
                       max={50}
-                      value={generalSettings.max_daily_posts}
+                      value={generalSettings.max_daily_posts ?? 20}
                       onChange={(e) =>
                         setGeneralSettings({
                           ...generalSettings,
-                          max_daily_posts: parseInt(e.target.value || '10', 10),
+                          max_daily_posts: parseInt(e.target.value || '20', 10),
                         })
                       }
                       className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
@@ -834,7 +834,7 @@ function SettingsContent() {
                     </label>
                     <div className="flex items-center gap-2">
                       <select
-                        value={generalSettings.auto_publish_start_hour ?? 9}
+                        value={generalSettings.auto_publish_start_hour ?? 0}
                         onChange={(e) =>
                           setGeneralSettings({
                             ...generalSettings,

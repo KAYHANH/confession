@@ -24,6 +24,7 @@ export interface AutoPublishCycleResult {
 
 export class SchedulingService {
   private isProcessingCron = false;
+  private lastPublishedAtMs = 0;
 
   /**
    * Run scheduled posts publisher check (called by /api/cron/publish-scheduled)
@@ -298,17 +299,37 @@ export class SchedulingService {
       }
 
       // 5. Cooldown / Post Spacing Guard (unless forced)
+      const intervalMinutes = settings.auto_publish_interval_minutes ?? 30;
+      const minIntervalMs = intervalMinutes * 60 * 1000;
+
+      // In-memory guard check
+      if (!force && this.lastPublishedAtMs > 0) {
+        const elapsedSinceLastRun = Date.now() - this.lastPublishedAtMs;
+        if (elapsedSinceLastRun < minIntervalMs) {
+          const remainingMinutes = Math.ceil((minIntervalMs - elapsedSinceLastRun) / 60000);
+          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedSinceLastRun / 60000)}m since last run, interval is ${intervalMinutes}m). Next post in ${remainingMinutes}m.`);
+          return {
+            ran: false,
+            status: 'RATE_LIMITED',
+            reason: `Post spacing cooldown active. Last post was ${Math.floor(elapsedSinceLastRun / 60000)}m ago. Next post permitted in ${remainingMinutes}m.`,
+          };
+        }
+      }
+
       const allConfessions = mockStore.getConfessions();
       const publishedPosts = allConfessions
         .filter((c) => c.status === 'PUBLISHED' && c.published_at)
-        .sort((a, b) => new Date(b.published_at!).getTime() - new Date(a.published_at!).getTime());
+        .map((c) => new Date(c.published_at!).getTime());
 
-      const lastPublished = publishedPosts[0];
-      const intervalMinutes = settings.auto_publish_interval_minutes ?? 120;
-      const minIntervalMs = intervalMinutes * 60 * 1000;
+      const publishedLog = mockStore.getPublishedPosts()
+        .filter((p) => p.published_at)
+        .map((p) => new Date(p.published_at).getTime());
 
-      if (!force && lastPublished && lastPublished.published_at) {
-        const elapsedMs = Date.now() - new Date(lastPublished.published_at).getTime();
+      const allTimes = [...publishedPosts, ...publishedLog, this.lastPublishedAtMs].filter((t) => t > 0);
+
+      if (!force && allTimes.length > 0) {
+        const mostRecentPublishMs = Math.max(...allTimes);
+        const elapsedMs = Date.now() - mostRecentPublishMs;
         if (elapsedMs < minIntervalMs) {
           const remainingMinutes = Math.ceil((minIntervalMs - elapsedMs) / 60000);
           console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedMs / 60000)}m since last post, interval is ${intervalMinutes}m). Next post in ${remainingMinutes}m.`);
@@ -334,6 +355,7 @@ export class SchedulingService {
           (c) =>
             c.status !== 'PUBLISHED' &&
             c.status !== 'REJECTED' &&
+            c.status !== 'PUBLISHING' &&
             (c.status === 'APPROVED' || c.status === 'READY_FOR_REVIEW') &&
             allowedRisks.includes(c.moderation_status) &&
             !c.instagram_media_id &&
@@ -358,6 +380,9 @@ export class SchedulingService {
       }
 
       console.log(`[AutoPublisher] Selected confession #${candidate.google_sheet_row} (ID: ${candidate.id}) for auto-publishing.`);
+
+      // Lock candidate immediately to prevent concurrent re-selection
+      await confessionService.updateConfession(candidate.id, { status: 'PUBLISHING' });
 
       // 6b. Groq AI Duplicate Detection against all already published posts
       const previousPosts = allConfessions
@@ -424,6 +449,7 @@ export class SchedulingService {
       // 8. Publish confession to Instagram
       console.log(`[AutoPublisher] Publishing confession #${candidate.google_sheet_row} to Instagram...`);
       const publishedConfession = await confessionService.publishConfession(candidate.id);
+      this.lastPublishedAtMs = Date.now();
 
       mockStore.addLog({
         action: 'AUTO_PUBLISHED',

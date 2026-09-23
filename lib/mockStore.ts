@@ -145,10 +145,10 @@ const DEFAULT_SETTINGS: SystemSettings = {
   auto_publish: process.env.AUTO_PUBLISH_ENABLED !== 'false',
   publishing_mode: process.env.AUTO_PUBLISH_ENABLED === 'false' ? 'MANUAL_APPROVAL' : 'AUTO_PUBLISH',
   default_publishing_time: '19:30',
-  max_daily_posts: parseInt(process.env.MAX_DAILY_POSTS || '15', 10),
-  auto_publish_interval_minutes: parseInt(process.env.AUTO_PUBLISH_INTERVAL_MINUTES || '120', 10),
-  auto_publish_start_hour: 9,
-  auto_publish_end_hour: 23,
+  max_daily_posts: parseInt(process.env.MAX_DAILY_POSTS || '20', 10),
+  auto_publish_interval_minutes: parseInt(process.env.AUTO_PUBLISH_INTERVAL_MINUTES || '30', 10),
+  auto_publish_start_hour: parseInt(process.env.AUTO_PUBLISH_START_HOUR || '0', 10),
+  auto_publish_end_hour: parseInt(process.env.AUTO_PUBLISH_END_HOUR || '23', 10),
   enable_profanity_filter: true,
   enable_pii_detection: true,
   require_approval: true,
@@ -436,6 +436,17 @@ class MockStore {
       if (!this.data.settings.publishing_mode || this.data.settings.publishing_mode === 'MANUAL_APPROVAL') {
         this.data.settings.publishing_mode = 'AUTO_PUBLISH';
       }
+    }
+
+    // Ensure new default parameters are applied
+    if (!this.data.settings.auto_publish_interval_minutes || this.data.settings.auto_publish_interval_minutes === 120) {
+      this.data.settings.auto_publish_interval_minutes = 30;
+    }
+    if (this.data.settings.auto_publish_start_hour === undefined || this.data.settings.auto_publish_start_hour === 9) {
+      this.data.settings.auto_publish_start_hour = 0;
+    }
+    if (this.data.settings.max_daily_posts === undefined || this.data.settings.max_daily_posts === 15) {
+      this.data.settings.max_daily_posts = 20;
     }
     return { ...this.data.settings };
   }
