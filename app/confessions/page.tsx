@@ -355,131 +355,133 @@ export default function ConfessionsPage() {
             </p>
           </div>
         ) : (
-          <div className="bg-white border border-zinc-100 rounded-2xl overflow-hidden shadow-sm">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-zinc-50/70 border-b border-zinc-100 text-zinc-500 font-semibold uppercase tracking-wider">
-                <tr>
-                  <th className="py-3 px-4 w-10">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.length === paginated.length && paginated.length > 0}
-                      onChange={handleSelectAll}
-                      className="rounded border-zinc-300"
-                    />
-                  </th>
-                  <th className="py-3 px-4">Row</th>
-                  <th className="py-3 px-4">Submitter</th>
-                  <th className="py-3 px-4 max-w-sm">Confession</th>
-                  <th className="py-3 px-4">Risk</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">
-                    {activeTab === 'queue' && '📅 Estimated Upload'}
-                    {activeTab === 'scheduled' && '🕐 Scheduled For'}
-                    {activeTab === 'published' && '✅ Published At'}
-                  </th>
-                  <th className="py-3 px-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100 font-medium">
-                {paginated.map((c) => {
-                  const qIdx = activeTab === 'queue' ? queueConfessions.findIndex((q) => q.id === c.id) : -1;
+          <div className="bg-white border border-zinc-100 rounded-2xl shadow-sm overflow-hidden">
+            <div className="overflow-x-auto w-full">
+              <table className="w-full text-left text-xs min-w-[980px]">
+                <thead className="bg-zinc-50/70 border-b border-zinc-100 text-zinc-500 font-semibold uppercase tracking-wider text-[11px]">
+                  <tr>
+                    <th className="py-3.5 px-4 w-10">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.length === paginated.length && paginated.length > 0}
+                        onChange={handleSelectAll}
+                        className="rounded border-zinc-300"
+                      />
+                    </th>
+                    <th className="py-3.5 px-3 w-16">Row</th>
+                    <th className="py-3.5 px-3 w-32">Submitter</th>
+                    <th className="py-3.5 px-4">Confession</th>
+                    <th className="py-3.5 px-3 w-24">Risk</th>
+                    <th className="py-3.5 px-3 w-28">Status</th>
+                    <th className="py-3.5 px-4 w-44">
+                      {activeTab === 'queue' && '📅 Estimated Upload'}
+                      {activeTab === 'scheduled' && '🕐 Scheduled For'}
+                      {activeTab === 'published' && '✅ Published At'}
+                    </th>
+                    <th className="py-3.5 px-4 w-36 text-right pr-6">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-100 font-medium">
+                  {paginated.map((c) => {
+                    const qIdx = activeTab === 'queue' ? queueConfessions.findIndex((q) => q.id === c.id) : -1;
 
-                  return (
-                    <tr key={c.id} className="hover:bg-zinc-50/60 transition-colors">
-                      <td className="py-3.5 px-4">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.includes(c.id)}
-                          onChange={() => handleSelectOne(c.id)}
-                          className="rounded border-zinc-300"
-                        />
-                      </td>
+                    return (
+                      <tr key={c.id} className="hover:bg-zinc-50/60 transition-colors">
+                        <td className="py-3.5 px-4 w-10">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(c.id)}
+                            onChange={() => handleSelectOne(c.id)}
+                            className="rounded border-zinc-300"
+                          />
+                        </td>
 
-                      <td className="py-3.5 px-4 font-bold text-zinc-900 whitespace-nowrap">
-                        #{String(c.google_sheet_row || 1).padStart(3, '0')}
-                      </td>
+                        <td className="py-3.5 px-3 w-16 font-bold text-zinc-900 whitespace-nowrap">
+                          #{String(c.google_sheet_row || 1).padStart(3, '0')}
+                        </td>
 
-                      <td className="py-3.5 px-4 whitespace-nowrap">
-                        <div className="font-semibold text-zinc-900">
-                          {c.is_anonymous ? 'Anonymous' : c.display_name}
-                        </div>
-                        <div className="text-[10px] text-zinc-500">
-                          {c.is_anonymous ? `"${c.name}"` : 'Real Name'}
-                        </div>
-                      </td>
+                        <td className="py-3.5 px-3 w-32 whitespace-nowrap">
+                          <div className="font-semibold text-zinc-900">
+                            {c.is_anonymous ? 'Anonymous' : c.display_name}
+                          </div>
+                          <div className="text-[10px] text-zinc-500">
+                            {c.is_anonymous ? `"${c.name}"` : 'Real Name'}
+                          </div>
+                        </td>
 
-                      <td className="py-3.5 px-4 max-w-xs">
-                        <p className="line-clamp-2 text-zinc-700 font-normal leading-relaxed">
-                          {c.cleaned_text || c.original_text}
-                        </p>
-                        {c.moderation_reason && (
-                          <p className="text-[10px] text-zinc-400 italic truncate mt-0.5">{c.moderation_reason}</p>
-                        )}
-                      </td>
+                        <td className="py-3.5 px-4 max-w-sm">
+                          <p className="line-clamp-2 text-zinc-700 font-normal leading-relaxed">
+                            {c.cleaned_text || c.original_text}
+                          </p>
+                          {c.moderation_reason && (
+                            <p className="text-[10px] text-zinc-400 italic truncate mt-0.5">{c.moderation_reason}</p>
+                          )}
+                        </td>
 
-                      <td className="py-3.5 px-4 whitespace-nowrap">{riskBadge(c.moderation_status)}</td>
+                        <td className="py-3.5 px-3 whitespace-nowrap">{riskBadge(c.moderation_status)}</td>
 
-                      <td className="py-3.5 px-4 whitespace-nowrap">{statusBadge(c.status)}</td>
+                        <td className="py-3.5 px-3 whitespace-nowrap">{statusBadge(c.status)}</td>
 
-                      {/* Time column — changes per tab */}
-                      <td className="py-3.5 px-4 whitespace-nowrap">
-                        {activeTab === 'published' ? (
-                          c.published_at ? (
-                            <div className="text-[11px]">
-                              <div className="text-emerald-600 font-semibold">
-                                {new Date(c.published_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}
+                        {/* Time column — changes per tab */}
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          {activeTab === 'published' ? (
+                            c.published_at ? (
+                              <div className="text-[11px]">
+                                <div className="text-emerald-600 font-semibold">
+                                  {new Date(c.published_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}
+                                </div>
+                                <div className="text-zinc-400">
+                                  {new Date(c.published_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
+                                </div>
                               </div>
-                              <div className="text-zinc-400">
-                                {new Date(c.published_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
+                            ) : <span className="text-zinc-300 text-[11px]">—</span>
+                          ) : activeTab === 'scheduled' ? (
+                            c.scheduled_at ? (
+                              <div className="text-[11px]">
+                                <div className="text-amber-600 font-semibold">
+                                  {new Date(c.scheduled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}
+                                </div>
+                                <div className="text-zinc-400">
+                                  {new Date(c.scheduled_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
+                                </div>
                               </div>
-                            </div>
-                          ) : <span className="text-zinc-300 text-[11px]">—</span>
-                        ) : activeTab === 'scheduled' ? (
-                          c.scheduled_at ? (
-                            <div className="text-[11px]">
-                              <div className="text-amber-600 font-semibold">
-                                {new Date(c.scheduled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}
+                            ) : <span className="text-zinc-300 text-[11px]">—</span>
+                          ) : (
+                            // Queue tab — show ETA
+                            c.status === 'PUBLISHING' ? (
+                              <span className="text-[11px] text-blue-500 font-semibold animate-pulse">⏳ Uploading…</span>
+                            ) : qIdx >= 0 ? (
+                              <div className="text-[11px]">
+                                <div className="text-indigo-600 font-semibold">{formatETA(computeETA(qIdx))}</div>
+                                <div className="text-zinc-400">Queue #{qIdx + 1} · {publishSettings.interval}m interval</div>
                               </div>
-                              <div className="text-zinc-400">
-                                {new Date(c.scheduled_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
-                              </div>
-                            </div>
-                          ) : <span className="text-zinc-300 text-[11px]">—</span>
-                        ) : (
-                          // Queue tab — show ETA
-                          c.status === 'PUBLISHING' ? (
-                            <span className="text-[11px] text-blue-500 font-semibold animate-pulse">⏳ Uploading…</span>
-                          ) : qIdx >= 0 ? (
-                            <div className="text-[11px]">
-                              <div className="text-indigo-600 font-semibold">{formatETA(computeETA(qIdx))}</div>
-                              <div className="text-zinc-400">Queue #{qIdx + 1} · {publishSettings.interval}m interval</div>
-                            </div>
-                          ) : <span className="text-zinc-300 text-[11px]">—</span>
-                        )}
-                      </td>
+                            ) : <span className="text-zinc-300 text-[11px]">—</span>
+                          )}
+                        </td>
 
-                      {/* Actions */}
-                      <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <Link href={`/confessions/${c.id}`} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors" title="View">
-                            <Eye className="w-4 h-4" />
-                          </Link>
-                          <button onClick={() => setSelectedForSchedule(c)} className="p-1.5 rounded-lg text-indigo-500 hover:bg-indigo-50 transition-colors" title="Schedule">
-                            <Calendar className="w-4 h-4" />
-                          </button>
-                          <button onClick={() => setSelectedForPublish(c)} className="p-1.5 rounded-lg text-pink-500 hover:bg-pink-50 transition-colors" title="Publish Now">
-                            <Instagram className="w-4 h-4" />
-                          </button>
-                          <button onClick={() => handleDelete(c.id)} className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors" title="Delete">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        {/* Actions */}
+                        <td className="py-3.5 px-4 text-right whitespace-nowrap pr-6">
+                          <div className="flex items-center justify-end gap-2">
+                            <Link href={`/confessions/${c.id}`} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors" title="View">
+                              <Eye className="w-4 h-4" />
+                            </Link>
+                            <button onClick={() => setSelectedForSchedule(c)} className="p-1.5 rounded-lg text-indigo-500 hover:bg-indigo-50 transition-colors" title="Schedule">
+                              <Calendar className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => setSelectedForPublish(c)} className="p-1.5 rounded-lg text-pink-500 hover:bg-pink-50 transition-colors" title="Publish Now">
+                              <Instagram className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => handleDelete(c.id)} className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors" title="Delete">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
 
             {/* Pagination */}
             {totalPages > 1 && (
