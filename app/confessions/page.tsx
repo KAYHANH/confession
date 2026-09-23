@@ -4,7 +4,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import {
   Search,
-  Filter,
   Eye,
   Check,
   X,
@@ -13,6 +12,9 @@ import {
   Sparkles,
   RefreshCw,
   Trash2,
+  Clock,
+  CheckCircle2,
+  ListTodo,
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -21,19 +23,19 @@ import { PublishModal } from '@/components/confessions/PublishModal';
 import { ScheduleModal } from '@/components/confessions/ScheduleModal';
 import { useToast } from '@/components/ui/ToastContext';
 
+type TabType = 'queue' | 'scheduled' | 'published';
+
 export default function ConfessionsPage() {
-  const [confessions, setConfessions] = useState<Confession[]>([]);
+  const [allConfessions, setAllConfessions] = useState<Confession[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<TabType>('queue');
 
-  // Filters & Pagination
+  // Filters
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [riskFilter, setRiskFilter] = useState<string>('ALL');
-  const [templateFilter, setTemplateFilter] = useState<string>('ALL');
-  const [sortBy, setSortBy] = useState<string>('newest');
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const LIMIT = 20;
 
   // Bulk Selection
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -43,73 +45,92 @@ export default function ConfessionsPage() {
   const [selectedForPublish, setSelectedForPublish] = useState<Confession | null>(null);
   const [selectedForSchedule, setSelectedForSchedule] = useState<Confession | null>(null);
 
-  // Auto-publish settings for ETA calculation
+  // Auto-publish settings for ETA
   const [publishSettings, setPublishSettings] = useState<{
-    interval: number; startHour: number; endHour: number; enabled: boolean;
-  }>({ interval: 120, startHour: 9, endHour: 23, enabled: false });
+    interval: number; startHour: number; endHour: number;
+  }>({ interval: 120, startHour: 9, endHour: 23 });
 
   const { success, error } = useToast();
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
+      // Fetch all confessions (high limit to get full counts)
       const params = new URLSearchParams();
-      if (statusFilter !== 'ALL') params.set('status', statusFilter);
-      if (riskFilter !== 'ALL') params.set('moderationStatus', riskFilter);
-      if (templateFilter !== 'ALL') params.set('templateId', templateFilter);
-      if (search.trim()) params.set('search', search.trim());
-      params.set('sortBy', sortBy);
-      params.set('page', page.toString());
-      params.set('limit', '20');
+      params.set('sortBy', 'oldest');
+      params.set('limit', '500');
 
       const [res, tplRes, settingsRes] = await Promise.all([
         fetch(`/api/confessions?${params.toString()}`),
         fetch('/api/templates'),
         fetch('/api/settings'),
       ]);
-
       const [data, tpls, settings] = await Promise.all([res.json(), tplRes.json(), settingsRes.json()]);
 
-      setConfessions(data.confessions || []);
-      setTotalPages(data.totalPages || 1);
+      setAllConfessions(data.confessions || []);
       setTemplates(tpls || []);
       if (settings) {
         setPublishSettings({
           interval: settings.auto_publish_interval_minutes ?? 120,
           startHour: settings.auto_publish_start_hour ?? 9,
           endHour: settings.auto_publish_end_hour ?? 23,
-          enabled: settings.auto_publish_enabled ?? false,
         });
       }
-    } catch (err: any) {
+    } catch {
       error('Failed to load confessions');
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, riskFilter, templateFilter, search, sortBy, page, error]);
+  }, [error]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { setPage(1); setSelectedIds([]); }, [activeTab, search, riskFilter]);
 
-  /**
-   * Compute estimated upload time for a confession given its queue position (0-indexed).
-   * Skips slots that fall outside active hours (startHour–endHour IST).
-   */
+  // ─── Section filters ──────────────────────────────────────────────────────
+  const queueConfessions = allConfessions.filter(
+    (c) => !['PUBLISHED', 'SCHEDULED', 'REJECTED'].includes(c.status)
+  );
+  const scheduledConfessions = allConfessions.filter((c) => c.status === 'SCHEDULED');
+  const publishedConfessions = allConfessions.filter((c) => c.status === 'PUBLISHED');
+
+  // Apply search + risk filter to the active tab list
+  const applyFilters = (list: Confession[]) => {
+    let filtered = list;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      filtered = filtered.filter(
+        (c) =>
+          (c.cleaned_text || c.original_text).toLowerCase().includes(q) ||
+          c.name.toLowerCase().includes(q) ||
+          c.display_name.toLowerCase().includes(q)
+      );
+    }
+    if (riskFilter !== 'ALL') {
+      filtered = filtered.filter((c) => c.moderation_status === riskFilter);
+    }
+    return filtered;
+  };
+
+  const activeList = applyFilters(
+    activeTab === 'queue' ? queueConfessions :
+    activeTab === 'scheduled' ? scheduledConfessions :
+    publishedConfessions
+  );
+
+  const totalPages = Math.max(1, Math.ceil(activeList.length / LIMIT));
+  const paginated = activeList.slice((page - 1) * LIMIT, page * LIMIT);
+
+  // ─── ETA helpers ─────────────────────────────────────────────────────────
   const computeETA = (queueIndex: number): Date => {
     const { interval, startHour, endHour } = publishSettings;
-    let slotTime = new Date();
-    // Round up to next slot boundary
     const msInterval = interval * 60 * 1000;
-    slotTime = new Date(Math.ceil(slotTime.getTime() / msInterval) * msInterval);
-
+    let slotTime = new Date(Math.ceil(Date.now() / msInterval) * msInterval);
     let slotsRemaining = queueIndex + 1;
     let safety = 0;
     while (slotsRemaining > 0 && safety < 500) {
       safety++;
       const hour = parseInt(
-        new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(slotTime),
-        10,
+        new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(slotTime), 10
       );
       if (hour >= startHour && hour < endHour) {
         slotsRemaining--;
@@ -121,438 +142,389 @@ export default function ConfessionsPage() {
   };
 
   const formatETA = (date: Date): string => {
-    const now = new Date();
-    const diff = date.getTime() - now.getTime();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-
+    const diff = date.getTime() - Date.now();
+    const days = Math.floor(diff / 86400000);
+    const mins = Math.floor((diff % 3600000) / 60000);
     const timeStr = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
     const dateStr = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
-
     if (diff < 60000) return 'Any moment now';
     if (diff < 3600000) return `~${mins}m from now`;
-    return `${dateStr}, ${timeStr}`;
+    return `${dateStr} at ${timeStr}`;
   };
 
-  // Build queue index map: only unpublished confessions in ascending row order
-  const pendingQueue = confessions.filter(
-    (c) => !['PUBLISHED', 'REJECTED', 'PUBLISHING'].includes(c.status)
-  );
-
-  // Bulk Handlers
-  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.checked) {
-      setSelectedIds(confessions.map((c) => c.id));
-    } else {
-      setSelectedIds([]);
-    }
-  };
-
-  const handleSelectOne = (id: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    );
-  };
+  // ─── Bulk handlers ────────────────────────────────────────────────────────
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) =>
+    setSelectedIds(e.target.checked ? paginated.map((c) => c.id) : []);
+  const handleSelectOne = (id: string) =>
+    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
 
   const handleBulkApprove = async () => {
-    if (!confirm(`Are you sure you want to approve ${selectedIds.length} confession(s)?`)) return;
+    if (!confirm(`Approve ${selectedIds.length} confession(s)?`)) return;
     setBulkProcessing(true);
     try {
-      const res = await fetch('/api/confessions/bulk', {
+      await fetch('/api/confessions/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'approve', ids: selectedIds }),
       });
-      if (!res.ok) throw new Error('Bulk approve failed');
-      success(`Successfully approved ${selectedIds.length} confession(s)`);
+      success(`${selectedIds.length} approved`);
       setSelectedIds([]);
       loadData();
-    } catch (err: any) {
-      error(err?.message || 'Bulk approve failed');
-    } finally {
-      setBulkProcessing(false);
-    }
+    } catch { error('Bulk approve failed'); }
+    finally { setBulkProcessing(false); }
   };
 
   const handleBulkReject = async () => {
-    const reason = prompt('Please enter a rejection reason for selected confessions:', 'Bulk rejected by Admin');
-    if (reason === null) return;
-
+    if (!confirm(`Reject ${selectedIds.length} confession(s)?`)) return;
     setBulkProcessing(true);
     try {
-      const res = await fetch('/api/confessions/bulk', {
+      await fetch('/api/confessions/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'reject', ids: selectedIds, reason }),
+        body: JSON.stringify({ action: 'reject', ids: selectedIds }),
       });
-      if (!res.ok) throw new Error('Bulk reject failed');
-      success(`Rejected ${selectedIds.length} confession(s)`);
+      success(`${selectedIds.length} rejected`);
       setSelectedIds([]);
       loadData();
-    } catch (err: any) {
-      error(err?.message || 'Bulk reject failed');
-    } finally {
-      setBulkProcessing(false);
-    }
-  };
-
-  const handleBulkProcessAI = async () => {
-    setBulkProcessing(true);
-    try {
-      const res = await fetch('/api/confessions/bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'process', ids: selectedIds }),
-      });
-      if (!res.ok) throw new Error('Bulk processing failed');
-      success(`AI re-processed ${selectedIds.length} confession(s)`);
-      setSelectedIds([]);
-      loadData();
-    } catch (err: any) {
-      error(err?.message || 'Bulk process failed');
-    } finally {
-      setBulkProcessing(false);
-    }
+    } catch { error('Bulk reject failed'); }
+    finally { setBulkProcessing(false); }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to permanently delete this confession?')) return;
+    if (!confirm('Delete this confession?')) return;
     try {
-      const res = await fetch(`/api/confessions/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Delete failed');
-      success('Confession deleted');
+      await fetch(`/api/confessions/${id}`, { method: 'DELETE' });
+      success('Deleted');
       loadData();
-    } catch (err: any) {
-      error(err?.message || 'Delete failed');
-    }
+    } catch { error('Delete failed'); }
   };
 
-  const getTemplateForConfession = (tplId?: string) => {
-    // Use confession's assigned template, then system default (Deep Story), then first available
-    const DEFAULT_TEMPLATE_ID = '77777777-7777-7777-7777-777777777777';
-    return (
-      templates.find((t) => t.id === tplId) ||
-      templates.find((t) => t.id === DEFAULT_TEMPLATE_ID) ||
-      templates[0]
-    );
+  // ─── Tab config ───────────────────────────────────────────────────────────
+  const tabs: { id: TabType; label: string; icon: React.ReactNode; count: number; color: string }[] = [
+    {
+      id: 'queue',
+      label: 'Upload Queue',
+      icon: <ListTodo className="w-4 h-4" />,
+      count: queueConfessions.length,
+      color: 'indigo',
+    },
+    {
+      id: 'scheduled',
+      label: 'Scheduled',
+      icon: <Clock className="w-4 h-4" />,
+      count: scheduledConfessions.length,
+      color: 'amber',
+    },
+    {
+      id: 'published',
+      label: 'Published',
+      icon: <CheckCircle2 className="w-4 h-4" />,
+      count: publishedConfessions.length,
+      color: 'emerald',
+    },
+  ];
+
+  const tabColorMap: Record<string, string> = {
+    indigo: 'border-indigo-500 text-indigo-700 bg-indigo-50',
+    amber:  'border-amber-500 text-amber-700 bg-amber-50',
+    emerald:'border-emerald-500 text-emerald-700 bg-emerald-50',
+  };
+  const badgeColorMap: Record<string, string> = {
+    indigo: 'bg-indigo-100 text-indigo-700',
+    amber:  'bg-amber-100 text-amber-700',
+    emerald:'bg-emerald-100 text-emerald-700',
+  };
+
+  // ─── Render helpers ───────────────────────────────────────────────────────
+  const riskBadge = (risk: string) => {
+    if (risk === 'HIGH') return <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">HIGH</span>;
+    if (risk === 'MEDIUM') return <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">MEDIUM</span>;
+    return <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">LOW</span>;
+  };
+
+  const statusBadge = (status: string) => {
+    const map: Record<string, string> = {
+      PUBLISHED: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+      PUBLISHING: 'bg-blue-100 text-blue-700 border-blue-200',
+      SCHEDULED: 'bg-amber-100 text-amber-700 border-amber-200',
+      APPROVED: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+      REJECTED: 'bg-rose-100 text-rose-700 border-rose-200',
+      FAILED: 'bg-rose-100 text-rose-700 border-rose-200',
+    };
+    const cls = map[status] || 'bg-zinc-100 text-zinc-700 border-zinc-200';
+    return <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${cls}`}>{status.replace(/_/g, ' ')}</span>;
   };
 
   return (
-    <DashboardLayout title="Confessions Library" subtitle="Search, filter, edit, and moderate all submitted stories">
-      {/* Controls Bar */}
-      <div className="bg-white p-5 rounded-2xl border border-zinc-200/80 shadow-sm mb-6 space-y-4">
-        <div className="flex flex-col md:flex-row gap-4 justify-between items-stretch md:items-center">
-          {/* Search Input */}
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Search by confession text or submitter name..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-zinc-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
-            />
+    <DashboardLayout>
+      <div className="p-6 max-w-7xl mx-auto space-y-6">
+
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-zinc-900">Confessions</h1>
+            <p className="text-sm text-zinc-500 mt-0.5">
+              {allConfessions.length} total · {queueConfessions.length} queued · {publishedConfessions.length} published
+            </p>
           </div>
-
-          {/* Quick Filters */}
-          <div className="flex flex-wrap items-center gap-2.5 text-xs font-medium">
-            <div className="flex items-center gap-1 text-zinc-500 mr-1">
-              <Filter className="w-3.5 h-3.5" />
-              <span>Filters:</span>
-            </div>
-
-            <select
-              value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setPage(1);
-              }}
-              className="px-3 py-2 rounded-xl border border-zinc-200 bg-white text-zinc-800 font-semibold focus:outline-none cursor-pointer"
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="READY_FOR_REVIEW">Ready for Review</option>
-              <option value="APPROVED">Approved</option>
-              <option value="SCHEDULED">Scheduled</option>
-              <option value="PUBLISHED">Published</option>
-              <option value="REJECTED">Rejected</option>
-              <option value="FAILED">Failed</option>
-            </select>
-
-            <select
-              value={riskFilter}
-              onChange={(e) => {
-                setRiskFilter(e.target.value);
-                setPage(1);
-              }}
-              className="px-3 py-2 rounded-xl border border-zinc-200 bg-white text-zinc-800 font-semibold focus:outline-none cursor-pointer"
-            >
-              <option value="ALL">All Risk Levels</option>
-              <option value="LOW">Low Risk</option>
-              <option value="MEDIUM">Medium Risk</option>
-              <option value="HIGH">High Risk</option>
-            </select>
-
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="px-3 py-2 rounded-xl border border-zinc-200 bg-white text-zinc-800 font-semibold focus:outline-none cursor-pointer"
-            >
-              <option value="newest">Newest First</option>
-              <option value="oldest">Oldest First</option>
-              <option value="scheduled">Scheduled Date</option>
-              <option value="recently_published">Recently Published</option>
-            </select>
-          </div>
+          <button
+            onClick={loadData}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-zinc-700 bg-white border border-zinc-200 rounded-xl hover:bg-zinc-50 transition-colors"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
         </div>
 
-        {/* Bulk Action Bar (Visible when items selected) */}
-        {selectedIds.length > 0 && (
-          <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-900 text-white text-xs font-semibold animate-in fade-in">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-brand-400" />
-              <span>{selectedIds.length} confession(s) selected</span>
-            </div>
-
-            <div className="flex items-center gap-2">
+        {/* ── 3 Tabs ── */}
+        <div className="flex gap-2 border-b border-zinc-200">
+          {tabs.map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
               <button
-                onClick={handleBulkProcessAI}
-                disabled={bulkProcessing}
-                className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors flex items-center gap-1.5 cursor-pointer"
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-colors -mb-px ${
+                  isActive
+                    ? tabColorMap[tab.color]
+                    : 'border-transparent text-zinc-500 hover:text-zinc-800'
+                }`}
               >
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Process AI</span>
+                {tab.icon}
+                {tab.label}
+                <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${isActive ? badgeColorMap[tab.color] : 'bg-zinc-100 text-zinc-500'}`}>
+                  {tab.count}
+                </span>
               </button>
+            );
+          })}
+        </div>
 
-              <button
-                onClick={handleBulkApprove}
-                disabled={bulkProcessing}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors flex items-center gap-1.5 cursor-pointer"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>Approve</span>
-              </button>
-
-              <button
-                onClick={handleBulkReject}
-                disabled={bulkProcessing}
-                className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white transition-colors flex items-center gap-1.5 cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-                <span>Reject</span>
-              </button>
-            </div>
+        {/* ── Filters bar ── */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+            <input
+              type="text"
+              placeholder="Search confession text or submitter…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 text-sm border border-zinc-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            />
           </div>
-        )}
-      </div>
+          <select
+            value={riskFilter}
+            onChange={(e) => setRiskFilter(e.target.value)}
+            className="px-3 py-2 text-sm border border-zinc-200 rounded-xl bg-white focus:outline-none"
+          >
+            <option value="ALL">All Risk Levels</option>
+            <option value="LOW">Low Risk</option>
+            <option value="MEDIUM">Medium Risk</option>
+            <option value="HIGH">High Risk</option>
+          </select>
 
-      {/* Confessions Table */}
-      <div className="bg-white rounded-2xl border border-zinc-200/80 shadow-sm overflow-hidden">
+          {/* Bulk actions */}
+          {selectedIds.length > 0 && (
+            <div className="flex items-center gap-2 ml-auto">
+              <span className="text-sm text-zinc-600 font-medium">{selectedIds.length} selected</span>
+              <button onClick={handleBulkApprove} disabled={bulkProcessing} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
+                <Check className="w-3.5 h-3.5" /> Approve All
+              </button>
+              <button onClick={handleBulkReject} disabled={bulkProcessing} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors">
+                <X className="w-3.5 h-3.5" /> Reject All
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ── Table ── */}
         {loading ? (
-          <div className="p-16 text-center text-zinc-500 text-sm flex items-center justify-center gap-2">
-            <RefreshCw className="w-4 h-4 animate-spin" />
-            <span>Loading confessions...</span>
+          <div className="flex justify-center py-20">
+            <RefreshCw className="w-6 h-6 animate-spin text-zinc-400" />
           </div>
-        ) : confessions.length === 0 ? (
-          <div className="p-16 text-center text-zinc-500 text-sm">
-            No confessions match the selected filters or search query.
+        ) : paginated.length === 0 ? (
+          <div className="flex flex-col items-center py-20 text-zinc-400 gap-3">
+            {activeTab === 'queue' && <ListTodo className="w-10 h-10" />}
+            {activeTab === 'scheduled' && <Clock className="w-10 h-10" />}
+            {activeTab === 'published' && <CheckCircle2 className="w-10 h-10" />}
+            <p className="text-sm font-medium">
+              {activeTab === 'queue' && 'No confessions in queue'}
+              {activeTab === 'scheduled' && 'No scheduled confessions'}
+              {activeTab === 'published' && 'No published confessions yet'}
+            </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="bg-white border border-zinc-100 rounded-2xl overflow-hidden shadow-sm">
             <table className="w-full text-left text-xs">
               <thead className="bg-zinc-50/70 border-b border-zinc-100 text-zinc-500 font-semibold uppercase tracking-wider">
                 <tr>
                   <th className="py-3 px-4 w-10">
                     <input
                       type="checkbox"
-                      checked={selectedIds.length === confessions.length && confessions.length > 0}
+                      checked={selectedIds.length === paginated.length && paginated.length > 0}
                       onChange={handleSelectAll}
-                      className="rounded border-zinc-300 text-brand-600 focus:ring-brand-500"
+                      className="rounded border-zinc-300"
                     />
                   </th>
-                  <th className="py-3 px-4">Row / ID</th>
+                  <th className="py-3 px-4">Row</th>
                   <th className="py-3 px-4">Submitter</th>
-                  <th className="py-3 px-4 max-w-sm">Confession Text</th>
+                  <th className="py-3 px-4 max-w-sm">Confession</th>
                   <th className="py-3 px-4">Risk</th>
                   <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">📅 Upload Time</th>
+                  <th className="py-3 px-4">
+                    {activeTab === 'queue' && '📅 Estimated Upload'}
+                    {activeTab === 'scheduled' && '🕐 Scheduled For'}
+                    {activeTab === 'published' && '✅ Published At'}
+                  </th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100 font-medium">
-                {confessions.map((c) => (
-                  <tr key={c.id} className="hover:bg-zinc-50/60 transition-colors">
-                    <td className="py-3.5 px-4">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(c.id)}
-                        onChange={() => handleSelectOne(c.id)}
-                        className="rounded border-zinc-300 text-brand-600 focus:ring-brand-500"
-                      />
-                    </td>
+                {paginated.map((c) => {
+                  const qIdx = activeTab === 'queue' ? queueConfessions.findIndex((q) => q.id === c.id) : -1;
 
-                    <td className="py-3.5 px-4 whitespace-nowrap font-bold text-zinc-900">
-                      #{String(c.google_sheet_row || 1).padStart(3, '0')}
-                    </td>
+                  return (
+                    <tr key={c.id} className="hover:bg-zinc-50/60 transition-colors">
+                      <td className="py-3.5 px-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(c.id)}
+                          onChange={() => handleSelectOne(c.id)}
+                          className="rounded border-zinc-300"
+                        />
+                      </td>
 
-                    <td className="py-3.5 px-4 whitespace-nowrap">
-                      <div className="font-semibold text-zinc-900">
-                        {c.is_anonymous ? 'Anonymous' : c.display_name}
-                      </div>
-                      <div className="text-[10px] text-zinc-600">
-                        {c.is_anonymous ? `Submitted: "${c.name}"` : 'Real Name'}
-                      </div>
-                    </td>
+                      <td className="py-3.5 px-4 font-bold text-zinc-900 whitespace-nowrap">
+                        #{String(c.google_sheet_row || 1).padStart(3, '0')}
+                      </td>
 
-                    <td className="py-3.5 px-4 max-w-sm">
-                      <p className="line-clamp-2 text-zinc-700 font-normal leading-relaxed">
-                        {c.cleaned_text || c.original_text}
-                      </p>
-                      {c.moderation_reason && (
-                        <p className="text-[10px] text-zinc-600 truncate mt-1 italic">
-                          {c.moderation_reason}
-                        </p>
-                      )}
-                    </td>
-
-                    <td className="py-3.5 px-4 whitespace-nowrap">
-                      {c.moderation_status === 'HIGH' && (
-                        <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                          HIGH
-                        </span>
-                      )}
-                      {c.moderation_status === 'MEDIUM' && (
-                        <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                          MEDIUM
-                        </span>
-                      )}
-                      {c.moderation_status === 'LOW' && (
-                        <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                          LOW
-                        </span>
-                      )}
-                    </td>
-
-                    <td className="py-3.5 px-4 whitespace-nowrap">
-                      <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-700 border border-zinc-200">
-                        {c.status.replace(/_/g, ' ')}
-                      </span>
-                    </td>
-
-                    {/* Upload Time / ETA */}
-                    <td className="py-3.5 px-4 whitespace-nowrap">
-                      {c.status === 'PUBLISHED' && c.published_at ? (
-                        <div className="text-[11px]">
-                          <div className="text-emerald-600 font-semibold">✅ Published</div>
-                          <div className="text-zinc-400">
-                            {new Date(c.published_at).toLocaleString('en-IN', {
-                              day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata'
-                            })}
-                          </div>
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <div className="font-semibold text-zinc-900">
+                          {c.is_anonymous ? 'Anonymous' : c.display_name}
                         </div>
-                      ) : c.status === 'REJECTED' ? (
-                        <span className="text-[11px] text-rose-400">—</span>
-                      ) : c.status === 'PUBLISHING' ? (
-                        <span className="text-[11px] text-blue-500 font-semibold animate-pulse">⏳ Uploading…</span>
-                      ) : (
-                        (() => {
-                          const qIdx = pendingQueue.findIndex((q) => q.id === c.id);
-                          if (qIdx === -1) return <span className="text-[11px] text-zinc-300">—</span>;
-                          const eta = computeETA(qIdx);
-                          return (
+                        <div className="text-[10px] text-zinc-500">
+                          {c.is_anonymous ? `"${c.name}"` : 'Real Name'}
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4 max-w-xs">
+                        <p className="line-clamp-2 text-zinc-700 font-normal leading-relaxed">
+                          {c.cleaned_text || c.original_text}
+                        </p>
+                        {c.moderation_reason && (
+                          <p className="text-[10px] text-zinc-400 italic truncate mt-0.5">{c.moderation_reason}</p>
+                        )}
+                      </td>
+
+                      <td className="py-3.5 px-4 whitespace-nowrap">{riskBadge(c.moderation_status)}</td>
+
+                      <td className="py-3.5 px-4 whitespace-nowrap">{statusBadge(c.status)}</td>
+
+                      {/* Time column — changes per tab */}
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        {activeTab === 'published' ? (
+                          c.published_at ? (
                             <div className="text-[11px]">
-                              <div className="text-indigo-600 font-semibold">{formatETA(eta)}</div>
-                              <div className="text-zinc-400">Queue #{qIdx + 1} • every {publishSettings.interval}m</div>
+                              <div className="text-emerald-600 font-semibold">
+                                {new Date(c.published_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}
+                              </div>
+                              <div className="text-zinc-400">
+                                {new Date(c.published_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
+                              </div>
                             </div>
-                          );
-                        })()
-                      )}
-                    </td>
+                          ) : <span className="text-zinc-300 text-[11px]">—</span>
+                        ) : activeTab === 'scheduled' ? (
+                          c.scheduled_at ? (
+                            <div className="text-[11px]">
+                              <div className="text-amber-600 font-semibold">
+                                {new Date(c.scheduled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}
+                              </div>
+                              <div className="text-zinc-400">
+                                {new Date(c.scheduled_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
+                              </div>
+                            </div>
+                          ) : <span className="text-zinc-300 text-[11px]">—</span>
+                        ) : (
+                          // Queue tab — show ETA
+                          c.status === 'PUBLISHING' ? (
+                            <span className="text-[11px] text-blue-500 font-semibold animate-pulse">⏳ Uploading…</span>
+                          ) : qIdx >= 0 ? (
+                            <div className="text-[11px]">
+                              <div className="text-indigo-600 font-semibold">{formatETA(computeETA(qIdx))}</div>
+                              <div className="text-zinc-400">Queue #{qIdx + 1} · {publishSettings.interval}m interval</div>
+                            </div>
+                          ) : <span className="text-zinc-300 text-[11px]">—</span>
+                        )}
+                      </td>
 
-                    <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <Link
-                          href={`/confessions/${c.id}`}
-                          className="p-1.5 rounded-lg text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition-colors"
-                          title="View / Edit"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </Link>
-
-                        <button
-                          onClick={() => setSelectedForSchedule(c)}
-                          className="p-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
-                          title="Schedule Post"
-                        >
-                          <Calendar className="w-4 h-4" />
-                        </button>
-
-                        <button
-                          onClick={() => setSelectedForPublish(c)}
-                          className="p-1.5 rounded-lg text-brand-600 hover:bg-brand-50 transition-colors cursor-pointer"
-                          title="Publish Now"
-                        >
-                          <Instagram className="w-4 h-4" />
-                        </button>
-
-                        <button
-                          onClick={() => handleDelete(c.id)}
-                          className="p-1.5 rounded-lg text-zinc-600 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      {/* Actions */}
+                      <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Link href={`/confessions/${c.id}`} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors" title="View">
+                            <Eye className="w-4 h-4" />
+                          </Link>
+                          <button onClick={() => setSelectedForSchedule(c)} className="p-1.5 rounded-lg text-indigo-500 hover:bg-indigo-50 transition-colors" title="Schedule">
+                            <Calendar className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => setSelectedForPublish(c)} className="p-1.5 rounded-lg text-pink-500 hover:bg-pink-50 transition-colors" title="Publish Now">
+                            <Instagram className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => handleDelete(c.id)} className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors" title="Delete">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
-          </div>
-        )}
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="p-4 border-t border-zinc-100 flex items-center justify-between text-xs text-zinc-500">
-            <span>Page {page} of {totalPages}</span>
-            <div className="flex items-center gap-2">
-              <button
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="px-3 py-1.5 rounded-lg border border-zinc-200 disabled:opacity-40"
-              >
-                Previous
-              </button>
-              <button
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                className="px-3 py-1.5 rounded-lg border border-zinc-200 disabled:opacity-40"
-              >
-                Next
-              </button>
-            </div>
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-100 bg-zinc-50/50">
+                <p className="text-xs text-zinc-500">
+                  Showing {(page - 1) * LIMIT + 1}–{Math.min(page * LIMIT, activeList.length)} of {activeList.length}
+                </p>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="px-3 py-1.5 text-xs font-medium text-zinc-600 bg-white border border-zinc-200 rounded-lg disabled:opacity-40 hover:bg-zinc-50"
+                  >
+                    ← Prev
+                  </button>
+                  <span className="px-3 py-1.5 text-xs font-medium text-zinc-700">
+                    {page} / {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    className="px-3 py-1.5 text-xs font-medium text-zinc-600 bg-white border border-zinc-200 rounded-lg disabled:opacity-40 hover:bg-zinc-50"
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Publish Modal */}
+      {/* Modals */}
       {selectedForPublish && (
         <PublishModal
-          isOpen={!!selectedForPublish}
-          onClose={() => setSelectedForPublish(null)}
           confession={selectedForPublish}
-          template={getTemplateForConfession(selectedForPublish.template_id)}
-          onSuccess={() => loadData()}
+          templates={templates}
+          onClose={() => { setSelectedForPublish(null); loadData(); }}
         />
       )}
-
-      {/* Schedule Modal */}
       {selectedForSchedule && (
         <ScheduleModal
-          isOpen={!!selectedForSchedule}
-          onClose={() => setSelectedForSchedule(null)}
           confession={selectedForSchedule}
-          onSuccess={() => loadData()}
+          onClose={() => { setSelectedForSchedule(null); loadData(); }}
+          onScheduled={() => { setSelectedForSchedule(null); loadData(); }}
         />
       )}
     </DashboardLayout>
