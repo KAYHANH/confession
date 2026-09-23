@@ -178,6 +178,32 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* 24/7 Engine Status & Restart Bar */}
+      <div className="flex items-center justify-between p-3.5 bg-white border border-zinc-200/80 rounded-2xl shadow-sm mb-6 flex-wrap gap-3">
+        <div className="flex items-center gap-2.5 text-sm font-medium text-zinc-700">
+          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+          <span>24/7 Autonomous Publishing Engine</span>
+          {stats && stats.failed > 0 && (
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-700 font-bold border border-rose-200">
+              {stats.failed} failed
+            </span>
+          )}
+        </div>
+        <button
+          onClick={handleRestartQueue}
+          disabled={restartingQueue}
+          className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all shadow-sm disabled:opacity-50 ${
+            stats && stats.failed > 0
+              ? 'bg-rose-600 text-white hover:bg-rose-700'
+              : 'bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100'
+          }`}
+          title="Restart failed queue and trigger publishing cycle"
+        >
+          <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} />
+          {restartingQueue ? 'Restarting…' : stats && stats.failed > 0 ? `Restart Failed Queue (${stats.failed})` : 'Restart Queue'}
+        </button>
+      </div>
+
       {/* KPI Stats Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
         <div className="bg-white p-4 rounded-2xl border border-zinc-200/80 shadow-sm">

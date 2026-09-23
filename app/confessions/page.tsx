@@ -312,17 +312,23 @@ export default function ConfessionsPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {failedConfessions.length > 0 && (
-              <button
-                onClick={() => handleRestartQueue()}
-                disabled={restartingQueue}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm transition-all disabled:opacity-50"
-                title="Restart queue for failed confessions (never touches rejected or published posts)"
-              >
-                <RotateCcw className={`w-4 h-4 ${restartingQueue ? 'animate-spin' : ''}`} />
-                {restartingQueue ? 'Restarting…' : `Restart Queue (${failedConfessions.length})`}
-              </button>
-            )}
+            <button
+              onClick={() => handleRestartQueue()}
+              disabled={restartingQueue}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-xl shadow-sm transition-all disabled:opacity-50 ${
+                failedConfessions.length > 0
+                  ? 'text-white bg-rose-600 hover:bg-rose-700'
+                  : 'text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100'
+              }`}
+              title="Restart queue for failed confessions (never touches rejected or published posts)"
+            >
+              <RotateCcw className={`w-4 h-4 ${restartingQueue ? 'animate-spin' : ''}`} />
+              {restartingQueue
+                ? 'Restarting…'
+                : failedConfessions.length > 0
+                ? `Restart Failed Queue (${failedConfessions.length})`
+                : 'Restart Queue'}
+            </button>
             <button
               onClick={loadData}
               disabled={loading}
@@ -407,6 +413,18 @@ export default function ConfessionsPage() {
             <option value="MEDIUM">Medium Risk</option>
             <option value="HIGH">High Risk</option>
           </select>
+
+          {activeTab === 'queue' && (
+            <button
+              onClick={() => handleRestartQueue()}
+              disabled={restartingQueue}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-xl hover:bg-indigo-100 transition-colors shadow-sm"
+              title="Restart queue for failed confessions (never touches rejected or published posts)"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} />
+              {restartingQueue ? 'Restarting…' : 'Restart Queue'}
+            </button>
+          )}
 
           {/* Bulk actions */}
           {selectedIds.length > 0 && (
