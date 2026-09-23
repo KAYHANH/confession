@@ -399,6 +399,28 @@ export class ConfessionService {
       throw new Error('Cannot publish a rejected confession. Please approve it first.');
     }
 
+    // 2b. Groq AI semantic duplicate check against published posts
+    const allConfessions = mockStore.getConfessions();
+    const publishedPool = allConfessions
+      .filter((c) => c.status === 'PUBLISHED' && c.id !== id)
+      .map((c) => ({
+        row: c.google_sheet_row || 0,
+        text: c.cleaned_text || c.original_text,
+        id: c.id,
+      }));
+
+    if (publishedPool.length > 0) {
+      const dup = await aiService.checkDuplicateWithGroq(
+        confession.cleaned_text || confession.original_text,
+        publishedPool
+      );
+      if (dup.isDuplicate && dup.confidence >= 0.85) {
+        throw new Error(
+          `AI Duplicate Detected: This confession matches published confession #${dup.duplicateOfRow} (${dup.reason})`
+        );
+      }
+    }
+
     // Set lock
     this.publishingLocks.add(id);
 

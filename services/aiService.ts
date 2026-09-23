@@ -222,6 +222,105 @@ Is Anonymous: ${isAnonymous}`;
   ): AIProcessedResult {
     return this.ruleBasedProcess(text, submittedName, isAnonymous, confessionNumber, localMod);
   }
+
+  /**
+   * Use Groq AI to semantically check if a confession is a duplicate of any already published or existing confession
+   */
+  public async checkDuplicateWithGroq(
+    candidateText: string,
+    existingPosts: { row: number; text: string; id?: string }[]
+  ): Promise<{
+    isDuplicate: boolean;
+    duplicateOfRow: number | null;
+    confidence: number;
+    reason: string;
+  }> {
+    if (!this.groqClient || existingPosts.length === 0) {
+      return { isDuplicate: false, duplicateOfRow: null, confidence: 0, reason: 'No comparison posts or AI client not available' };
+    }
+
+    // 1. Fast exact & normalized string check first
+    const normalizedCandidate = candidateText.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+    for (const p of existingPosts) {
+      const normP = p.text.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+      if (normalizedCandidate === normP) {
+        return {
+          isDuplicate: true,
+          duplicateOfRow: p.row,
+          confidence: 1.0,
+          reason: `Exact identical text match with confession #${p.row}`,
+        };
+      }
+    }
+
+    // 2. Groq AI semantic comparison (analyze latest 40 posts)
+    const requestedModel = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+    const sample = existingPosts.slice(0, 40);
+
+    const systemPrompt = `You are an AI content duplicate detector for an Instagram anonymous confession platform.
+Your job is to detect if a NEW confession is a duplicate, repeated submission, or semantic equivalent of any PREVIOUSLY POSTED confession.
+
+RULES:
+1. Two confessions are DUPLICATES if they describe the exact same specific confession (e.g. same specific person named, same unique incident, or rephrased submission from the same person).
+2. General common themes (e.g. two unrelated people talking about exam stress, feeling lonely, or campus life) are NOT duplicates.
+3. Respond in STRICT JSON format:
+{
+  "isDuplicate": boolean,
+  "duplicateOfRow": number | null,
+  "confidence": number,
+  "reason": string
+}`;
+
+    const userPrompt = `NEW CONFESSION:
+"${candidateText}"
+
+PREVIOUS CONFESSIONS:
+${sample.map((p) => `[Row #${p.row}]: "${p.text}"`).join('\n\n')}
+
+Analyze if the NEW CONFESSION is a duplicate of any previous confession.`;
+
+    try {
+      let completion;
+      try {
+        completion = await this.groqClient.chat.completions.create({
+          model: requestedModel,
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+        });
+      } catch (err: any) {
+        const fallbackModel = requestedModel === 'openai/gpt-oss-120b' ? 'llama-3.3-70b-versatile' : 'openai/gpt-oss-120b';
+        completion = await this.groqClient.chat.completions.create({
+          model: fallbackModel,
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+        });
+      }
+
+      const content = completion.choices[0]?.message?.content;
+      if (!content) return { isDuplicate: false, duplicateOfRow: null, confidence: 0, reason: 'Empty AI response' };
+
+      const parsed = JSON.parse(content);
+      const isDup = Boolean(parsed.isDuplicate && (Number(parsed.confidence) || 0) >= 0.75);
+
+      return {
+        isDuplicate: isDup,
+        duplicateOfRow: parsed.duplicateOfRow ?? null,
+        confidence: Number(parsed.confidence) || 0,
+        reason: parsed.reason || '',
+      };
+    } catch (err: any) {
+      console.warn('[AIService] Groq duplicate check skipped due to error:', err?.message || err);
+      return { isDuplicate: false, duplicateOfRow: null, confidence: 0, reason: 'AI check skipped' };
+    }
+  }
 }
 
 export const aiService = new AIService();

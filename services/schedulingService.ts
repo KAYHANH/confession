@@ -1,6 +1,7 @@
 import { confessionService } from './confessionService';
 import { googleSheetsService } from './googleSheetsService';
 import { moderationService } from './moderationService';
+import { aiService } from './aiService';
 import { mockStore } from '@/lib/mockStore';
 import { Confession, ModerationRisk, ConfessionStatus } from '@/types';
 
@@ -357,6 +358,58 @@ export class SchedulingService {
       }
 
       console.log(`[AutoPublisher] Selected confession #${candidate.google_sheet_row} (ID: ${candidate.id}) for auto-publishing.`);
+
+      // 6b. Groq AI Duplicate Detection against all already published posts
+      const previousPosts = allConfessions
+        .filter((c) => c.status === 'PUBLISHED' && c.id !== candidate.id)
+        .map((c) => ({
+          row: c.google_sheet_row || 0,
+          text: c.cleaned_text || c.original_text,
+          id: c.id,
+        }));
+
+      if (previousPosts.length > 0) {
+        console.log(`[AutoPublisher] Running Groq AI duplicate detection for #${candidate.google_sheet_row} against ${previousPosts.length} published post(s)...`);
+        const dupCheck = await aiService.checkDuplicateWithGroq(
+          candidate.cleaned_text || candidate.original_text,
+          previousPosts
+        );
+
+        if (dupCheck.isDuplicate && dupCheck.confidence >= 0.75) {
+          console.warn(`[AutoPublisher] ⚠️ Groq AI detected confession #${candidate.google_sheet_row} as DUPLICATE of #${dupCheck.duplicateOfRow} (${Math.round(dupCheck.confidence * 100)}% confidence): ${dupCheck.reason}`);
+
+          // Mark candidate as REJECTED so it is never published
+          await confessionService.rejectConfession(
+            candidate.id,
+            `AI Duplicate Detection: Duplicate of confession #${dupCheck.duplicateOfRow} (${dupCheck.reason})`
+          );
+
+          // Update Google Sheet with REJECTED
+          const sheetConfig = mockStore.getGoogleSheetConfig();
+          if (candidate.google_sheet_row) {
+            await googleSheetsService.updateRowStatus(sheetConfig, candidate.google_sheet_row, {
+              status: 'REJECTED',
+              error: `AI Duplicate: Matches #${dupCheck.duplicateOfRow}`,
+            });
+          }
+
+          mockStore.addLog({
+            action: 'REJECTED',
+            entity_type: 'confession',
+            entity_id: candidate.id,
+            metadata: {
+              reason: 'AI_DUPLICATE_DETECTED',
+              duplicateOfRow: dupCheck.duplicateOfRow,
+              confidence: dupCheck.confidence,
+              explanation: dupCheck.reason,
+            },
+          });
+
+          // Automatically proceed to next eligible candidate
+          console.log('[AutoPublisher] Duplicate skipped; advancing immediately to next candidate in line...');
+          return await this.processAutoPublishCycle(force);
+        }
+      }
 
       // 7. Auto-prepare AI content & image if not done
       if (!candidate.ai_processed || !candidate.generated_image_url) {
