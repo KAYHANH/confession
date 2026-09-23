@@ -16,8 +16,9 @@ export async function POST(
       return NextResponse.json({ error: 'Confession not found' }, { status: 404 });
     }
 
-    const templateId = confession.template_id || mockStore.getTemplates()[0]?.id;
-    const template = mockStore.getTemplateById(templateId) || mockStore.getTemplates()[0];
+    const defaultTemplateId = mockStore.getSettings().default_template_id;
+    const templateId = confession.template_id || defaultTemplateId || mockStore.getTemplates()[0]?.id;
+    const template = mockStore.getTemplateById(templateId) || mockStore.getTemplateById(defaultTemplateId) || mockStore.getTemplates()[0];
     const settings = mockStore.getSettings();
 
     const imageResult = await imageService.generatePostImage({

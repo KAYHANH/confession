@@ -21,7 +21,10 @@ export async function GET(
     const generatedDir = path.join(process.cwd(), 'public', 'generated');
     const filePath = path.join(generatedDir, safeFilename);
 
-    if (fs.existsSync(filePath)) {
+    const url = new URL(_request.url);
+    const forceRefresh = url.searchParams.get('refresh') === 'true' || url.searchParams.get('t') !== null;
+
+    if (fs.existsSync(filePath) && !forceRefresh) {
       const fileBuffer = fs.readFileSync(filePath);
       return new NextResponse(fileBuffer, {
         status: 200,
@@ -32,13 +35,14 @@ export async function GET(
       });
     }
 
-    // If file does not exist on disk, attempt on-demand generation for the confession
+    // If file does not exist on disk (or forceRefresh is true), generate on-demand for the confession
     const confessionId = safeFilename.replace(/\.png$/i, '');
     const confession = mockStore.getConfessionById(confessionId);
 
     if (confession) {
-      const templateId = confession.template_id || mockStore.getTemplates()[0]?.id;
-      const template = mockStore.getTemplateById(templateId) || mockStore.getTemplates()[0];
+      const defaultTemplateId = mockStore.getSettings().default_template_id;
+      const templateId = confession.template_id || defaultTemplateId || mockStore.getTemplates()[0]?.id;
+      const template = mockStore.getTemplateById(templateId) || mockStore.getTemplateById(defaultTemplateId) || mockStore.getTemplates()[0];
       const settings = mockStore.getSettings();
 
       const imgRes = await imageService.generatePostImage({
@@ -55,7 +59,7 @@ export async function GET(
           status: 200,
           headers: {
             'Content-Type': 'image/png',
-            'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
           },
         });
       }

@@ -28,6 +28,22 @@ export async function POST(request: NextRequest) {
     }
     const updated = mockStore.updateSettings(body);
 
+    if (body.default_template_id) {
+      const confessions = mockStore.getConfessions();
+      let updatedCount = 0;
+      for (const c of confessions) {
+        if (c.status !== 'PUBLISHED') {
+          c.template_id = body.default_template_id;
+          c.generated_image_url = null;
+          c.generated_image_path = null;
+          updatedCount++;
+        }
+      }
+      if (updatedCount > 0) {
+        mockStore.save();
+      }
+    }
+
     if (body.enable_pii_detection !== undefined) {
       await confessionService.syncPiiSettings(Boolean(body.enable_pii_detection));
     }

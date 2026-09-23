@@ -439,20 +439,24 @@ export class ConfessionService {
         metadata: { attempt: (confession.retry_count || 0) + 1 },
       });
 
-      // 4. Ensure card image is generated
-      let imageUrl = confession.generated_image_url;
-      if (!imageUrl) {
-        const template = mockStore.getTemplateById(confession.template_id) || mockStore.getTemplateById(mockStore.getSettings().default_template_id) || mockStore.getTemplates().find(t => t.id === '44444444-4444-4444-4444-444444444444') || mockStore.getTemplates()[0];
-        const settings = mockStore.getSettings();
-        const imgRes = await imageService.generatePostImage({
-          confession,
-          template,
-          brandName: settings.brand_name,
-          instagramHandle: settings.instagram_handle,
-          confessionNumber: confession.google_sheet_row || 1,
-        });
-        imageUrl = imgRes.publicUrl;
-      }
+      // 4. Ensure card image is freshly and accurately generated using current template
+      const defaultTemplateId = mockStore.getSettings().default_template_id;
+      const targetTemplateId = confession.template_id || defaultTemplateId || '44444444-4444-4444-4444-444444444444';
+      const template = mockStore.getTemplateById(targetTemplateId) || mockStore.getTemplateById(defaultTemplateId) || mockStore.getTemplates().find(t => t.id === '44444444-4444-4444-4444-444444444444') || mockStore.getTemplates()[0];
+      const settings = mockStore.getSettings();
+      const imgRes = await imageService.generatePostImage({
+        confession,
+        template,
+        brandName: settings.brand_name,
+        instagramHandle: settings.instagram_handle,
+        confessionNumber: confession.google_sheet_row || 1,
+      });
+      const imageUrl = imgRes.publicUrl;
+      await this.updateConfession(id, {
+        template_id: template.id,
+        generated_image_url: imgRes.publicUrl,
+        generated_image_path: imgRes.localPath,
+      });
 
       // Format caption with hashtags
       const hashtagsStr = (confession.hashtags || []).join(' ');

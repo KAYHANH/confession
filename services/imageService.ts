@@ -402,7 +402,71 @@ export class ImageService {
   }
 
   /**
-   * Fallback SVG renderer to guarantee a pixel-perfect 1080x1080 visual card
+   * Safely parse CSS backgrounds (solid colors or linear gradients) into valid SVG defs and fill
+   */
+  public parseSvgBackground(background: string): { defs: string; fill: string } {
+    if (!background || typeof background !== 'string') {
+      return { defs: '', fill: '#fff1f2' };
+    }
+
+    const trimmed = background.trim();
+
+    // Check if it's a solid color (no gradient)
+    if (!trimmed.toLowerCase().includes('gradient')) {
+      return { defs: '', fill: trimmed };
+    }
+
+    // Default angle coords: diagonal top-left (0%,0%) to bottom-right (100%,100%)
+    let x1 = '0%';
+    let y1 = '0%';
+    let x2 = '100%';
+    let y2 = '100%';
+
+    const angleMatch = trimmed.match(/(\d+)deg/i);
+    if (angleMatch) {
+      const deg = parseInt(angleMatch[1], 10);
+      if (deg >= 70 && deg <= 110) {
+        x1 = '0%'; y1 = '0%'; x2 = '100%'; y2 = '0%';
+      } else if (deg >= 160 && deg <= 200) {
+        x1 = '0%'; y1 = '0%'; x2 = '0%'; y2 = '100%';
+      } else {
+        x1 = '0%'; y1 = '0%'; x2 = '100%'; y2 = '100%';
+      }
+    }
+
+    // Extract color stops: handles #hex, rgb(...), rgba(...) with optional percentage e.g. #fff1f2 0%
+    const colorStopRegex = /(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\))(?:\s+(\d+)%)?/g;
+    const stops: { color: string; offset: string }[] = [];
+    let match: RegExpExecArray | null;
+
+    while ((match = colorStopRegex.exec(trimmed)) !== null) {
+      stops.push({
+        color: match[1],
+        offset: match[2] !== undefined ? `${match[2]}%` : '',
+      });
+    }
+
+    if (stops.length === 0) {
+      return { defs: '', fill: '#fff1f2' };
+    }
+
+    // Assign offsets if missing
+    const formattedStops = stops
+      .map((s, idx) => {
+        const offset = s.offset || `${Math.round((idx / Math.max(stops.length - 1, 1)) * 100)}%`;
+        return `<stop offset="${offset}" stop-color="${s.color}" />`;
+      })
+      .join('\n        ');
+
+    const defs = `<linearGradient id="bgGrad" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">
+        ${formattedStops}
+      </linearGradient>`;
+
+    return { defs, fill: 'url(#bgGrad)' };
+  }
+
+  /**
+   * High-fidelity SVG renderer generating a pixel-perfect 1080x1350 visual card
    */
   private async generateSvgPngFallback(options: ImageGenerationOptions, targetPath: string): Promise<void> {
     const { confession, template, brandName = 'Campus Confessions', instagramHandle = '@campusconfessions', confessionNumber = 1 } = options;
@@ -411,55 +475,65 @@ export class ImageService {
     const safeName = this.escapeHtml(confession.is_anonymous ? 'Anonymous' : confession.display_name);
 
     const len = safeText.length;
-    let charsPerLine = 38;
-    let fontSize = 32;
-    let lineSpacing = 44;
-    let startY = 400;   // pushed down — more vertical space in 4:5
+    let charsPerLine = 34;
+    let fontSize = 38;
+    let lineSpacing = 54;
+    let startY = 400;
     let showQuote = true;
 
     if (len < 250) {
-      charsPerLine = 38;
-      fontSize = 34;
-      lineSpacing = 48;
-      startY = 420;
+      charsPerLine = 34;
+      fontSize = 38;
+      lineSpacing = 54;
+      startY = 400;
       showQuote = true;
     } else if (len < 550) {
-      charsPerLine = 48;
-      fontSize = 27;
-      lineSpacing = 38;
-      startY = 360;
+      charsPerLine = 42;
+      fontSize = 30;
+      lineSpacing = 44;
+      startY = 330;
       showQuote = true;
-    } else if (len < 1100) {
-      charsPerLine = 60;
-      fontSize = 21;
-      lineSpacing = 29;
-      startY = 280;
+    } else if (len < 1000) {
+      charsPerLine = 48;
+      fontSize = 25;
+      lineSpacing = 37;
+      startY = 260;
       showQuote = false;
     } else {
-      charsPerLine = 72;
-      fontSize = 16;
-      lineSpacing = 22;
-      startY = 240;
+      charsPerLine = 56;
+      fontSize = 22;
+      lineSpacing = 32;
+      startY = 220;
       showQuote = false;
     }
 
-    // Split into readable lines for SVG text wrapping
-    const words = safeText.split(' ');
+    // Split text into paragraphs to preserve line breaks, then wrap each paragraph into lines
+    const paragraphs = safeText.split(/\r?\n/);
     const lines: string[] = [];
-    let currentLine = '';
-    for (const word of words) {
-      if ((currentLine + ' ' + word).length > charsPerLine) {
-        lines.push(currentLine.trim());
-        currentLine = word;
-      } else {
-        currentLine += ' ' + word;
+    for (const paragraph of paragraphs) {
+      const trimmedPara = paragraph.trim();
+      if (!trimmedPara) {
+        if (lines.length > 0 && lines[lines.length - 1] !== '') {
+          lines.push('');
+        }
+        continue;
       }
+      const words = trimmedPara.split(/\s+/);
+      let currentLine = '';
+      for (const word of words) {
+        if ((currentLine + ' ' + word).trim().length > charsPerLine) {
+          if (currentLine) lines.push(currentLine.trim());
+          currentLine = word;
+        } else {
+          currentLine = currentLine ? currentLine + ' ' + word : word;
+        }
+      }
+      if (currentLine) lines.push(currentLine.trim());
     }
-    if (currentLine) lines.push(currentLine.trim());
 
     // Footer starts at y=1210 in 1350px canvas
     const footerDividerY = 1210;
-    const maxAvailableHeight = footerDividerY - startY - 80;
+    const maxAvailableHeight = footerDividerY - startY - 70;
     const maxLines = Math.floor(maxAvailableHeight / lineSpacing);
     const displayLines = lines.slice(0, maxLines);
     if (lines.length > maxLines && displayLines.length > 0) {
@@ -468,51 +542,59 @@ export class ImageService {
     }
 
     const lastLineY = startY + (displayLines.length - 1) * lineSpacing;
-    const signatureY = Math.min(1170, lastLineY + 42);
+    const signatureY = Math.min(1160, lastLineY + 44);
+
+    const isSerif = template.font_family === 'serif';
+    const textFontFamily = isSerif
+      ? `'Playfair Display', 'Georgia', 'Times New Roman', serif`
+      : `'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif`;
+    const uiFontFamily = `'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif`;
+
+    const { defs, fill } = this.parseSvgBackground(template.background);
 
     const svg = `<svg width="1080" height="1350" viewBox="0 0 1080 1350" xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="${template.background.includes('linear') ? '#1e1b4b' : template.background}" />
-          <stop offset="100%" stop-color="${template.background.includes('linear') ? '#4338ca' : '#f3f4f6'}" />
-        </linearGradient>
+        ${defs}
       </defs>
-      <rect width="1080" height="1350" fill="url(#bgGrad)" />
+      <rect width="1080" height="1350" fill="${fill}" />
       
+      <!-- Ambient Glow Orb -->
+      <circle cx="540" cy="675" r="420" fill="${template.accent_color}" fill-opacity="0.06" />
+
       <!-- Header Badge -->
-      <rect x="70" y="70" width="280" height="52" rx="26" fill="${template.accent_color}" fill-opacity="0.18" stroke="${template.accent_color}" stroke-width="2" />
-      <text x="210" y="104" font-family="system-ui, sans-serif" font-size="20" font-weight="bold" fill="${template.accent_color}" text-anchor="middle" letter-spacing="1.5">
+      <rect x="70" y="70" width="280" height="52" rx="26" fill="${template.accent_color}" fill-opacity="0.14" stroke="${template.accent_color}" stroke-width="2" />
+      <text x="210" y="103" font-family="${uiFontFamily}" font-size="19" font-weight="700" fill="${template.accent_color}" text-anchor="middle" letter-spacing="1.5">
         CONFESSION #${numFormatted}
       </text>
       
       <!-- Brand Top -->
-      <text x="1010" y="104" font-family="system-ui, sans-serif" font-size="20" font-weight="600" fill="${template.text_color}" opacity="0.75" text-anchor="end">
+      <text x="1010" y="103" font-family="${uiFontFamily}" font-size="20" font-weight="700" fill="${template.text_color}" opacity="0.8" text-anchor="end">
         ${this.escapeHtml(brandName)}
       </text>
 
       ${showQuote ? `<!-- Quote Mark -->
-      <text x="70" y="${startY - 30}" font-family="Georgia, serif" font-size="86" fill="${template.accent_color}" opacity="0.85">&#8220;</text>` : ''}
+      <text x="70" y="${startY - 25}" font-family="Georgia, serif" font-size="92" font-weight="bold" fill="${template.accent_color}" opacity="0.85">&#8220;</text>` : ''}
 
       <!-- Confession Text Lines -->
-      ${displayLines.map((l, i) => `
-        <text x="70" y="${startY + i * lineSpacing}" font-family="system-ui, sans-serif" font-size="${fontSize}" font-weight="500" fill="${template.text_color}">
+      ${displayLines.map((l, i) => l ? `
+        <text x="70" y="${startY + i * lineSpacing}" font-family="${textFontFamily}" font-size="${fontSize}" font-weight="600" fill="${template.text_color}">
           ${l}
         </text>
-      `).join('')}
+      ` : '').join('')}
 
       <!-- Signature -->
       ${template.show_name ? `
-      <line x1="70" y1="${signatureY}" x2="110" y2="${signatureY}" stroke="${template.accent_color}" stroke-width="3" stroke-linecap="round" />
-      <text x="125" y="${signatureY + 6}" font-family="system-ui, sans-serif" font-size="20" font-weight="bold" fill="${template.accent_color}">
+      <line x1="70" y1="${signatureY}" x2="115" y2="${signatureY}" stroke="${template.accent_color}" stroke-width="3.5" stroke-linecap="round" />
+      <text x="130" y="${signatureY + 7}" font-family="${textFontFamily}" font-size="22" font-weight="700" fill="${template.accent_color}">
         ${safeName}
       </text>` : ''}
 
       <!-- Footer Divider & Meta -->
-      <line x1="70" y1="${footerDividerY}" x2="1010" y2="${footerDividerY}" stroke="${template.text_color}" stroke-opacity="0.18" stroke-width="1.5" />
-      <text x="70" y="${footerDividerY + 46}" font-family="system-ui, sans-serif" font-size="18" fill="${template.text_color}" opacity="0.7">
+      <line x1="70" y1="${footerDividerY}" x2="1010" y2="${footerDividerY}" stroke="${template.text_color}" stroke-opacity="0.22" stroke-width="1.5" />
+      <text x="70" y="${footerDividerY + 46}" font-family="${uiFontFamily}" font-size="18" font-weight="600" fill="${template.text_color}" opacity="0.75">
         ${this.escapeHtml(brandName)} &#8226; ${this.escapeHtml(instagramHandle)}
       </text>
-      <text x="1010" y="${footerDividerY + 46}" font-family="system-ui, sans-serif" font-size="18" fill="${template.text_color}" opacity="0.5" text-anchor="end">
+      <text x="1010" y="${footerDividerY + 46}" font-family="${uiFontFamily}" font-size="18" font-weight="700" fill="${template.accent_color}" opacity="0.9" text-anchor="end">
         ConfessionFlow
       </text>
     </svg>`;
@@ -527,7 +609,6 @@ export class ImageService {
       await sharp(Buffer.from(svg)).png().toFile(targetPath);
     } catch (sharpErr: any) {
       console.warn('[ImageService] Sharp conversion fallback warning:', sharpErr?.message);
-      // If sharp fails for any reason, write raw file as last resort
       fs.writeFileSync(targetPath, svg, 'utf-8');
     }
   }
