@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { mockStore } from '@/lib/mockStore';
+import { confessionService } from '@/services/confessionService';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,6 +27,10 @@ export async function POST(request: NextRequest) {
       body.publishing_mode = 'AUTO_PUBLISH';
     }
     const updated = mockStore.updateSettings(body);
+
+    if (body.enable_pii_detection !== undefined) {
+      await confessionService.syncPiiSettings(Boolean(body.enable_pii_detection));
+    }
     mockStore.addLog({
       action: 'SETTINGS_UPDATED',
       entity_type: 'settings',

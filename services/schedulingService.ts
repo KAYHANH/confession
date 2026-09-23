@@ -129,11 +129,12 @@ export class SchedulingService {
       const newId = `confession-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
       // In-memory safety analysis & PII masking
-      const moderationResult = moderationService.analyzeContent(row.confession);
-      const cleanedText = moderationService.maskSensitiveInformation(
-        row.confession,
-        moderationResult.piiDetected
-      );
+      const currentSettings = mockStore.getSettings();
+      const enablePii = currentSettings.enable_pii_detection !== false;
+      const moderationResult = moderationService.analyzeContent(row.confession, enablePii);
+      const cleanedText = enablePii
+        ? moderationService.maskSensitiveInformation(row.confession, moderationResult.piiDetected)
+        : row.confession;
 
       const isAnon = row.isAnonymous !== undefined 
         ? row.isAnonymous 

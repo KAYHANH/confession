@@ -1,6 +1,7 @@
 import Groq from 'groq-sdk';
 import { AIProcessedResult, ModerationRisk, RecommendedAction } from '@/types';
 import { moderationService } from './moderationService';
+import { mockStore } from '@/lib/mockStore';
 
 export class AIService {
   private groqClient: Groq | null = null;
@@ -21,9 +22,13 @@ export class AIService {
     isAnonymous: boolean = true,
     confessionNumber: number = 1
   ): Promise<AIProcessedResult> {
-    // 1. Run strict rule-based moderation & PII screening first
-    const localMod = moderationService.analyzeContent(originalText);
-    const maskedText = moderationService.maskSensitiveInformation(originalText, localMod.piiDetected);
+    // 1. Run moderation & PII screening according to user settings
+    const settings = mockStore.getSettings();
+    const enablePii = settings.enable_pii_detection !== false;
+    const localMod = moderationService.analyzeContent(originalText, enablePii);
+    const maskedText = enablePii
+      ? moderationService.maskSensitiveInformation(originalText, localMod.piiDetected)
+      : originalText;
 
     // 2. Check if Groq client is configured
     if (!this.groqClient) {

@@ -5,6 +5,7 @@ import { aiService } from './aiService';
 import { imageService } from './imageService';
 import { instagramService } from './instagramService';
 import { googleSheetsService } from './googleSheetsService';
+import { moderationService } from './moderationService';
 
 // Valid status transitions map
 export const ALLOWED_TRANSITIONS: Record<ConfessionStatus, ConfessionStatus[]> = {
@@ -630,11 +631,23 @@ export class ConfessionService {
 
       // 3. Reset failed confession back into queue
       try {
-        await this.updateConfession(confession.id, {
+        const updateFields: Partial<Confession> = {
           status: nextStatus,
           error_message: null,
           retry_count: 0,
-        });
+        };
+
+        // If PII detection is disabled by user, unmask social handles/PII from original submission
+        if (settings.enable_pii_detection === false) {
+          const mod = moderationService.analyzeContent(confession.original_text, false);
+          updateFields.cleaned_text = confession.original_text;
+          updateFields.moderation_status = mod.risk;
+          updateFields.moderation_reason = mod.reasons.length > 0 ? mod.reasons.join('; ') : 'Passed safety validation.';
+          updateFields.generated_image_url = null; // Forces fresh card image render with real handle
+          updateFields.generated_image_path = null;
+        }
+
+        await this.updateConfession(confession.id, updateFields);
 
         // 4. Update Google Sheet row status back to QUEUED if present
         if (confession.google_sheet_row) {
@@ -669,6 +682,41 @@ export class ConfessionService {
       skippedRejected,
       skippedPublished,
     };
+  }
+
+  /**
+   * Synchronize PII masking state for existing unpublished confessions.
+   * If enablePii is false, unmasks social handles/PII and re-evaluates moderation risk.
+   */
+  public async syncPiiSettings(enablePii: boolean): Promise<number> {
+    const all = mockStore.getConfessions();
+    let updatedCount = 0;
+
+    for (const c of all) {
+      if (c.status === 'PUBLISHED') continue;
+
+      if (!enablePii) {
+        // Re-analyze original text without PII masking
+        const mod = moderationService.analyzeContent(c.original_text, false);
+        const hasMaskedPattern = (c.cleaned_text || '').includes('@****') || (c.cleaned_text || '').includes('****');
+        const hadPiiReason = (c.moderation_reason || '').includes('Private social handle') || (c.moderation_reason || '').includes('Phone number');
+
+        if (hasMaskedPattern || hadPiiReason) {
+          const newCleanedText = hasMaskedPattern ? c.original_text : c.cleaned_text;
+          const newReason = mod.reasons.length > 0 ? mod.reasons.join('; ') : 'Passed safety validation.';
+          mockStore.updateConfession(c.id, {
+            cleaned_text: newCleanedText,
+            moderation_status: mod.risk,
+            moderation_reason: newReason,
+            generated_image_url: null,
+            generated_image_path: null,
+            caption: (c.caption || '').replace(/@\*{4}/g, (c.original_text.match(/@[a-zA-Z0-9_.]+/)?.[0] || '@****')),
+          });
+          updatedCount++;
+        }
+      }
+    }
+    return updatedCount;
   }
 
   /**

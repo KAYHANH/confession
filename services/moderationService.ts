@@ -56,7 +56,7 @@ export class ModerationService {
   /**
    * Analyze input confession text for PII, abusive content, threats, and calculate moderation risk
    */
-  public analyzeContent(text: string): ModerationCheckResult {
+  public analyzeContent(text: string, enablePii: boolean = true): ModerationCheckResult {
     const reasons: string[] = [];
     const flaggedKeywords: string[] = [];
     const piiDetected: ModerationCheckResult['piiDetected'] = [];
@@ -77,64 +77,67 @@ export class ModerationService {
       }
     }
 
-    // 3. Detect PII: Phone numbers
-    const phones = text.match(PHONE_REGEX) || [];
-    for (const phone of phones) {
-      // Avoid false positive on simple numbers like years (2024)
-      if (phone.replace(/\D/g, '').length >= 10) {
-        piiDetected.push({
-          type: 'phone',
-          value: phone,
-          masked: this.maskPhone(phone),
-        });
-        reasons.push(`Phone number detected: ${this.maskPhone(phone)}`);
+    // PII Detection (Skipped when Strict PII Masking & Detection is disabled)
+    if (enablePii) {
+      // 3. Detect PII: Phone numbers
+      const phones = text.match(PHONE_REGEX) || [];
+      for (const phone of phones) {
+        // Avoid false positive on simple numbers like years (2024)
+        if (phone.replace(/\D/g, '').length >= 10) {
+          piiDetected.push({
+            type: 'phone',
+            value: phone,
+            masked: this.maskPhone(phone),
+          });
+          reasons.push(`Phone number detected: ${this.maskPhone(phone)}`);
+        }
       }
-    }
 
-    // 4. Detect PII: Emails
-    const emails = text.match(EMAIL_REGEX) || [];
-    for (const email of emails) {
-      piiDetected.push({
-        type: 'email',
-        value: email,
-        masked: this.maskEmail(email),
-      });
-      reasons.push(`Email address detected: ${this.maskEmail(email)}`);
-    }
+      // 4. Detect PII: Emails
+      const emails = text.match(EMAIL_REGEX) || [];
+      for (const email of emails) {
+        piiDetected.push({
+          type: 'email',
+          value: email,
+          masked: this.maskEmail(email),
+        });
+        reasons.push(`Email address detected: ${this.maskEmail(email)}`);
+      }
 
-    // 5. Detect PII: Credit card / Govt IDs
-    const cards = text.match(CREDIT_CARD_REGEX) || [];
-    for (const card of cards) {
-      const digits = card.replace(/\D/g, '');
-      if (digits.length >= 13 && digits.length <= 16) {
+      // 5. Detect PII: Credit card / Govt IDs
+      const cards = text.match(CREDIT_CARD_REGEX) || [];
+      for (const card of cards) {
+        const digits = card.replace(/\D/g, '');
+        if (digits.length >= 13 && digits.length <= 16) {
+          piiDetected.push({
+            type: 'card_id',
+            value: card,
+            masked: '****-****-****-**' + digits.slice(-2),
+          });
+          reasons.push('Possible payment card or financial account number detected');
+        }
+      }
+
+      const ids = text.match(AADHAAR_OR_SSN_REGEX) || [];
+      for (const id of ids) {
         piiDetected.push({
           type: 'card_id',
-          value: card,
-          masked: '****-****-****-**' + digits.slice(-2),
+          value: id,
+          masked: '***-**-****',
         });
-        reasons.push('Possible payment card or financial account number detected');
+        reasons.push('Government identity number detected');
       }
-    }
 
-    const ids = text.match(AADHAAR_OR_SSN_REGEX) || [];
-    for (const id of ids) {
-      piiDetected.push({
-        type: 'card_id',
-        value: id,
-        masked: '***-**-****',
-      });
-      reasons.push('Government identity number detected');
-    }
-
-    // 6. Detect PII: Social media handles (e.g. @priya_12)
-    const handles = text.match(HANDLE_REGEX) || [];
-    for (const handle of handles) {
-      piiDetected.push({
-        type: 'handle',
-        value: handle,
-        masked: '@****',
-      });
-      reasons.push(`Private social handle referenced: ${handle}`);
+      // 6. Detect PII: Social media handles (e.g. @priya_12)
+      const handles = text.match(HANDLE_REGEX) || [];
+      for (const handle of handles) {
+        piiDetected.push({
+          type: 'handle',
+          value: handle,
+          masked: '@****',
+        });
+        reasons.push(`Private social handle referenced: ${handle}`);
+      }
     }
 
     // Determine Risk Level
