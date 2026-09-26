@@ -812,48 +812,94 @@ function SettingsContent() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                   <div>
-                    <label className="block font-semibold text-zinc-700 mb-1.5">
-                      Base Post Cooldown
-                    </label>
-                    <select
-                      value={generalSettings.auto_publish_interval_minutes || 60}
-                      onChange={(e) => updateSettingField('auto_publish_interval_minutes', parseInt(e.target.value, 10))}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
-                    >
-                      <option value={60}>Every 1 Hour (60m - Safe Base)</option>
-                      <option value={90}>Every 1.5 Hours (90m Base)</option>
-                      <option value={120}>Every 2 Hours (120m Base)</option>
-                      <option value={180}>Every 3 Hours (180m Base)</option>
-                      <option value={240}>Every 4 Hours (240m Base)</option>
-                    </select>
-                    <span className="text-[10px] text-zinc-500 mt-1 block">
-                      Minimum required gap between uploads.
-                    </span>
-                  </div>
-
-                  <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="block font-semibold text-zinc-700">
-                        Anti-Bot Natural Jitter
+                        Posting Gap Strategy
                       </label>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
-                        +{generalSettings.current_jitter_minutes ?? 14}m active
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 font-bold border border-purple-200">
+                        {generalSettings.random_gap_enabled !== false ? '🎲 Organic' : '⏱️ Fixed'}
                       </span>
                     </div>
                     <select
-                      value={generalSettings.anti_bot_jitter_minutes ?? 30}
-                      onChange={(e) => updateSettingField('anti_bot_jitter_minutes', parseInt(e.target.value, 10))}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
+                      value={generalSettings.random_gap_enabled !== false ? 'random' : 'fixed'}
+                      onChange={(e) => updateSettingField('random_gap_enabled', e.target.value === 'random')}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-semibold bg-white"
                     >
-                      <option value={30}>+0 to +30 min (Default: ~64m, ~78m, ~85m)</option>
-                      <option value={15}>+0 to +15 min (Mild: ~60m to ~75m)</option>
-                      <option value={45}>+0 to +45 min (Extended: ~60m to ~105m)</option>
-                      <option value={0}>0 min (Disabled - Fixed robotic intervals)</option>
+                      <option value="random">Dynamic Random Gaps (45m - 1.5h)</option>
+                      <option value="fixed">Fixed Cooldown + Jitter</option>
                     </select>
                     <span className="text-[10px] text-zinc-500 mt-1 block">
-                      Completely eliminates robotic fixed timestamps.
+                      {generalSettings.random_gap_enabled !== false
+                        ? `Varies randomly: ~49m, ~53m, ~70m, ~1.5h`
+                        : 'Fixed base cooldown interval.'}
                     </span>
                   </div>
+
+                  {generalSettings.random_gap_enabled !== false ? (
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block font-semibold text-zinc-700">
+                          Random Gap Range
+                        </label>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
+                          {generalSettings.current_random_gap_minutes ?? 53}m next
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={generalSettings.min_gap_minutes ?? 45}
+                          onChange={(e) => updateSettingField('min_gap_minutes', parseInt(e.target.value, 10))}
+                          className="w-1/2 px-2 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
+                        >
+                          <option value={35}>35m min</option>
+                          <option value={40}>40m min</option>
+                          <option value={45}>45m min (Default)</option>
+                          <option value={50}>50m min</option>
+                          <option value={60}>60m min</option>
+                        </select>
+                        <span className="text-zinc-500 text-xs">to</span>
+                        <select
+                          value={generalSettings.max_gap_minutes ?? 95}
+                          onChange={(e) => updateSettingField('max_gap_minutes', parseInt(e.target.value, 10))}
+                          className="w-1/2 px-2 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
+                        >
+                          <option value={75}>75m max</option>
+                          <option value={85}>85m max</option>
+                          <option value={90}>90m max (1.5h)</option>
+                          <option value={95}>95m max (Default)</option>
+                          <option value={110}>110m max</option>
+                          <option value={120}>120m max (2h)</option>
+                        </select>
+                      </div>
+                      <span className="text-[10px] text-zinc-500 mt-1 block">
+                        Randomly rolls between {generalSettings.min_gap_minutes ?? 45}m and {generalSettings.max_gap_minutes ?? 95}m.
+                      </span>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block font-semibold text-zinc-700">
+                          Base Post Cooldown
+                        </label>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
+                          +{generalSettings.current_jitter_minutes ?? 14}m jitter
+                        </span>
+                      </div>
+                      <select
+                        value={generalSettings.auto_publish_interval_minutes || 60}
+                        onChange={(e) => updateSettingField('auto_publish_interval_minutes', parseInt(e.target.value, 10))}
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
+                      >
+                        <option value={60}>Every 1 Hour (60m Base)</option>
+                        <option value={90}>Every 1.5 Hours (90m Base)</option>
+                        <option value={120}>Every 2 Hours (120m Base)</option>
+                        <option value={180}>Every 3 Hours (180m Base)</option>
+                      </select>
+                      <span className="text-[10px] text-zinc-500 mt-1 block">
+                        Fixed gap plus +0 to +30m jitter.
+                      </span>
+                    </div>
+                  )}
 
                   <div>
                     <label className="block font-semibold text-zinc-700 mb-1.5">
@@ -919,9 +965,17 @@ function SettingsContent() {
                       <p className="text-zinc-600">Active 9:00 AM to 10:00 PM only. Shuts down overnight to mimic natural human sleep cycles.</p>
                     </div>
                     <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/60 shadow-xs">
-                      <p className="font-semibold text-zinc-900 mb-0.5">⏱️ Anti-Bot Natural Jitter</p>
+                      <p className="font-semibold text-zinc-900 mb-0.5">🎲 Organic Random Gaps</p>
                       <p className="text-zinc-600">
-                        <strong className="text-emerald-700 font-semibold">+{generalSettings.current_jitter_minutes ?? 14}m dynamic variance</strong> applied to next post. Completely eliminates robotic fixed timestamps (e.g. posts won't fire at exact clockwork intervals like 60m 00s; instead, gaps vary between ~64m, ~78m, ~85m, etc.).
+                        {generalSettings.random_gap_enabled !== false ? (
+                          <>
+                            <strong className="text-emerald-700 font-semibold">{generalSettings.current_random_gap_minutes ?? 53}m random gap</strong> active for upcoming post. Gaps vary organically between {generalSettings.min_gap_minutes ?? 45}m and {generalSettings.max_gap_minutes ?? 95}m (e.g. 49m, 53m, 70m, 1.5h) to eliminate robotic clockwork patterns.
+                          </>
+                        ) : (
+                          <>
+                            <strong className="text-emerald-700 font-semibold">+{generalSettings.current_jitter_minutes ?? 14}m jitter</strong> applied to fixed cooldown.
+                          </>
+                        )}
                       </p>
                     </div>
                     <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/60 shadow-xs">

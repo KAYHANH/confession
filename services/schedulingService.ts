@@ -28,6 +28,11 @@ export class SchedulingService {
   // Natural human anti-bot jitter (randomized between 0 and 30 minutes, creating 60m-90m natural intervals)
   private currentJitterMinutes = Math.floor(Math.random() * 30);
 
+  public resetState(): void {
+    this.isProcessingCron = false;
+    this.lastPublishedAtMs = 0;
+  }
+
   /**
    * Run scheduled posts publisher check (called by /api/cron/publish-scheduled)
    */
@@ -322,22 +327,36 @@ export class SchedulingService {
         }
       }
 
-      // 5. Cooldown / Post Spacing Guard with Anti-Robotic Human Jitter (unless forced)
-      // Meta safety: strictly enforce at least 60 minutes minimum gap between uploads
-      const baseInterval = Math.max(60, settings.auto_publish_interval_minutes || 60);
-      const maxJitter = settings.anti_bot_jitter_minutes !== undefined ? settings.anti_bot_jitter_minutes : 30;
+      // 5. Cooldown / Post Spacing Guard with Dynamic Organic Random Gaps
+      // User requirement: Organic random intervals (e.g. 49m, 53m, 70m, 90m/1.5h) to eliminate robotic clockwork patterns.
+      const isRandomGap = settings.random_gap_enabled !== false;
+      const minGap = Math.max(35, settings.min_gap_minutes ?? 45);
+      const maxGap = Math.max(minGap + 5, settings.max_gap_minutes ?? 95);
 
-      // Persisted dynamic jitter (+0 to +30 min) so variance survives reboots and cron calls
-      let jitter = settings.current_jitter_minutes;
-      if (jitter === undefined || jitter === null || isNaN(jitter)) {
-        jitter = maxJitter > 0 ? Math.floor(Math.random() * (maxJitter + 1)) : 0;
-        mockStore.updateSettings({ current_jitter_minutes: jitter });
+      let effectiveIntervalMinutes: number;
+      let jitter = 0;
+      let baseInterval = 60;
+
+      if (isRandomGap) {
+        let rolledGap = settings.current_random_gap_minutes;
+        if (!rolledGap || rolledGap < minGap || rolledGap > maxGap) {
+          rolledGap = Math.floor(Math.random() * (maxGap - minGap + 1)) + minGap;
+          mockStore.updateSettings({ current_random_gap_minutes: rolledGap });
+        }
+        effectiveIntervalMinutes = rolledGap;
+      } else {
+        baseInterval = Math.max(45, settings.auto_publish_interval_minutes || 60);
+        const maxJitter = settings.anti_bot_jitter_minutes !== undefined ? settings.anti_bot_jitter_minutes : 30;
+        let storedJitter = settings.current_jitter_minutes;
+        if (storedJitter === undefined || storedJitter === null || isNaN(storedJitter)) {
+          storedJitter = maxJitter > 0 ? Math.floor(Math.random() * (maxJitter + 1)) : 0;
+          mockStore.updateSettings({ current_jitter_minutes: storedJitter });
+        }
+        jitter = storedJitter;
+        this.currentJitterMinutes = jitter;
+        effectiveIntervalMinutes = baseInterval + jitter;
       }
-      this.currentJitterMinutes = jitter;
 
-      // Natural human variance: add randomized jitter (+0 to +30 min) so timestamps are never exact/robotic
-      // (e.g. gaps vary naturally between ~64m, ~78m, ~85m, etc.)
-      const effectiveIntervalMinutes = baseInterval + jitter;
       const minIntervalMs = effectiveIntervalMinutes * 60 * 1000;
 
       // In-memory guard check
@@ -345,11 +364,13 @@ export class SchedulingService {
         const elapsedSinceLastRun = Date.now() - this.lastPublishedAtMs;
         if (elapsedSinceLastRun < minIntervalMs) {
           const remainingMinutes = Math.ceil((minIntervalMs - elapsedSinceLastRun) / 60000);
-          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedSinceLastRun / 60000)}m since last run, Anti-Bot Natural Jitter: +${jitter}m, dynamic gap: ${effectiveIntervalMinutes}m). Next post in ${remainingMinutes}m.`);
+          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedSinceLastRun / 60000)}m since last run, ${isRandomGap ? `Organic Random Gap: ${effectiveIntervalMinutes}m` : `Anti-Bot Natural Jitter: +${jitter}m, dynamic gap: ${effectiveIntervalMinutes}m`}). Next post in ${remainingMinutes}m.`);
           return {
             ran: false,
             status: 'RATE_LIMITED',
-            reason: `Post spacing cooldown active (Anti-Bot Natural Jitter: +${jitter}m applied). Last post was ${Math.floor(elapsedSinceLastRun / 60000)}m ago. Natural human gap is ${effectiveIntervalMinutes}m. Next post permitted in ${remainingMinutes}m.`,
+            reason: isRandomGap
+              ? `Post spacing cooldown active (Organic Random Gap: ${effectiveIntervalMinutes}m). Last post was ${Math.floor(elapsedSinceLastRun / 60000)}m ago. Next post permitted in ${remainingMinutes}m.`
+              : `Post spacing cooldown active (Anti-Bot Natural Jitter: +${jitter}m applied). Last post was ${Math.floor(elapsedSinceLastRun / 60000)}m ago. Natural human gap is ${effectiveIntervalMinutes}m. Next post permitted in ${remainingMinutes}m.`,
           };
         }
       }
@@ -370,11 +391,13 @@ export class SchedulingService {
         const elapsedMs = Date.now() - mostRecentPublishMs;
         if (elapsedMs < minIntervalMs) {
           const remainingMinutes = Math.ceil((minIntervalMs - elapsedMs) / 60000);
-          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedMs / 60000)}m since last post, Anti-Bot Natural Jitter: +${jitter}m, dynamic gap: ${effectiveIntervalMinutes}m). Next post in ${remainingMinutes}m.`);
+          console.log(`[AutoPublisher] Cooldown active (${Math.floor(elapsedMs / 60000)}m since last post, ${isRandomGap ? `Organic Random Gap: ${effectiveIntervalMinutes}m` : `Anti-Bot Natural Jitter: +${jitter}m, dynamic gap: ${effectiveIntervalMinutes}m`}). Next post in ${remainingMinutes}m.`);
           return {
             ran: false,
             status: 'RATE_LIMITED',
-            reason: `Post spacing cooldown active (Anti-Bot Natural Jitter: +${jitter}m applied). Last post was ${Math.floor(elapsedMs / 60000)}m ago. Natural human gap is ${effectiveIntervalMinutes}m. Next post permitted in ${remainingMinutes}m.`,
+            reason: isRandomGap
+              ? `Post spacing cooldown active (Organic Random Gap: ${effectiveIntervalMinutes}m). Last post was ${Math.floor(elapsedMs / 60000)}m ago. Next post permitted in ${remainingMinutes}m.`
+              : `Post spacing cooldown active (Anti-Bot Natural Jitter: +${jitter}m applied). Last post was ${Math.floor(elapsedMs / 60000)}m ago. Natural human gap is ${effectiveIntervalMinutes}m. Next post permitted in ${remainingMinutes}m.`,
           };
         }
       }
@@ -488,12 +511,19 @@ export class SchedulingService {
       console.log(`[AutoPublisher] Publishing confession #${candidate.google_sheet_row} to Instagram...`);
       const publishedConfession = await confessionService.publishConfession(candidate.id);
       this.lastPublishedAtMs = Date.now();
-      // Rotate natural human jitter for next post (+0 to +30 min dynamic variance)
-      // Completely eliminates robotic fixed timestamps (e.g. posts won't fire at exact clockwork intervals like 60m 00s; instead, gaps vary between ~64m, ~78m, ~85m, etc.)
-      const nextMaxJitter = settings.anti_bot_jitter_minutes !== undefined ? settings.anti_bot_jitter_minutes : 30;
-      const nextJitter = nextMaxJitter > 0 ? Math.floor(Math.random() * (nextMaxJitter + 1)) : 0;
-      this.currentJitterMinutes = nextJitter;
-      mockStore.updateSettings({ current_jitter_minutes: nextJitter });
+      // Rotate organic random gap for next post (or natural jitter if fixed mode)
+      let nextGap = effectiveIntervalMinutes;
+      if (isRandomGap) {
+        nextGap = Math.floor(Math.random() * (maxGap - minGap + 1)) + minGap;
+        mockStore.updateSettings({ current_random_gap_minutes: nextGap });
+        console.log(`[AutoPublisher] Rolled next organic random gap: ${nextGap}m (range: ${minGap}m–${maxGap}m).`);
+      } else {
+        const nextMaxJitter = settings.anti_bot_jitter_minutes !== undefined ? settings.anti_bot_jitter_minutes : 30;
+        const nextJitter = nextMaxJitter > 0 ? Math.floor(Math.random() * (nextMaxJitter + 1)) : 0;
+        this.currentJitterMinutes = nextJitter;
+        nextGap = baseInterval + nextJitter;
+        mockStore.updateSettings({ current_jitter_minutes: nextJitter });
+      }
 
       mockStore.addLog({
         action: 'AUTO_PUBLISHED',
@@ -505,8 +535,10 @@ export class SchedulingService {
           mediaId: publishedConfession.instagram_media_id,
           jitterAppliedMinutes: jitter,
           effectiveIntervalMinutes: effectiveIntervalMinutes,
-          nextJitterMinutes: nextJitter,
-          nextIntervalMinutes: baseInterval + nextJitter,
+          nextIntervalMinutes: nextGap,
+          randomGapEnabled: isRandomGap,
+          minGapMinutes: minGap,
+          maxGapMinutes: maxGap,
         },
       });
 

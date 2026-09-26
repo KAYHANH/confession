@@ -149,9 +149,13 @@ export interface SystemSettings {
   publishing_mode: 'MANUAL_APPROVAL' | 'AUTO_APPROVAL' | 'AUTO_PUBLISH';
   default_publishing_time: string; // e.g. "19:30"
   max_daily_posts: number;
-  auto_publish_interval_minutes?: number; // Minimum cooldown between posts in minutes (e.g. 60 or 120)
+  auto_publish_interval_minutes?: number; // Base cooldown between posts in minutes (e.g. 60 or 120)
   auto_publish_start_hour?: number; // Active window start hour in local time (0-23, e.g. 9 for 9 AM)
   auto_publish_end_hour?: number; // Active window end hour in local time (0-23, e.g. 23 for 11 PM)
+  random_gap_enabled?: boolean; // When true, intervals vary organically between min and max gap (e.g. 45m to 95m / 1.5h)
+  min_gap_minutes?: number; // Minimum organic gap in minutes (e.g. 45 min)
+  max_gap_minutes?: number; // Maximum organic gap in minutes (e.g. 95 min / 1.5 hours)
+  current_random_gap_minutes?: number; // Currently rolled dynamic gap for the next post (e.g. 49, 53, 70, 90)
   anti_bot_jitter_minutes?: number; // Anti-Bot Natural Jitter max dynamic variance (e.g. +0 to +30 min, default 30)
   current_jitter_minutes?: number; // Current dynamic variance applied to the upcoming post interval
   enable_profanity_filter: boolean;

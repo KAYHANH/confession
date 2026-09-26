@@ -73,9 +73,9 @@ export default function ConfessionsPage() {
       setTemplates(tpls || []);
       if (settings) {
         setPublishSettings({
-          interval: settings.auto_publish_interval_minutes ?? 120,
+          interval: settings.random_gap_enabled !== false ? (settings.current_random_gap_minutes ?? 60) : (settings.auto_publish_interval_minutes ?? 60),
           startHour: settings.auto_publish_start_hour ?? 9,
-          endHour: settings.auto_publish_end_hour ?? 23,
+          endHour: settings.auto_publish_end_hour ?? 22,
         });
       }
     } catch {

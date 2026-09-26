@@ -7,6 +7,7 @@ import { Confession } from '../types';
 describe('24/7 Autonomous Auto-Publish Engine', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    schedulingService.resetState();
   });
 
   it('Test 1: should skip auto-publishing when auto_publish is false and mode is MANUAL_APPROVAL', async () => {
@@ -302,6 +303,7 @@ describe('24/7 Autonomous Auto-Publish Engine', () => {
       auto_publish_interval_minutes: 60,
       auto_publish_start_hour: 0,
       auto_publish_end_hour: 24,
+      random_gap_enabled: false,
       anti_bot_jitter_minutes: 30,
       current_jitter_minutes: 20,
       enable_profanity_filter: true,
@@ -363,5 +365,191 @@ describe('24/7 Autonomous Auto-Publish Engine', () => {
     expect(result.status).toBe('RATE_LIMITED');
     expect(result.reason).toContain('Anti-Bot Natural Jitter: +20m');
     expect(result.reason).toContain('Natural human gap is 80m');
+  });
+
+  it('Test 7: should enforce Dynamic Organic Random Gap (e.g. 53m, 49m, 70m, 90m)', async () => {
+    vi.spyOn(mockStore, 'getSettings').mockReturnValue({
+      brand_name: 'Test',
+      instagram_handle: '@test',
+      logo_url: '/logo.png',
+      default_template_id: 'tpl-1',
+      timezone: 'Asia/Kolkata',
+      auto_publish: true,
+      publishing_mode: 'AUTO_PUBLISH',
+      default_publishing_time: '19:30',
+      max_daily_posts: 10,
+      auto_publish_interval_minutes: 60,
+      auto_publish_start_hour: 0,
+      auto_publish_end_hour: 24,
+      random_gap_enabled: true,
+      min_gap_minutes: 45,
+      max_gap_minutes: 95,
+      current_random_gap_minutes: 53,
+      enable_profanity_filter: true,
+      enable_pii_detection: true,
+      require_approval: true,
+      risk_threshold: 'LOW',
+      default_hashtags: ['#test'],
+    });
+
+    vi.spyOn(confessionService, 'getDashboardStats').mockResolvedValue({
+      total: 10,
+      pendingReview: 5,
+      approved: 2,
+      scheduled: 0,
+      published: 3,
+      rejected: 0,
+      failed: 0,
+      publishedToday: 1,
+      maxDailyPosts: 10,
+    });
+
+    // Last post was 50 minutes ago.
+    // Rolled dynamic gap is 53m (safely under 60m, matching user specification).
+    // Cooldown is active: 50m < 53m. Next post permitted in 3m.
+    const fiftyMinutesAgo = new Date(Date.now() - 50 * 60 * 1000).toISOString();
+    vi.spyOn(mockStore, 'getConfessions').mockReturnValue([
+      {
+        id: 'conf-published-recent',
+        google_sheet_id: 'sheet_1',
+        google_sheet_name: 'Confessions',
+        google_sheet_row: 1,
+        name: 'Anonymous',
+        original_text: 'Prior post',
+        cleaned_text: 'Prior post',
+        display_name: 'Anonymous',
+        is_anonymous: true,
+        status: 'PUBLISHED',
+        moderation_status: 'LOW',
+        moderation_reason: 'Passed',
+        ai_processed: true,
+        template_id: 'tpl-1',
+        generated_image_url: 'https://example.com/img.png',
+        generated_image_path: null,
+        caption: 'Cap',
+        hashtags: ['#test'],
+        scheduled_at: null,
+        published_at: fiftyMinutesAgo,
+        instagram_media_id: '12345',
+        instagram_permalink: 'https://instagram.com/p/12345',
+        retry_count: 0,
+        error_message: null,
+        created_at: fiftyMinutesAgo,
+        updated_at: fiftyMinutesAgo,
+      },
+    ]);
+
+    const result = await schedulingService.processAutoPublishCycle();
+    expect(result.ran).toBe(false);
+    expect(result.status).toBe('RATE_LIMITED');
+    expect(result.reason).toContain('Organic Random Gap: 53m');
+    expect(result.reason).toContain('Last post was 50m ago');
+    expect(result.reason).toContain('Next post permitted in 3m');
+  });
+
+  it('Test 8: should allow publishing when organic random gap has passed and rotate to a new random gap', async () => {
+    vi.spyOn(mockStore, 'getSettings').mockReturnValue({
+      brand_name: 'Test',
+      instagram_handle: '@test',
+      logo_url: '/logo.png',
+      default_template_id: 'tpl-1',
+      timezone: 'Asia/Kolkata',
+      auto_publish: true,
+      publishing_mode: 'AUTO_PUBLISH',
+      default_publishing_time: '19:30',
+      max_daily_posts: 10,
+      auto_publish_interval_minutes: 60,
+      auto_publish_start_hour: 0,
+      auto_publish_end_hour: 24,
+      random_gap_enabled: true,
+      min_gap_minutes: 45,
+      max_gap_minutes: 95,
+      current_random_gap_minutes: 53,
+      enable_profanity_filter: true,
+      enable_pii_detection: true,
+      require_approval: true,
+      risk_threshold: 'LOW',
+      default_hashtags: ['#test'],
+    });
+
+    vi.spyOn(confessionService, 'getDashboardStats').mockResolvedValue({
+      total: 10,
+      pendingReview: 5,
+      approved: 2,
+      scheduled: 0,
+      published: 3,
+      rejected: 0,
+      failed: 0,
+      publishedToday: 1,
+      maxDailyPosts: 10,
+    });
+
+    const updateSettingsSpy = vi.spyOn(mockStore, 'updateSettings');
+
+    // 55 minutes have passed since last post (55m >= 53m gap).
+    const fiftyFiveMinutesAgo = new Date(Date.now() - 55 * 60 * 1000).toISOString();
+    const candidate: Confession = {
+      id: 'conf-rand-next',
+      google_sheet_id: 'sheet_1',
+      google_sheet_name: 'Confessions',
+      google_sheet_row: 15,
+      name: 'Rohan',
+      original_text: 'Excited for campus fest!',
+      cleaned_text: 'Excited for campus fest!',
+      display_name: 'Rohan',
+      is_anonymous: false,
+      status: 'READY_FOR_REVIEW',
+      moderation_status: 'LOW',
+      moderation_reason: 'Passed safety check',
+      ai_processed: true,
+      template_id: 'tpl-1',
+      generated_image_url: 'https://example.com/card.png',
+      generated_image_path: null,
+      caption: 'Confession #15',
+      hashtags: ['#fest'],
+      scheduled_at: null,
+      published_at: null,
+      instagram_media_id: null,
+      instagram_permalink: null,
+      retry_count: 0,
+      error_message: null,
+      created_at: fiftyFiveMinutesAgo,
+      updated_at: fiftyFiveMinutesAgo,
+    };
+
+    vi.spyOn(mockStore, 'getConfessions').mockReturnValue([
+      {
+        ...candidate,
+        id: 'conf-prior',
+        status: 'PUBLISHED',
+        published_at: fiftyFiveMinutesAgo,
+      },
+      candidate,
+    ]);
+
+    vi.spyOn(confessionService, 'updateConfession').mockResolvedValue(candidate);
+    vi.spyOn(confessionService, 'publishConfession').mockResolvedValue({
+      ...candidate,
+      status: 'PUBLISHED',
+      published_at: new Date().toISOString(),
+      instagram_media_id: 'ig_rand_99',
+      instagram_permalink: 'https://www.instagram.com/p/rand99/',
+    });
+
+    const result = await schedulingService.processAutoPublishCycle();
+    expect(result.ran).toBe(true);
+    expect(result.status).toBe('SUCCESS');
+    expect(result.publishedConfessionId).toBe('conf-rand-next');
+
+    // Verify a new dynamic random gap was rolled and persisted to mockStore
+    expect(updateSettingsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        current_random_gap_minutes: expect.any(Number),
+      })
+    );
+    const updatedCall = updateSettingsSpy.mock.calls.find(c => c[0].current_random_gap_minutes !== undefined);
+    const newGap = updatedCall![0].current_random_gap_minutes!;
+    expect(newGap).toBeGreaterThanOrEqual(45);
+    expect(newGap).toBeLessThanOrEqual(95);
   });
 });
