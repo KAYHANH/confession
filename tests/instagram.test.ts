@@ -298,4 +298,66 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
       logSpy.mockRestore();
     }
   });
+
+  // 12. Public URL resolution and double https prevention
+  it('Test 12: should normalize relative image URLs and prevent double https prefixes', async () => {
+    const origId = process.env.INSTAGRAM_ACCOUNT_ID;
+    const origToken = process.env.INSTAGRAM_ACCESS_TOKEN;
+    const origRenderUrl = process.env.RENDER_EXTERNAL_URL;
+
+    process.env.INSTAGRAM_ACCOUNT_ID = '17841437796028856';
+    process.env.INSTAGRAM_ACCESS_TOKEN = 'IGAA_valid_test_token';
+    process.env.RENDER_EXTERNAL_URL = 'https://confession-5ha2.onrender.com';
+
+    let capturedImageUrl = '';
+    global.fetch = vi.fn().mockImplementation(async (url: string, opts: any) => {
+      if (url.includes('/media') && !url.includes('media_publish')) {
+        const body = JSON.parse(opts.body);
+        capturedImageUrl = body.image_url;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: 'container_12345' }),
+        };
+      }
+      if (url.includes('/container_12345?fields=status_code')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ status_code: 'FINISHED' }),
+        };
+      }
+      if (url.includes('/media_publish')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: 'live_media_98765' }),
+        };
+      }
+      if (url.includes('/live_media_98765?fields=permalink')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ permalink: 'https://www.instagram.com/p/live_code_123/' }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    try {
+      const result = await instagramService.publishPost(
+        mockConfession,
+        '/generated/sample-card.png',
+        'Caption text'
+      );
+
+      expect(result.success).toBe(true);
+      expect(capturedImageUrl).toBe('https://confession-5ha2.onrender.com/generated/sample-card.png');
+      expect(capturedImageUrl).not.toContain('https://https://');
+    } finally {
+      process.env.INSTAGRAM_ACCOUNT_ID = origId;
+      process.env.INSTAGRAM_ACCESS_TOKEN = origToken;
+      process.env.RENDER_EXTERNAL_URL = origRenderUrl;
+    }
+  });
 });

@@ -190,8 +190,17 @@ export class InstagramService {
       const fs = await import('fs');
       const localFilePath = path.join(process.cwd(), 'public', 'generated', filename);
 
-      let appBaseUrl = process.env.NEXT_PUBLIC_APP_URL || '';
-      const isLocal = !appBaseUrl || appBaseUrl.includes('localhost') || appBaseUrl.includes('127.0.0.1');
+      // Determine public app base URL (Render or custom domain)
+      const rawEnvBase =
+        process.env.RENDER_EXTERNAL_URL ||
+        process.env.NEXT_PUBLIC_APP_URL ||
+        'https://confession-5ha2.onrender.com';
+
+      // Clean protocol: handle http://, https://, or any repeated prefixes (e.g. https://https://)
+      const cleanHost = rawEnvBase.replace(/^(https?:\/\/)+/i, '').replace(/\/+$/, '');
+      const publicBaseUrl = cleanHost ? `https://${cleanHost}` : 'https://confession-5ha2.onrender.com';
+
+      const isLocal = publicBaseUrl.includes('localhost') || publicBaseUrl.includes('127.0.0.1');
 
       // If running locally and local image exists, upload to public CDN so Meta can access it
       if (isLocal && fs.existsSync(localFilePath)) {
@@ -202,16 +211,12 @@ export class InstagramService {
       }
 
       if (resolvedImageUrl.startsWith('/')) {
-        if (!appBaseUrl || appBaseUrl.includes('localhost') || appBaseUrl.includes('127.0.0.1')) {
-          appBaseUrl = process.env.RENDER_EXTERNAL_URL
-            ? `https://${process.env.RENDER_EXTERNAL_URL}`
-            : '';
-        }
-        if (appBaseUrl) {
-          resolvedImageUrl = `${appBaseUrl.replace(/\/$/, '')}${resolvedImageUrl}`;
-        }
+        resolvedImageUrl = `${publicBaseUrl}${resolvedImageUrl}`;
       }
     }
+
+    // Strictly ensure resolvedImageUrl never has duplicated http(s):// prefixes like https://https://
+    resolvedImageUrl = resolvedImageUrl.replace(/^(https?:\/\/)+/i, 'https://');
 
     if (!resolvedImageUrl.startsWith('http://') && !resolvedImageUrl.startsWith('https://')) {
       return {

@@ -609,7 +609,7 @@ export class ConfessionService {
 
     const candidates = targetIds && targetIds.length > 0
       ? all.filter((c) => targetIds.includes(c.id))
-      : all.filter((c) => c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION');
+      : all.filter((c) => c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION' || c.status === 'PUBLISHING');
 
     const restartedIds: string[] = [];
     let skippedRejected = 0;
@@ -639,6 +639,8 @@ export class ConfessionService {
           status: nextStatus,
           error_message: null,
           retry_count: 0,
+          generated_image_url: null,
+          generated_image_path: null,
         };
 
         // If PII detection is disabled by user, unmask social handles/PII from original submission

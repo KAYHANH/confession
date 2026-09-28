@@ -286,6 +286,8 @@ export class SchedulingService {
 
     this.isProcessingCron = true;
 
+    let candidate: Confession | undefined;
+
     try {
       const stats = await confessionService.getDashboardStats();
       const maxDaily = settings.max_daily_posts || 8;
@@ -402,7 +404,36 @@ export class SchedulingService {
         }
       }
 
-      // 6. Candidate Selection: Pick oldest safe confession
+      // 6. Auto-heal any confessions stuck in PUBLISHING (>3m) or failed due to double-https image bug
+      const nowMs = Date.now();
+      for (const c of allConfessions) {
+        if (c.status === 'PUBLISHING') {
+          const updatedMs = new Date(c.updated_at || c.created_at || 0).getTime();
+          if (nowMs - updatedMs > 3 * 60 * 1000) {
+            console.log(`[AutoPublisher] Auto-healing confession #${c.google_sheet_row} stuck in PUBLISHING back to APPROVED.`);
+            await confessionService.updateConfession(c.id, {
+              status: 'APPROVED',
+              error_message: null,
+            });
+          }
+        } else if (
+          (c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION') &&
+          c.error_message &&
+          (c.error_message.includes('https://https://') || c.error_message.includes('cannot download the card image'))
+        ) {
+          console.log(`[AutoPublisher] Auto-healing confession #${c.google_sheet_row} that failed due to URL glitch back to APPROVED.`);
+          await confessionService.updateConfession(c.id, {
+            status: 'APPROVED',
+            error_message: null,
+            retry_count: 0,
+            generated_image_url: null,
+          });
+        }
+      }
+
+      // Re-fetch fresh confessions after healing
+      const freshConfessions = mockStore.getConfessions();
+
       const allowedRisks: ModerationRisk[] =
         settings.risk_threshold === 'HIGH'
           ? ['LOW', 'MEDIUM', 'HIGH']
@@ -411,7 +442,7 @@ export class SchedulingService {
           : ['LOW'];
 
       // Prioritize APPROVED posts, then READY_FOR_REVIEW safe posts
-      const eligibleCandidates = allConfessions
+      const eligibleCandidates = freshConfessions
         .filter(
           (c) =>
             c.status !== 'PUBLISHED' &&
@@ -429,7 +460,7 @@ export class SchedulingService {
           return (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
         });
 
-      const candidate = eligibleCandidates[0];
+      candidate = eligibleCandidates[0];
 
       if (!candidate) {
         console.log('[AutoPublisher] No eligible safe confessions found to auto-publish.');
@@ -440,14 +471,16 @@ export class SchedulingService {
         };
       }
 
-      console.log(`[AutoPublisher] Selected confession #${candidate.google_sheet_row} (ID: ${candidate.id}) for auto-publishing.`);
+      const selectedCandidate = candidate;
+
+      console.log(`[AutoPublisher] Selected confession #${selectedCandidate.google_sheet_row} (ID: ${selectedCandidate.id}) for auto-publishing.`);
 
       // Lock candidate immediately to prevent concurrent re-selection
-      await confessionService.updateConfession(candidate.id, { status: 'PUBLISHING' });
+      await confessionService.updateConfession(selectedCandidate.id, { status: 'PUBLISHING' });
 
       // 6b. Groq AI Duplicate Detection against all already published posts
       const previousPosts = allConfessions
-        .filter((c) => c.status === 'PUBLISHED' && c.id !== candidate.id)
+        .filter((c) => c.status === 'PUBLISHED' && c.id !== selectedCandidate.id)
         .map((c) => ({
           row: c.google_sheet_row || 0,
           text: c.cleaned_text || c.original_text,
@@ -554,6 +587,17 @@ export class SchedulingService {
       };
     } catch (err: any) {
       console.error('[AutoPublisher] Error during auto-publish cycle:', err?.message || err);
+      if (candidate && candidate.id) {
+        try {
+          const fresh = mockStore.getConfessionById(candidate.id);
+          if (fresh && fresh.status === 'PUBLISHING') {
+            await confessionService.updateConfession(candidate.id, {
+              status: 'APPROVED',
+              error_message: err?.message || 'Publishing cycle interrupted',
+            });
+          }
+        } catch {}
+      }
       return {
         ran: false,
         status: 'ERROR',
