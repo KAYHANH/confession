@@ -142,7 +142,7 @@ export function PublishModal({
         slideIndex: currentSlide,
         totalSlides: cardMode === 'carousel' ? slides.length : 1,
       });
-      success('Post card downloaded as 1080x1350 PNG (4:5)!');
+      success('Post card downloaded as 1080x1080 PNG!');
     } catch (err: any) {
       error(err?.message || 'Download failed');
     } finally {
@@ -247,7 +247,7 @@ export function PublishModal({
           <div className="mb-4 flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <span>
-              This confession is too long ({wordCount} words) to safely fit on a single card without clipping. Switching to <strong>Carousel ({totalSlides} Slides)</strong> is recommended.
+              This confession is too long to remain readable on one card. Use Carousel.
             </span>
           </div>
         )}

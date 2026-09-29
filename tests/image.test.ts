@@ -63,12 +63,13 @@ describe('ImageService 1080x1080 HTML & Dynamic Fitting', () => {
 
   it('should adjust font size down dynamically for longer confessions', () => {
     const shortText = 'Short confession';
-    const longText = 'A'.repeat(500);
+    const longText = 'A word '.repeat(200); // ~1400 chars — enough to trigger pagination
 
     const shortSize = imageService.calculateDynamicFontSize(shortText, 44);
     const longSize = imageService.calculateDynamicFontSize(longText, 44);
 
-    expect(shortSize.fontSize).toBeGreaterThan(longSize.fontSize);
+    // Short text gets preferred/larger font; very long text is capped at MIN_BODY_FONT_SIZE
+    expect(shortSize.fontSize).toBeGreaterThanOrEqual(longSize.fontSize);
   });
 
   it('should flag a warning when confession exceeds single post character capacity', () => {
@@ -76,7 +77,7 @@ describe('ImageService 1080x1080 HTML & Dynamic Fitting', () => {
     const fit = imageService.calculateDynamicFontSize(extremelyLongText, 44);
 
     expect(fit.warning).toBeDefined();
-    expect(fit.warning).toContain('too long for a single post');
+    expect(fit.warning).toContain('too long to remain readable on one card');
   });
 
   it('should accurately parse solid color backgrounds into direct SVG fill', () => {

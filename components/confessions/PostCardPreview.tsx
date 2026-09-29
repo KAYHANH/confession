@@ -3,7 +3,11 @@
 import React from 'react';
 import { Template } from '@/types';
 
-import { paginateConfession } from '@/lib/paginationEngine';
+import {
+  paginateConfession,
+  calculateCardTypography,
+  MIN_BODY_FONT_SIZE,
+} from '@/lib/paginationEngine';
 
 export interface PostCardPreviewProps {
   text: string;
@@ -26,94 +30,18 @@ export function splitIntoSlides(t: string, _maxWordsOrChars?: number): string[] 
 }
 
 export function getCardTypography(textLength: number, baseSize: number = 44) {
-  if (textLength < 120) {
-    return {
-      fontSize: Math.min(50, baseSize + 6),
-      lineHeight: 1.45,
-      padding: 80,
-      showBigQuote: true,
-      quoteSize: 76,
-      justify: 'center' as const,
-      marginY: 28,
-      signatureMargin: 26,
-      signatureSize: 26,
-    };
-  }
-  if (textLength < 280) {
-    return {
-      fontSize: Math.min(40, baseSize + 2),
-      lineHeight: 1.4,
-      padding: 75,
-      showBigQuote: true,
-      quoteSize: 60,
-      justify: 'center' as const,
-      marginY: 24,
-      signatureMargin: 22,
-      signatureSize: 24,
-    };
-  }
-  if (textLength < 500) {
-    return {
-      fontSize: Math.max(26, baseSize - 10),
-      lineHeight: 1.35,
-      padding: 65,
-      showBigQuote: true,
-      quoteSize: 42,
-      justify: 'center' as const,
-      marginY: 18,
-      signatureMargin: 18,
-      signatureSize: 22,
-    };
-  }
-  if (textLength < 850) {
-    return {
-      fontSize: 21,
-      lineHeight: 1.3,
-      padding: 55,
-      showBigQuote: true,
-      quoteSize: 32,
-      justify: 'flex-start' as const,
-      marginY: 14,
-      signatureMargin: 16,
-      signatureSize: 20,
-    };
-  }
-  if (textLength < 1400) {
-    return {
-      fontSize: 17.5,
-      lineHeight: 1.25,
-      padding: 50,
-      showBigQuote: false,
-      quoteSize: 0,
-      justify: 'flex-start' as const,
-      marginY: 10,
-      signatureMargin: 12,
-      signatureSize: 18,
-    };
-  }
-  if (textLength < 2000) {
-    return {
-      fontSize: 15.5,
-      lineHeight: 1.22,
-      padding: 45,
-      showBigQuote: false,
-      quoteSize: 0,
-      justify: 'flex-start' as const,
-      marginY: 8,
-      signatureMargin: 10,
-      signatureSize: 17,
-    };
-  }
+  const dummy = 'word '.repeat(Math.ceil(textLength / 5)).slice(0, textLength);
+  const metrics = calculateCardTypography(dummy, { baseFontSize: baseSize });
   return {
-    fontSize: 14,
-    lineHeight: 1.2,
-    padding: 40,
-    showBigQuote: false,
-    quoteSize: 0,
-    justify: 'flex-start' as const,
-    marginY: 6,
-    signatureMargin: 8,
-    signatureSize: 16,
+    fontSize: Math.max(MIN_BODY_FONT_SIZE, metrics.fontSize),
+    lineHeight: metrics.lineHeight,
+    padding: metrics.padding,
+    showBigQuote: metrics.showBigQuote,
+    quoteSize: metrics.quoteSize,
+    justify: metrics.justify,
+    marginY: metrics.marginY,
+    signatureMargin: metrics.signatureMargin,
+    signatureSize: metrics.signatureSize,
   };
 }
 
@@ -142,7 +70,7 @@ export function PostCardPreview({
     textToRender = `${cleanCut}\n\n[📖 Read full confession in caption 👇]`;
   }
 
-  const cfg = getCardTypography(textToRender.length, template.font_size);
+  const cfg = calculateCardTypography(textToRender, { baseFontSize: template.font_size });
 
   const fontFamily =
     template.font_family === 'serif'
@@ -151,7 +79,7 @@ export function PostCardPreview({
 
   const badgeText =
     totalSlides > 1
-      ? `CONFESSION #${numFormatted} (${slideIndex + 1}/${totalSlides})`
+      ? `CONFESSION #${numFormatted} • ${slideIndex + 1}/${totalSlides}`
       : `CONFESSION #${numFormatted}`;
 
   return (
@@ -159,14 +87,14 @@ export function PostCardPreview({
       className="relative overflow-hidden shadow-2xl rounded-2xl border border-zinc-200/80 select-none transition-transform"
       style={{
         width: 1080 * scale,
-        height: 1350 * scale,
+        height: 1080 * scale,
       }}
     >
       <div
         className="absolute top-0 left-0 flex flex-col justify-between"
         style={{
           width: 1080,
-          height: 1350,
+          height: 1080,
           transform: `scale(${scale})`,
           transformOrigin: 'top left',
           background: template.background,
@@ -221,7 +149,7 @@ export function PostCardPreview({
             alignItems: 'flex-start',
             marginTop: `${cfg.marginY}px`,
             marginBottom: `${cfg.marginY}px`,
-            maxHeight: '1120px',
+            maxHeight: '840px',
           }}
         >
           {template.layout_config?.quote_icon !== false && cfg.showBigQuote && (
@@ -280,7 +208,7 @@ export function PostCardPreview({
             </span>
           </div>
           <div className="text-xs tracking-wider uppercase font-semibold">
-            ConfessionFlow
+            {totalSlides > 1 ? `${slideIndex + 1}/${totalSlides}` : 'ConfessionFlow'}
           </div>
         </div>
       </div>

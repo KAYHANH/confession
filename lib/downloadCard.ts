@@ -1,7 +1,8 @@
 'use client';
 
 import { Template } from '@/types';
-import { getCardTypography, splitIntoSlides } from '@/components/confessions/PostCardPreview';
+import { splitIntoSlides } from '@/components/confessions/PostCardPreview';
+import { calculateCardTypography } from '@/lib/paginationEngine';
 
 export interface DownloadCardOptions {
   text: string;
@@ -58,7 +59,7 @@ export function buildCardHtmlForExport(options: DownloadCardOptions): string {
     textToRender = `${cleanCut}\n\n[📖 Read full confession in caption 👇]`;
   }
 
-  const cfg = getCardTypography(textToRender.length, template.font_size);
+  const cfg = calculateCardTypography(textToRender, { baseFontSize: template.font_size });
   const fontFamily =
     template.font_family === 'serif'
       ? 'Georgia, serif'
@@ -66,7 +67,7 @@ export function buildCardHtmlForExport(options: DownloadCardOptions): string {
 
   const badgeText =
     totalSlides > 1
-      ? `CONFESSION #${numFormatted} (${slideIndex + 1}/${totalSlides})`
+      ? `CONFESSION #${numFormatted} • ${slideIndex + 1}/${totalSlides}`
       : `CONFESSION #${numFormatted}`;
 
   const safeText = escapeHtml(textToRender);
@@ -223,8 +224,8 @@ export function buildCardHtmlForExport(options: DownloadCardOptions): string {
           <span>&bull;</span>
           <span style="color: ${template.accent_color}; font-weight: 600;">${safeHandle}</span>
         </div>
-        <div style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">
-          ConfessionFlow
+        <div style="font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">
+          ${totalSlides > 1 ? `${slideIndex + 1}/${totalSlides}` : 'ConfessionFlow'}
         </div>
       </div>
     </div>

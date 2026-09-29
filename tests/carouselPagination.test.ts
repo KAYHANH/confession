@@ -7,6 +7,9 @@ import {
   createHookText,
   canFitOnSingleCard,
   validatePublicationPayload,
+  calculateCardTypography,
+  MIN_BODY_FONT_SIZE,
+  PREFERRED_BODY_FONT_SIZE,
 } from '../lib/paginationEngine';
 import { splitIntoSlides } from '../components/confessions/PostCardPreview';
 
@@ -256,6 +259,128 @@ I am torn between reporting the full commit history and timestamped logs to the 
 
     it('should report canFitOnSingleCard false for excessive text that cannot safely fit on one card', () => {
       expect(canFitOnSingleCard(veryLongConfession)).toBe(false);
+    });
+  });
+
+  // =========================================================================
+  // 10 REQUIRED READABILITY & CAROUSEL CORRECTNESS TESTS
+  // =========================================================================
+  describe('Readability-First Pagination: 10 Required Tests', () => {
+    const GIANT_TEXT = 'A '.repeat(2500).trim(); // 2500 words ~ 5000 chars
+
+    // Test 1: Short confession → 1 readable slide (fontSize >= 38px)
+    it('[T1] Short confession fits on 1 slide with fontSize >= 38px', () => {
+      const result = paginateConfession(shortConfession);
+      expect(result.totalSlides).toBe(1);
+      expect(result.format).toBe('IMAGE');
+
+      // Verify the font size paginationEngine would assign is >= 38px (PREFERRED)
+      const metrics = calculateCardTypography(shortConfession);
+      expect(metrics.fontSize).toBeGreaterThanOrEqual(PREFERRED_BODY_FONT_SIZE);
+    });
+
+    // Test 2: Medium confession → 1 readable slide if it fits (fontSize >= 32px)
+    it('[T2] Medium confession: if it fits on 1 card, fontSize >= 32px', () => {
+      const result = paginateConfession(mediumConfession);
+
+      if (result.totalSlides === 1) {
+        const metrics = calculateCardTypography(mediumConfession);
+        expect(metrics.fontSize).toBeGreaterThanOrEqual(32);
+      } else {
+        // Multi-slide is also valid for a medium confession
+        expect(result.totalSlides).toBeGreaterThanOrEqual(2);
+      }
+    });
+
+    // Test 3: Long confession → 2+ slides (never crammed into 1 with tiny font)
+    it('[T3] Long confession paginates to 2+ slides', () => {
+      const result = paginateConfession(veryLongConfession);
+      expect(result.totalSlides).toBeGreaterThanOrEqual(2);
+      expect(result.format).toBe('CAROUSEL');
+    });
+
+    // Test 4: Very long confession → 3+ slides
+    it('[T4] Very long confession (5000 chars) produces 3+ slides', () => {
+      const result = paginateConfession(GIANT_TEXT);
+      expect(result.totalSlides).toBeGreaterThanOrEqual(3);
+    });
+
+    // Test 5: Confession that barely exceeds one card → 2 slides, not 1 squished card
+    it('[T5] Confession barely exceeding one card creates 2 slides instead of tiny font', () => {
+      // A text that overflows 1 card at min font size
+      const overflowText = mediumConfession + '\n\n' + mediumConfession; // doubled
+      const singleCardMetrics = calculateCardTypography(overflowText);
+      if (!singleCardMetrics.fitsOnSingleCard) {
+        const result = paginateConfession(overflowText);
+        expect(result.totalSlides).toBeGreaterThanOrEqual(2);
+        // And font never went below MIN during the check
+        expect(singleCardMetrics.fontSize).toBeGreaterThanOrEqual(MIN_BODY_FONT_SIZE);
+      }
+    });
+
+    // Test 6: Body font NEVER falls below MIN_BODY_FONT_SIZE (28px), even for 5000 char input
+    it('[T6] calculateCardTypography NEVER returns fontSize below MIN_BODY_FONT_SIZE (28px)', () => {
+      const inputs = [
+        shortConfession,
+        mediumConfession,
+        veryLongConfession,
+        GIANT_TEXT,
+        'X'.repeat(5000),
+      ];
+      for (const input of inputs) {
+        const metrics = calculateCardTypography(input);
+        expect(metrics.fontSize).toBeGreaterThanOrEqual(MIN_BODY_FONT_SIZE);
+      }
+    });
+
+    // Test 7: All original text exists across slides (token preservation 100%)
+    it('[T7] 100% token preservation across all slides for very long confession', () => {
+      const result = paginateConfession(veryLongConfession);
+      const slideTexts = result.slides.map((s) => s.text);
+      expect(verifyContentPreservation(veryLongConfession, slideTexts)).toBe(true);
+
+      const srcTokens = tokenize(veryLongConfession);
+      const outTokens = tokenize(slideTexts.join(' '));
+      expect(outTokens.length).toBe(srcTokens.length);
+      expect(outTokens).toEqual(srcTokens);
+    });
+
+    // Test 8: No original text is moved into caption (caption must NOT contain confession body)
+    it('[T8] Instagram caption does NOT contain the original confession body text', () => {
+      const caption = buildInstagramCaption({
+        confessionNumber: 5,
+        mode: 'carousel',
+        hashtags: ['#test'],
+      });
+      // Caption must not contain significant portions of the confession
+      expect(caption).not.toContain(veryLongConfession.slice(0, 80));
+      expect(caption).not.toContain(mediumConfession.slice(0, 80));
+    });
+
+    // Test 9: Every generated slide has fontSize >= MIN_BODY_FONT_SIZE
+    it('[T9] Every individual slide content has fontSize >= MIN_BODY_FONT_SIZE when rendered', () => {
+      const result = paginateConfession(veryLongConfession);
+      for (const slide of result.slides) {
+        const metrics = calculateCardTypography(slide.text);
+        expect(metrics.fontSize).toBeGreaterThanOrEqual(MIN_BODY_FONT_SIZE);
+      }
+    });
+
+    // Test 10: Preview slide count equals publish payload slide count
+    it('[T10] paginateConfession totalSlides matches publish payload slide count', () => {
+      const result = paginateConfession(veryLongConfession);
+      const slideTexts = result.slides.map((s) => s.text);
+
+      // The publish payload would use these same slides
+      const validation = validatePublicationPayload({
+        sourceConfession: veryLongConfession,
+        slides: slideTexts,
+        mode: 'carousel',
+        caption: buildInstagramCaption({ confessionNumber: 1, mode: 'carousel' }),
+      });
+
+      expect(validation.valid).toBe(true);
+      expect(slideTexts.length).toBe(result.totalSlides);
     });
   });
 });
