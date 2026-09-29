@@ -39,3 +39,10 @@ next-env.d.ts
 # generated test cards
 /public/generated/
 
+# cache & test reports
+.turbo/
+.cache/
+*.log
+test-results/
+playwright-report/
+

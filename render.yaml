@@ -3,13 +3,19 @@ services:
     name: confessionflow
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build
+    buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=4096"
+      - key: NEXT_BUILD_WORKERS
+        value: "2"
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: "1"
       - key: NEXT_PUBLIC_APP_URL
         value: https://confession-5ha2.onrender.com
       - key: RENDER_EXTERNAL_URL

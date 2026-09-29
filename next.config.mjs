@@ -13,7 +13,12 @@ const nextConfig = {
       },
     ],
   },
-  serverExternalPackages: ['playwright'],
+  productionBrowserSourceMaps: false,
+  serverExternalPackages: ['playwright', 'googleapis'],
+  experimental: {
+    cpus: 2,
+    workerThreads: false,
+  },
 };
 
 export default nextConfig;
