@@ -144,6 +144,83 @@ export class InstagramService {
   }
 
   /**
+   * Resolves relative image path to an absolute public URL reachable by Meta
+   */
+  public async resolvePublicImageUrl(imageUrl: string): Promise<string> {
+    let resolvedImageUrl = imageUrl;
+    if (resolvedImageUrl.startsWith('/')) {
+      const filename = resolvedImageUrl.replace(/^\/generated\//, '');
+      const path = await import('path');
+      const fs = await import('fs');
+      const localFilePath = path.join(process.cwd(), 'public', 'generated', filename);
+
+      // Determine public app base URL (Render or custom domain)
+      const rawEnvBase =
+        process.env.RENDER_EXTERNAL_URL ||
+        process.env.NEXT_PUBLIC_APP_URL ||
+        'https://confession-5ha2.onrender.com';
+
+      // Clean protocol: handle http://, https://, or any repeated prefixes (e.g. https://https://)
+      const cleanHost = rawEnvBase.replace(/^(https?:\/\/)+/i, '').replace(/\/+$/, '');
+      const publicBaseUrl = cleanHost ? `https://${cleanHost}` : 'https://confession-5ha2.onrender.com';
+
+      const isLocal = publicBaseUrl.includes('localhost') || publicBaseUrl.includes('127.0.0.1');
+
+      // If running locally and local image exists, upload to public CDN so Meta can access it
+      if (isLocal && fs.existsSync(localFilePath)) {
+        const cdnUrl = await this.uploadImageToPublicCdn(localFilePath);
+        if (cdnUrl) {
+          resolvedImageUrl = cdnUrl;
+        }
+      }
+
+      if (resolvedImageUrl.startsWith('/')) {
+        resolvedImageUrl = `${publicBaseUrl}${resolvedImageUrl}`;
+      }
+    }
+
+    // Strictly ensure resolvedImageUrl never has duplicated http(s):// prefixes like https://https://
+    return resolvedImageUrl.replace(/^(https?:\/\/)+/i, 'https://');
+  }
+
+  /**
+   * Polls an Instagram media container until status is FINISHED or returns an error
+   */
+  public async pollContainerStatus(
+    creationId: string,
+    accessToken: string
+  ): Promise<{ ready: boolean; error?: string }> {
+    let attempts = 0;
+    const maxAttempts = 15;
+
+    while (attempts < maxAttempts) {
+      attempts++;
+      const statusUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${creationId}?fields=status_code`;
+      const statusResp = await fetch(statusUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const statusData = await statusResp.json().catch(() => ({}));
+
+      if (statusData.status_code === 'FINISHED') {
+        return { ready: true };
+      } else if (statusData.status_code === 'ERROR' || statusData.status_code === 'EXPIRED') {
+        return {
+          ready: false,
+          error: `Media container processing failed with status: ${statusData.status_code}`,
+        };
+      }
+
+      // Wait 1s between checks
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    return {
+      ready: false,
+      error: 'Timed out waiting for Instagram media container to finish processing.',
+    };
+  }
+
+  /**
    * Publish a confession photo post to Instagram Professional account using official Content Publishing
    */
   public async publishPost(
@@ -183,40 +260,7 @@ export class InstagramService {
     }
 
     // Resolve relative URL to absolute URL for Meta's crawler
-    let resolvedImageUrl = imageUrl;
-    if (resolvedImageUrl.startsWith('/')) {
-      const filename = resolvedImageUrl.replace(/^\/generated\//, '');
-      const path = await import('path');
-      const fs = await import('fs');
-      const localFilePath = path.join(process.cwd(), 'public', 'generated', filename);
-
-      // Determine public app base URL (Render or custom domain)
-      const rawEnvBase =
-        process.env.RENDER_EXTERNAL_URL ||
-        process.env.NEXT_PUBLIC_APP_URL ||
-        'https://confession-5ha2.onrender.com';
-
-      // Clean protocol: handle http://, https://, or any repeated prefixes (e.g. https://https://)
-      const cleanHost = rawEnvBase.replace(/^(https?:\/\/)+/i, '').replace(/\/+$/, '');
-      const publicBaseUrl = cleanHost ? `https://${cleanHost}` : 'https://confession-5ha2.onrender.com';
-
-      const isLocal = publicBaseUrl.includes('localhost') || publicBaseUrl.includes('127.0.0.1');
-
-      // If running locally and local image exists, upload to public CDN so Meta can access it
-      if (isLocal && fs.existsSync(localFilePath)) {
-        const cdnUrl = await this.uploadImageToPublicCdn(localFilePath);
-        if (cdnUrl) {
-          resolvedImageUrl = cdnUrl;
-        }
-      }
-
-      if (resolvedImageUrl.startsWith('/')) {
-        resolvedImageUrl = `${publicBaseUrl}${resolvedImageUrl}`;
-      }
-    }
-
-    // Strictly ensure resolvedImageUrl never has duplicated http(s):// prefixes like https://https://
-    resolvedImageUrl = resolvedImageUrl.replace(/^(https?:\/\/)+/i, 'https://');
+    const resolvedImageUrl = await this.resolvePublicImageUrl(imageUrl);
 
     if (!resolvedImageUrl.startsWith('http://') && !resolvedImageUrl.startsWith('https://')) {
       return {
@@ -275,39 +319,13 @@ export class InstagramService {
         };
       }
 
-      // Step 2: Poll container status until FINISHED (check immediately, then every 1s)
-      let isReady = false;
-      let attempts = 0;
-      const maxAttempts = 15;
-
-      while (!isReady && attempts < maxAttempts) {
-        attempts++;
-        const statusUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${creationId}?fields=status_code`;
-        const statusResp = await fetch(statusUrl, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        const statusData = await statusResp.json().catch(() => ({}));
-
-        if (statusData.status_code === 'FINISHED') {
-          isReady = true;
-          break;
-        } else if (statusData.status_code === 'ERROR' || statusData.status_code === 'EXPIRED') {
-          return {
-            success: false,
-            errorCode: 'CONTAINER_PROCESSING_FAILED',
-            error: `Media container processing failed with status: ${statusData.status_code}`,
-          };
-        }
-
-        // Wait 1s between checks (first check has no delay — instant if already ready)
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-
-      if (!isReady) {
+      // Step 2: Poll container status until FINISHED
+      const pollResult = await this.pollContainerStatus(creationId, accessToken);
+      if (!pollResult.ready) {
         return {
           success: false,
-          errorCode: 'CONTAINER_TIMEOUT',
-          error: 'Timed out waiting for Instagram media container to finish processing.',
+          errorCode: pollResult.error?.includes('Timed out') ? 'CONTAINER_TIMEOUT' : 'CONTAINER_PROCESSING_FAILED',
+          error: pollResult.error || 'Failed to process media container',
         };
       }
 
@@ -358,6 +376,217 @@ export class InstagramService {
         success: false,
         errorCode: 'API_UNAVAILABLE',
         error: 'Instagram API request failed.',
+      };
+    }
+  }
+
+  /**
+   * Publish a multi-slide carousel post to Instagram Professional account
+   */
+  public async publishCarousel(
+    confession: Confession,
+    imageUrls: string[],
+    captionText: string
+  ): Promise<InstagramPublishResult> {
+    // 1. Guard against duplicate publishing
+    if (confession.status === 'PUBLISHED' || confession.instagram_media_id) {
+      return {
+        success: false,
+        errorCode: 'DUPLICATE_PUBLICATION',
+        error: `Confession ${confession.id} is already published (Media ID: ${confession.instagram_media_id}). Duplicate publication blocked.`,
+      };
+    }
+
+    if (!imageUrls || imageUrls.length === 0) {
+      return {
+        success: false,
+        errorCode: 'EMPTY_SLIDES',
+        error: 'No slide images provided for carousel publication.',
+      };
+    }
+
+    // If only 1 slide was provided, fallback to standard single post
+    if (imageUrls.length === 1) {
+      return this.publishPost(confession, imageUrls[0], captionText);
+    }
+
+    const serverConfig = getInstagramServerConfig();
+    const storeConfig = mockStore.getInstagramConfig();
+
+    const accountId = serverConfig.accountId || storeConfig.account_id || undefined;
+    const accessToken = serverConfig.accessToken || storeConfig.access_token || undefined;
+
+    if (!accessToken) {
+      return {
+        success: false,
+        errorCode: 'MISSING_ACCESS_TOKEN',
+        error: 'Instagram credentials are not configured.',
+      };
+    }
+
+    if (!accountId) {
+      return {
+        success: false,
+        errorCode: 'MISSING_ACCOUNT_ID',
+        error: 'Instagram credentials are not configured.',
+      };
+    }
+
+    // Instagram allows maximum 10 slides per carousel
+    const targetImageUrls = imageUrls.slice(0, 10);
+
+    // Resolve all image URLs to public absolute URLs
+    const resolvedUrls = await Promise.all(
+      targetImageUrls.map((url) => this.resolvePublicImageUrl(url))
+    );
+
+    for (const rUrl of resolvedUrls) {
+      if (!rUrl.startsWith('http://') && !rUrl.startsWith('https://')) {
+        return {
+          success: false,
+          errorCode: 'INVALID_IMAGE_URL',
+          error: `Slide image URL is not a valid web URL (${rUrl}). Make sure NEXT_PUBLIC_APP_URL is set in your environment.`,
+        };
+      }
+      if (rUrl.includes('localhost') || rUrl.includes('127.0.0.1')) {
+        return {
+          success: false,
+          errorCode: 'LOCAL_IMAGE_URL',
+          error: `Instagram cannot fetch images from local machine (${rUrl}). Deploy your app to a public URL (like Render) or configure public image hosting.`,
+        };
+      }
+    }
+
+    try {
+      // Step 1: Create media item containers for each slide (is_carousel_item: true)
+      const childContainerIds: string[] = [];
+
+      for (let i = 0; i < resolvedUrls.length; i++) {
+        const itemUrl = resolvedUrls[i];
+        const mediaEndpoint = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media`;
+        const itemResp = await fetch(mediaEndpoint, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            image_url: itemUrl,
+            is_carousel_item: true,
+          }),
+        });
+
+        const itemData = await itemResp.json().catch(() => ({}));
+
+        if (!itemResp.ok || itemData.error || !itemData.id) {
+          const errMsg = itemData.error?.message || `Failed to create item container for slide #${i + 1}`;
+          return {
+            success: false,
+            errorCode: 'CHILD_CONTAINER_FAILED',
+            error: `Slide ${i + 1}/${resolvedUrls.length} container creation failed: ${errMsg}`,
+          };
+        }
+
+        childContainerIds.push(itemData.id);
+      }
+
+      // Step 2: Poll status of all child containers until FINISHED
+      for (let i = 0; i < childContainerIds.length; i++) {
+        const childId = childContainerIds[i];
+        const pollRes = await this.pollContainerStatus(childId, accessToken);
+        if (!pollRes.ready) {
+          return {
+            success: false,
+            errorCode: 'CHILD_PROCESSING_FAILED',
+            error: `Slide ${i + 1} processing failed: ${pollRes.error || 'Container not ready'}`,
+          };
+        }
+      }
+
+      // Step 3: Create parent CAROUSEL container
+      const carouselEndpoint = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media`;
+      const carouselResp = await fetch(carouselEndpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          media_type: 'CAROUSEL',
+          children: childContainerIds,
+          caption: captionText,
+        }),
+      });
+
+      const carouselData = await carouselResp.json().catch(() => ({}));
+
+      if (!carouselResp.ok || carouselData.error || !carouselData.id) {
+        return {
+          success: false,
+          errorCode: 'CAROUSEL_CONTAINER_FAILED',
+          error: `Parent carousel container creation failed: ${carouselData.error?.message || 'Unknown error'}`,
+        };
+      }
+
+      const carouselCreationId = carouselData.id;
+
+      // Step 4: Poll status of parent carousel container
+      const parentPoll = await this.pollContainerStatus(carouselCreationId, accessToken);
+      if (!parentPoll.ready) {
+        return {
+          success: false,
+          errorCode: 'CAROUSEL_PROCESSING_FAILED',
+          error: `Carousel processing failed: ${parentPoll.error || 'Container not ready'}`,
+        };
+      }
+
+      // Step 5: Publish parent carousel container
+      const publishUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media_publish`;
+      const publishResp = await fetch(publishUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          creation_id: carouselCreationId,
+        }),
+      });
+
+      const publishData = await publishResp.json().catch(() => ({}));
+      if (!publishResp.ok || publishData.error) {
+        return {
+          success: false,
+          errorCode: 'PUBLISH_FAILED',
+          error: `Failed to publish Instagram carousel: ${publishData.error?.message || 'Publishing error'}`,
+        };
+      }
+
+      const publishedMediaId = publishData.id;
+
+      // Step 6: Fetch permalink
+      let permalink = `https://www.instagram.com/p/${publishedMediaId}/`;
+      try {
+        const permalinkUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${publishedMediaId}?fields=permalink`;
+        const permalinkResp = await fetch(permalinkUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const permalinkData = await permalinkResp.json().catch(() => ({}));
+        if (permalinkData.permalink) {
+          permalink = permalinkData.permalink;
+        }
+      } catch {}
+
+      return {
+        success: true,
+        mediaId: publishedMediaId,
+        permalink,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        errorCode: 'API_UNAVAILABLE',
+        error: `Instagram API request failed: ${err?.message || err}`,
       };
     }
   }

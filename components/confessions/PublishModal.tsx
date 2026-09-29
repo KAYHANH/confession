@@ -15,11 +15,16 @@ import {
   Download,
 } from 'lucide-react';
 import { Confession, Template } from '@/types';
-import { PostCardPreview, splitIntoSlides } from './PostCardPreview';
+import { PostCardPreview } from './PostCardPreview';
 import { useToast } from '../ui/ToastContext';
 import { downloadCardAsPng, downloadAllSlides } from '@/lib/downloadCard';
 import { SmartContentPreparation } from '../growth/SmartContentPreparation';
-
+import {
+  paginateConfession,
+  buildInstagramCaption,
+  createHookText,
+  validatePublicationPayload,
+} from '@/lib/paginationEngine';
 
 interface PublishModalProps {
   isOpen: boolean;
@@ -41,27 +46,56 @@ export function PublishModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const { success, error } = useToast();
 
-  const fullText = confession.cleaned_text || confession.original_text || '';
-  const wordCount = fullText.trim().split(/\s+/).filter(Boolean).length;
-  const isLong = wordCount > 20;
-  // Auto-split into slides: 20 words per slide for carousel
-  const slides = isLong ? splitIntoSlides(fullText, 20) : [fullText];
+  const fullText = (confession.cleaned_text || confession.original_text || '').trim();
+  const wordCount = fullText.split(/\s+/).filter(Boolean).length;
+  const pagination = paginateConfession(fullText);
+  const totalSlides = pagination.totalSlides;
+  const slides = pagination.slides.map((s) => s.text);
+  const isMultiSlide = totalSlides > 1;
+  const isLong = isMultiSlide || wordCount > 80;
 
-  const [cardMode, setCardMode] = useState<'fit' | 'hook' | 'carousel'>(isLong ? 'carousel' : 'fit');
+  const [cardMode, setCardMode] = useState<'fit' | 'hook' | 'carousel'>(
+    isMultiSlide ? 'carousel' : 'fit'
+  );
   const [currentSlide, setCurrentSlide] = useState(0);
   const [downloading, setDownloading] = useState(false);
 
-
   if (!isOpen) return null;
 
-  const currentTextToRender =
-    cardMode === 'carousel'
-      ? slides[currentSlide] || fullText
-      : fullText;
+  let currentTextToRender = fullText;
+  if (cardMode === 'carousel') {
+    currentTextToRender = slides[currentSlide] || fullText;
+  } else if (cardMode === 'hook') {
+    currentTextToRender = createHookText(fullText);
+  } else {
+    currentTextToRender = fullText;
+  }
+
+  const previewCaption = buildInstagramCaption({
+    confessionNumber: confession.google_sheet_row || 1,
+    hashtags: confession.hashtags || [],
+    mode: cardMode,
+    sourceConfession: fullText,
+  });
 
   const handlePublish = async () => {
     setPublishing(true);
     setErrorMessage(null);
+
+    // Pre-flight payload validation
+    const validation = validatePublicationPayload({
+      sourceConfession: fullText,
+      slides: cardMode === 'carousel' ? slides : [currentTextToRender],
+      mode: cardMode,
+      caption: previewCaption,
+    });
+
+    if (!validation.valid) {
+      setErrorMessage(validation.errors.join(' '));
+      error(validation.errors[0]);
+      setPublishing(false);
+      return;
+    }
 
     try {
       const res = await fetch(`/api/confessions/${confession.id}/publish`, {
@@ -69,8 +103,8 @@ export function PublishModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           cardMode,
-          slideIndex: currentSlide,
-          totalSlides: slides.length,
+          templateId: template.id,
+          customCaption: previewCaption,
         }),
       });
       const data = await res.json();
@@ -161,7 +195,9 @@ export function PublishModal({
           <div className="mb-4 p-3 bg-brand-50/70 border border-brand-200/60 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
             <div className="flex items-center gap-2 text-xs font-semibold text-brand-900">
               <Layers className="w-4 h-4 text-brand-600 shrink-0" />
-              <span>Story Length: {wordCount} words — Auto Carousel</span>
+              <span>
+                Story Length: {wordCount} words — {isMultiSlide ? `Auto Carousel (${totalSlides} Slides)` : 'Single Post'}
+              </span>
             </div>
             <div className="flex items-center gap-1 bg-white p-1 rounded-xl shadow-xs border border-brand-200 text-xs">
               <button
@@ -188,19 +224,31 @@ export function PublishModal({
                 <Scissors className="w-3.5 h-3.5" />
                 <span>Hook + Caption</span>
               </button>
-              <button
-                type="button"
-                onClick={() => setCardMode('carousel')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
-                  cardMode === 'carousel'
-                    ? 'bg-brand-600 text-white shadow-xs'
-                    : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50'
-                }`}
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span>Carousel ({slides.length} Slides)</span>
-              </button>
+              {isMultiSlide && (
+                <button
+                  type="button"
+                  onClick={() => setCardMode('carousel')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
+                    cardMode === 'carousel'
+                      ? 'bg-brand-600 text-white shadow-xs'
+                      : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Carousel ({totalSlides} Slides)</span>
+                </button>
+              )}
             </div>
+          </div>
+        )}
+
+        {/* Warning if Fit in 1 Card cannot safely fit */}
+        {cardMode === 'fit' && !pagination.canFitSingle && (
+          <div className="mb-4 flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <span>
+              This confession is too long ({wordCount} words) to safely fit on a single card without clipping. Switching to <strong>Carousel ({totalSlides} Slides)</strong> is recommended.
+            </span>
           </div>
         )}
 
@@ -219,11 +267,11 @@ export function PublishModal({
               scale={0.28}
               mode={cardMode}
               slideIndex={currentSlide}
-              totalSlides={cardMode === 'carousel' ? slides.length : 1}
+              totalSlides={cardMode === 'carousel' ? totalSlides : 1}
             />
 
             {/* Carousel Slide Navigation Controls */}
-            {cardMode === 'carousel' && slides.length > 1 && (
+            {cardMode === 'carousel' && totalSlides > 1 && (
               <div className="flex items-center justify-between w-full max-w-[300px] mt-3 px-1 text-xs font-semibold text-zinc-700">
                 <button
                   type="button"
@@ -235,12 +283,12 @@ export function PublishModal({
                   <span>Prev</span>
                 </button>
                 <span className="text-zinc-500">
-                  Slide {currentSlide + 1} of {slides.length}
+                  Slide {currentSlide + 1} of {totalSlides}
                 </span>
                 <button
                   type="button"
-                  onClick={() => setCurrentSlide((s) => Math.min(slides.length - 1, s + 1))}
-                  disabled={currentSlide === slides.length - 1}
+                  onClick={() => setCurrentSlide((s) => Math.min(totalSlides - 1, s + 1))}
+                  disabled={currentSlide === totalSlides - 1}
                   className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-zinc-200 bg-white hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   <span>Next</span>
@@ -261,12 +309,12 @@ export function PublishModal({
                 <span>
                   {downloading
                     ? 'Exporting...'
-                    : cardMode === 'carousel' && slides.length > 1
+                    : cardMode === 'carousel' && totalSlides > 1
                     ? `Download Slide ${currentSlide + 1}`
                     : 'Download PNG'}
                 </span>
               </button>
-              {cardMode === 'carousel' && slides.length > 1 && (
+              {cardMode === 'carousel' && totalSlides > 1 && (
                 <button
                   type="button"
                   onClick={handleDownloadAll}
@@ -274,7 +322,7 @@ export function PublishModal({
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-brand-200 bg-brand-50 hover:bg-brand-100 text-xs font-semibold text-brand-700 shadow-xs transition-colors cursor-pointer disabled:opacity-50"
                 >
                   <Download className="w-3.5 h-3.5 text-brand-600" />
-                  <span>Download All ({slides.length})</span>
+                  <span>Download All ({totalSlides})</span>
                 </button>
               )}
             </div>
@@ -294,11 +342,8 @@ export function PublishModal({
                 Instagram Caption
               </span>
               <p className="text-zinc-700 whitespace-pre-wrap leading-relaxed text-xs">
-                {confession.caption || fullText}
+                {previewCaption}
               </p>
-              <div className="mt-2 text-brand-600 font-medium">
-                {(confession.hashtags || []).join(' ')}
-              </div>
             </div>
 
             <div className="pt-2 border-t border-zinc-200 flex items-center justify-between">
@@ -309,7 +354,7 @@ export function PublishModal({
               <div className="text-[11px] text-zinc-500">
                 {cardMode === 'fit' && '📸 Single 1080×1350 Post (4:5)'}
                 {cardMode === 'hook' && '📖 Hook + Full Caption'}
-                {cardMode === 'carousel' && `📑 ${slides.length}-Slide Carousel`}
+                {cardMode === 'carousel' && `📑 ${totalSlides}-Slide Carousel`}
               </div>
             </div>
           </div>

@@ -9,7 +9,17 @@ export async function POST(
 ) {
   try {
     const { id } = await Promise.resolve(props.params);
-    const published = await confessionService.publishConfession(id);
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {
+      // Empty or non-JSON body is valid, defaults will apply
+    }
+    const published = await confessionService.publishConfession(id, {
+      cardMode: body.cardMode,
+      customCaption: body.customCaption,
+      templateId: body.templateId,
+    });
     return NextResponse.json(published);
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Publishing failed' }, { status: 400 });

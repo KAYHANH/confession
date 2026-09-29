@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { Template } from '@/types';
 import { getCardTypography, splitIntoSlides } from '@/components/confessions/PostCardPreview';
@@ -322,7 +322,7 @@ export async function downloadCardAsPng(options: DownloadCardOptions): Promise<v
  */
 export async function downloadAllSlides(options: DownloadCardOptions): Promise<number> {
   const rawText = options.text || '';
-  const slides = splitIntoSlides(rawText, 480);
+  const slides = splitIntoSlides(rawText);
   const total = slides.length;
 
   for (let i = 0; i < total; i++) {

@@ -4,6 +4,7 @@ import { moderationService } from './moderationService';
 import { aiService } from './aiService';
 import { mockStore } from '@/lib/mockStore';
 import { Confession, ModerationRisk, ConfessionStatus } from '@/types';
+import { buildInstagramCaption } from '@/lib/paginationEngine';
 
 export interface AutoPublishCycleResult {
   ran: boolean;
@@ -195,7 +196,11 @@ export class SchedulingService {
         template_id: '44444444-4444-4444-4444-444444444444',
         generated_image_url: null,
         generated_image_path: null,
-        caption: `Confession #${row.rowNumber} 💭\n\n${cleanedText.length > 250 ? cleanedText.slice(0, 247) + '...' : cleanedText}\n\nShare your thoughts below 👇`,
+        caption: buildInstagramCaption({
+          confessionNumber: row.rowNumber,
+          hashtags: ['#confession', '#campuslife', '#studentconfessions'],
+          mode: 'auto',
+        }),
         hashtags: ['#confession', '#campuslife', '#studentconfessions'],
         scheduled_at: null,
         published_at: isAlreadyPublished ? (row.processedAt || row.timestamp || new Date().toISOString()) : null,

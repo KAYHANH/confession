@@ -72,6 +72,7 @@ CRITICAL RULES:
    - Starts with "Confession #${String(confessionNumber).padStart(3, '0')}" and an appropriate emoji.
    - Includes a brief 1-2 sentence hook or discussion prompt (e.g. "What would you do in this situation?").
    - Encourages comments and saves politely.
+   - NEVER copy or duplicate the full confession body into the caption (the text is already displayed on the card slides).
 7. Generate 4 to 6 relevant, high-performing hashtags without spam.
 8. Assess moderation risk: LOW, MEDIUM, or HIGH.
 9. Output STRICT JSON ONLY with the exact keys:
@@ -150,7 +151,7 @@ Is Anonymous: ${isAnonymous}`;
     return {
       cleanedText: parsed.cleanedText || text,
       displayName: isAnonymous ? 'Anonymous' : (parsed.displayName || submittedName || 'Anonymous'),
-      caption: parsed.caption || `Confession #${String(confessionNumber).padStart(3, '0')}\n\n${text}\n\nWhat are your thoughts?`,
+      caption: parsed.caption || `Confession #${String(confessionNumber).padStart(3, '0')} 💭\n\nWhat are your thoughts on this? Share below 👇`,
       hashtags: Array.isArray(parsed.hashtags) && parsed.hashtags.length > 0
         ? parsed.hashtags.map((h: string) => (h.startsWith('#') ? h : `#${h}`))
         : ['#confession', '#anonymousconfession', '#campuslife'],

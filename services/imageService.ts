@@ -9,6 +9,10 @@ export interface ImageGenerationOptions {
   brandName?: string;
   instagramHandle?: string;
   confessionNumber?: number;
+  slideText?: string;
+  slideIndex?: number;
+  totalSlides?: number;
+  customFilename?: string;
 }
 
 export class ImageService {
@@ -149,13 +153,18 @@ export class ImageService {
   public generateCardHtml(options: ImageGenerationOptions): string {
     const { confession, template, brandName = 'Campus Confessions', instagramHandle = '@campusconfessions', confessionNumber = 1 } = options;
     
-    const safeText = this.escapeHtml(confession.cleaned_text || confession.original_text);
+    const rawText = options.slideText || confession.cleaned_text || confession.original_text;
+    const safeText = this.escapeHtml(rawText);
     const safeName = this.escapeHtml(confession.is_anonymous ? 'Anonymous' : confession.display_name);
     const safeBrand = this.escapeHtml(brandName);
     const safeHandle = this.escapeHtml(instagramHandle);
     const numFormatted = String(confessionNumber).padStart(3, '0');
+    const badgeText =
+      options.totalSlides && options.totalSlides > 1
+        ? `CONFESSION #${numFormatted} (${(options.slideIndex || 0) + 1}/${options.totalSlides})`
+        : `CONFESSION #${numFormatted}`;
 
-    const cfg = this.calculateDynamicFontSize(confession.cleaned_text || confession.original_text, template.font_size);
+    const cfg = this.calculateDynamicFontSize(rawText, template.font_size);
     const fontFamily = template.font_family === 'serif' 
       ? `'Playfair Display', Georgia, serif` 
       : `'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`;
@@ -326,7 +335,7 @@ export class ImageService {
   <div class="glow-circle"></div>
 
   <div class="header">
-    ${template.show_confession_number ? `<div class="badge">CONFESSION #${numFormatted}</div>` : '<div></div>'}
+    ${template.show_confession_number ? `<div class="badge">${badgeText}</div>` : '<div></div>'}
     ${template.show_branding ? `<div class="branding-top">${safeBrand}</div>` : '<div></div>'}
   </div>
 
@@ -353,12 +362,19 @@ export class ImageService {
    */
   public async generatePostImage(options: ImageGenerationOptions): Promise<{ localPath: string; publicUrl: string }> {
     const { confession } = options;
-    const htmlContent = this.generateCardHtml(options);
-    const filename = `${confession.id}.png`;
+    const filename = options.customFilename || `${confession.id}.png`;
     const localFilePath = path.join(this.outputDir, filename);
 
     // Use Sharp SVG engine directly — instant, no browser launch overhead
     await this.generateSvgPngFallback(options, localFilePath);
+
+    // If generating a specific slide (e.g. slide 1), also copy to primary confession.id.png for backward compatibility
+    if (options.customFilename && (options.slideIndex === 0 || !options.slideIndex)) {
+      const defaultPath = path.join(this.outputDir, `${confession.id}.png`);
+      try {
+        fs.copyFileSync(localFilePath, defaultPath);
+      } catch {}
+    }
 
     const publicUrl = `/generated/${filename}`;
 
@@ -471,39 +487,42 @@ export class ImageService {
   private async generateSvgPngFallback(options: ImageGenerationOptions, targetPath: string): Promise<void> {
     const { confession, template, brandName = 'Campus Confessions', instagramHandle = '@campusconfessions', confessionNumber = 1 } = options;
     const numFormatted = String(confessionNumber).padStart(3, '0');
-    const safeText = this.escapeHtml(confession.cleaned_text || confession.original_text);
+    const rawText = options.slideText || confession.cleaned_text || confession.original_text || '';
+    const safeText = this.escapeHtml(rawText);
     const safeName = this.escapeHtml(confession.is_anonymous ? 'Anonymous' : confession.display_name);
 
-    const len = safeText.length;
-    let charsPerLine = 34;
-    let fontSize = 38;
-    let lineSpacing = 54;
-    let startY = 400;
+    const isCarousel = Boolean(options.totalSlides && options.totalSlides > 1);
+    const badgeText = isCarousel
+      ? `CONFESSION #${numFormatted} (${(options.slideIndex || 0) + 1}/${options.totalSlides})`
+      : `CONFESSION #${numFormatted}`;
+    const badgeWidth = isCarousel ? 340 : 280;
+    const badgeTextX = isCarousel ? 240 : 210;
+
+    const len = rawText.length;
+    let charsPerLine = 38;
+    let fontSize = 36;
+    let lineSpacing = 50;
     let showQuote = true;
 
-    if (len < 250) {
+    if (len < 160) {
       charsPerLine = 34;
-      fontSize = 38;
-      lineSpacing = 54;
-      startY = 400;
+      fontSize = 42;
+      lineSpacing = 58;
       showQuote = true;
-    } else if (len < 550) {
-      charsPerLine = 42;
-      fontSize = 30;
-      lineSpacing = 44;
-      startY = 330;
+    } else if (len < 380) {
+      charsPerLine = 40;
+      fontSize = 34;
+      lineSpacing = 48;
       showQuote = true;
-    } else if (len < 1000) {
-      charsPerLine = 48;
-      fontSize = 25;
-      lineSpacing = 37;
-      startY = 260;
-      showQuote = false;
+    } else if (len < 750) {
+      charsPerLine = 46;
+      fontSize = 28;
+      lineSpacing = 40;
+      showQuote = true;
     } else {
-      charsPerLine = 56;
-      fontSize = 22;
-      lineSpacing = 32;
-      startY = 220;
+      charsPerLine = 52;
+      fontSize = 24;
+      lineSpacing = 34;
       showQuote = false;
     }
 
@@ -531,18 +550,25 @@ export class ImageService {
       if (currentLine) lines.push(currentLine.trim());
     }
 
-    // Footer starts at y=1210 in 1350px canvas
+    // Footer divider starts at y=1210 in 1350px canvas
     const footerDividerY = 1210;
-    const maxAvailableHeight = footerDividerY - startY - 70;
-    const maxLines = Math.floor(maxAvailableHeight / lineSpacing);
-    const displayLines = lines.slice(0, maxLines);
-    if (lines.length > maxLines && displayLines.length > 0) {
-      const lastIdx = displayLines.length - 1;
-      displayLines[lastIdx] = displayLines[lastIdx].substring(0, Math.max(10, charsPerLine - 25)) + '... [Read caption 👇]';
-    }
+    const headerBottomY = 135;
+    const signatureSpace = template.show_name ? 60 : 0;
+    const quoteSpace = showQuote ? 60 : 0;
 
-    const lastLineY = startY + (displayLines.length - 1) * lineSpacing;
-    const signatureY = Math.min(1160, lastLineY + 44);
+    const totalTextHeight = lines.length * lineSpacing;
+    const availableHeight = footerDividerY - headerBottomY - signatureSpace - quoteSpace;
+
+    // Dynamically center text vertically within available content area
+    let startY = Math.max(
+      headerBottomY + quoteSpace + 20,
+      Math.min(420, Math.round(headerBottomY + quoteSpace + (availableHeight - totalTextHeight) / 2))
+    );
+
+    // Render all lines (no truncation since text is properly paginated)
+    const displayLines = lines;
+    const lastLineY = startY + Math.max(0, displayLines.length - 1) * lineSpacing;
+    const signatureY = Math.min(1160, Math.max(lastLineY + 44, startY + totalTextHeight + 24));
 
     const isSerif = template.font_family === 'serif';
     const textFontFamily = isSerif
@@ -562,9 +588,9 @@ export class ImageService {
       <circle cx="540" cy="675" r="420" fill="${template.accent_color}" fill-opacity="0.06" />
 
       <!-- Header Badge -->
-      <rect x="70" y="70" width="280" height="52" rx="26" fill="${template.accent_color}" fill-opacity="0.14" stroke="${template.accent_color}" stroke-width="2" />
-      <text x="210" y="103" font-family="${uiFontFamily}" font-size="19" font-weight="700" fill="${template.accent_color}" text-anchor="middle" letter-spacing="1.5">
-        CONFESSION #${numFormatted}
+      <rect x="70" y="70" width="${badgeWidth}" height="52" rx="26" fill="${template.accent_color}" fill-opacity="0.14" stroke="${template.accent_color}" stroke-width="2" />
+      <text x="${badgeTextX}" y="103" font-family="${uiFontFamily}" font-size="19" font-weight="700" fill="${template.accent_color}" text-anchor="middle" letter-spacing="1.5">
+        ${badgeText}
       </text>
       
       <!-- Brand Top -->
@@ -611,6 +637,85 @@ export class ImageService {
       console.warn('[ImageService] Sharp conversion fallback warning:', sharpErr?.message);
       fs.writeFileSync(targetPath, svg, 'utf-8');
     }
+  }
+
+  /**
+   * Generates PNG images for each slide in a paginated carousel confession.
+   * Supports both options object and positional arguments.
+   */
+  public async generateSlideImages(
+    confessionOrOptions:
+      | Confession
+      | {
+          confession: Confession;
+          template: Template;
+          slides: string[];
+          brandName?: string;
+          instagramHandle?: string;
+          confessionNumber?: number;
+        },
+    templateArg?: Template,
+    slidesArg?: string[],
+    optionsArg: {
+      brandName?: string;
+      instagramHandle?: string;
+      confessionNumber?: number;
+    } = {}
+  ): Promise<Array<{ localPath: string; publicUrl: string; slideIndex: number }>> {
+    let confession: Confession;
+    let template: Template;
+    let slides: string[];
+    let brandName: string | undefined;
+    let instagramHandle: string | undefined;
+    let confessionNumber: number | undefined;
+
+    if ('confession' in confessionOrOptions) {
+      confession = confessionOrOptions.confession;
+      template = confessionOrOptions.template;
+      slides = confessionOrOptions.slides;
+      brandName = confessionOrOptions.brandName;
+      instagramHandle = confessionOrOptions.instagramHandle;
+      confessionNumber = confessionOrOptions.confessionNumber;
+    } else {
+      confession = confessionOrOptions;
+      template = templateArg!;
+      slides = slidesArg!;
+      brandName = optionsArg.brandName;
+      instagramHandle = optionsArg.instagramHandle;
+      confessionNumber = optionsArg.confessionNumber;
+    }
+
+    const results: Array<{ localPath: string; publicUrl: string; slideIndex: number }> = [];
+
+    for (let i = 0; i < slides.length; i++) {
+      const slideText = slides[i];
+      const filename = slides.length > 1
+        ? `${confession.id}-slide-${i + 1}.png`
+        : `${confession.id}.png`;
+
+      const res = await this.generatePostImage({
+        confession: {
+          ...confession,
+          cleaned_text: slideText,
+        },
+        template,
+        brandName,
+        instagramHandle,
+        confessionNumber: confessionNumber || confession.google_sheet_row || 1,
+        slideText,
+        slideIndex: i,
+        totalSlides: slides.length,
+        customFilename: filename,
+      });
+
+      results.push({
+        localPath: res.localPath,
+        publicUrl: res.publicUrl,
+        slideIndex: i + 1,
+      });
+    }
+
+    return results;
   }
 }
 

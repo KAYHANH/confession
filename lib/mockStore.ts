@@ -287,13 +287,18 @@ class MockStore {
   }
 
   public addConfession(confession: Confession) {
+    this.data.confessions = this.data.confessions.filter((c) => c.id !== confession.id);
     this.data.confessions.unshift(confession);
     this.save();
     return confession;
   }
 
   public addConfessions(newConfessions: Confession[]) {
-    this.data.confessions = [...newConfessions, ...this.data.confessions];
+    const newIds = new Set(newConfessions.map((c) => c.id));
+    this.data.confessions = [
+      ...newConfessions,
+      ...this.data.confessions.filter((c) => !newIds.has(c.id)),
+    ];
     this.save();
     return newConfessions;
   }

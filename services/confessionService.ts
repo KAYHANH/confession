@@ -6,6 +6,14 @@ import { imageService } from './imageService';
 import { instagramService } from './instagramService';
 import { googleSheetsService } from './googleSheetsService';
 import { moderationService } from './moderationService';
+import {
+  paginateConfession,
+  buildInstagramCaption,
+  canFitOnSingleCard,
+  createHookText,
+  validatePublicationPayload,
+  verifyContentPreservation,
+} from '@/lib/paginationEngine';
 
 // Valid status transitions map
 export const ALLOWED_TRANSITIONS: Record<ConfessionStatus, ConfessionStatus[]> = {
@@ -382,7 +390,14 @@ export class ConfessionService {
   /**
    * Publish confession to Instagram with strict concurrency lock, duplicate prevention, and sheet sync
    */
-  public async publishConfession(id: string): Promise<Confession> {
+  public async publishConfession(
+    id: string,
+    options?: {
+      cardMode?: 'fit' | 'hook' | 'carousel' | 'auto';
+      customCaption?: string;
+      templateId?: string;
+    }
+  ): Promise<Confession> {
     // 1. Lock check to prevent double-click race condition
     if (this.publishingLocks.has(id)) {
       throw new Error('This confession is currently being published. Please wait.');
@@ -439,31 +454,160 @@ export class ConfessionService {
         metadata: { attempt: (confession.retry_count || 0) + 1 },
       });
 
-      // 4. Ensure card image is freshly and accurately generated using current template
+      // 4. Resolve template and formatting mode
       const defaultTemplateId = mockStore.getSettings().default_template_id;
-      const targetTemplateId = confession.template_id || defaultTemplateId || '44444444-4444-4444-4444-444444444444';
+      const targetTemplateId = options?.templateId || confession.template_id || defaultTemplateId || '44444444-4444-4444-4444-444444444444';
       const template = mockStore.getTemplateById(targetTemplateId) || mockStore.getTemplateById(defaultTemplateId) || mockStore.getTemplates().find(t => t.id === '44444444-4444-4444-4444-444444444444') || mockStore.getTemplates()[0];
       const settings = mockStore.getSettings();
-      const imgRes = await imageService.generatePostImage({
-        confession,
-        template,
-        brandName: settings.brand_name,
-        instagramHandle: settings.instagram_handle,
-        confessionNumber: confession.google_sheet_row || 1,
-      });
-      const imageUrl = imgRes.publicUrl;
-      await this.updateConfession(id, {
-        template_id: template.id,
-        generated_image_url: imgRes.publicUrl,
-        generated_image_path: imgRes.localPath,
-      });
 
-      // Format caption with hashtags
-      const hashtagsStr = (confession.hashtags || []).join(' ');
-      const fullCaption = `${confession.caption || ''}\n\n${hashtagsStr}`.trim();
+      const sourceText = (confession.cleaned_text || confession.original_text || '').trim();
+      const requestedMode = options?.cardMode || 'auto';
+      const pagination = paginateConfession(sourceText);
 
-      // 5. Call Instagram Service
-      const publishResult = await instagramService.publishPost(confession, imageUrl, fullCaption);
+      let effectiveMode: 'fit' | 'hook' | 'carousel' = 'fit';
+      if (requestedMode === 'carousel') {
+        effectiveMode = 'carousel';
+      } else if (requestedMode === 'hook') {
+        effectiveMode = 'hook';
+      } else if (requestedMode === 'fit') {
+        effectiveMode = 'fit';
+      } else {
+        // 'auto' mode: if more than 1 slide needed to fit safely, use carousel
+        effectiveMode = pagination.totalSlides > 1 ? 'carousel' : 'fit';
+      }
+
+      let generatedPublicUrls: string[] = [];
+      let fullCaption = '';
+
+      if (effectiveMode === 'fit') {
+        // Enforce fit requirement: check if text can safely fit on single card
+        if (!canFitOnSingleCard(sourceText, template)) {
+          throw new Error('This confession does not safely fit on one card without clipping. Please use Carousel format.');
+        }
+
+        const imgRes = await imageService.generatePostImage({
+          confession,
+          template,
+          brandName: settings.brand_name,
+          instagramHandle: settings.instagram_handle,
+          confessionNumber: confession.google_sheet_row || 1,
+        });
+        generatedPublicUrls = [imgRes.publicUrl];
+
+        await this.updateConfession(id, {
+          template_id: template.id,
+          generated_image_url: imgRes.publicUrl,
+          generated_image_path: imgRes.localPath,
+        });
+
+        fullCaption = (options?.customCaption && options.customCaption.trim()) ||
+          buildInstagramCaption({
+            confessionNumber: confession.google_sheet_row || 1,
+            hashtags: confession.hashtags || [],
+            mode: 'fit',
+          });
+
+        const validation = validatePublicationPayload({
+          sourceConfession: sourceText,
+          slides: [sourceText],
+          mode: 'fit',
+          caption: fullCaption,
+        });
+        if (!validation.valid) {
+          throw new Error(`Pre-publication validation failed: ${validation.errors.join('; ')}`);
+        }
+      } else if (effectiveMode === 'hook') {
+        const hookText = createHookText(sourceText);
+        const imgRes = await imageService.generatePostImage({
+          confession: { ...confession, cleaned_text: hookText },
+          template,
+          brandName: settings.brand_name,
+          instagramHandle: settings.instagram_handle,
+          confessionNumber: confession.google_sheet_row || 1,
+        });
+        generatedPublicUrls = [imgRes.publicUrl];
+
+        await this.updateConfession(id, {
+          template_id: template.id,
+          generated_image_url: imgRes.publicUrl,
+          generated_image_path: imgRes.localPath,
+        });
+
+        fullCaption = (options?.customCaption && options.customCaption.trim()) ||
+          buildInstagramCaption({
+            confessionNumber: confession.google_sheet_row || 1,
+            hashtags: confession.hashtags || [],
+            mode: 'hook',
+            sourceConfession: sourceText,
+          });
+
+        const validation = validatePublicationPayload({
+          sourceConfession: sourceText,
+          slides: [hookText],
+          mode: 'hook',
+          caption: fullCaption,
+        });
+        if (!validation.valid) {
+          throw new Error(`Pre-publication validation failed: ${validation.errors.join('; ')}`);
+        }
+      } else {
+        // Carousel mode
+        const slideTexts = pagination.slides.map((s) => s.text);
+        if (slideTexts.length > 10) {
+          throw new Error(
+            `This confession is too long for one Instagram carousel (has ${slideTexts.length} slides, platform limit is 10). Please shorten it.`
+          );
+        }
+
+        const isPreserved = verifyContentPreservation(sourceText, slideTexts);
+        if (!isPreserved) {
+          throw new Error(
+            'Unable to safely paginate the confession without losing content. Source text and slide content mismatch.'
+          );
+        }
+
+        fullCaption = (options?.customCaption && options.customCaption.trim()) ||
+          buildInstagramCaption({
+            confessionNumber: confession.google_sheet_row || 1,
+            hashtags: confession.hashtags || [],
+            mode: 'carousel',
+          });
+
+        const validation = validatePublicationPayload({
+          sourceConfession: sourceText,
+          slides: slideTexts,
+          mode: 'carousel',
+          caption: fullCaption,
+        });
+        if (!validation.valid) {
+          throw new Error(`Pre-publication validation failed: ${validation.errors.join('; ')}`);
+        }
+
+        const slideImages = await imageService.generateSlideImages({
+          confession,
+          template,
+          brandName: settings.brand_name,
+          instagramHandle: settings.instagram_handle,
+          confessionNumber: confession.google_sheet_row || 1,
+          slides: slideTexts,
+        });
+
+        generatedPublicUrls = slideImages.map((s) => s.publicUrl);
+
+        await this.updateConfession(id, {
+          template_id: template.id,
+          generated_image_url: generatedPublicUrls[0],
+          generated_image_path: slideImages[0]?.localPath || null,
+        });
+      }
+
+      // 5. Call Instagram Service (single post or carousel based on generatedPublicUrls)
+      let publishResult;
+      if (generatedPublicUrls.length > 1) {
+        publishResult = await instagramService.publishCarousel(confession, generatedPublicUrls, fullCaption);
+      } else {
+        publishResult = await instagramService.publishPost(confession, generatedPublicUrls[0], fullCaption);
+      }
 
       if (!publishResult.success) {
         const newRetryCount = (confession.retry_count || 0) + 1;

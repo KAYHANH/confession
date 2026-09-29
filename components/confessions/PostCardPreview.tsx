@@ -3,6 +3,8 @@
 import React from 'react';
 import { Template } from '@/types';
 
+import { paginateConfession } from '@/lib/paginationEngine';
+
 export interface PostCardPreviewProps {
   text: string;
   displayName: string;
@@ -17,32 +19,10 @@ export interface PostCardPreviewProps {
   totalSlides?: number;
 }
 
-export function splitIntoSlides(t: string, maxWordsOrChars: number = 20): string[] {
-  if (!t) return [''];
-  // When called with small numbers (≤50), treat as word limit; larger = char limit (legacy)
-  const maxWords = maxWordsOrChars <= 50 ? maxWordsOrChars : 20;
-  const wordCount = t.trim().split(/\s+/).filter(Boolean).length;
-  if (wordCount <= maxWords) return [t];
-
-  // Split at sentence boundaries
-  const sentences = t.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g) || [t];
-  const slides: string[] = [];
-  let cur = '';
-  let curWords = 0;
-
-  for (const s of sentences) {
-    const sWords = s.trim().split(/\s+/).filter(Boolean).length;
-    if (curWords + sWords > maxWords && curWords >= 5) {
-      slides.push(cur.trim());
-      cur = s;
-      curWords = sWords;
-    } else {
-      cur += (cur ? ' ' : '') + s.trimStart();
-      curWords += sWords;
-    }
-  }
-  if (cur.trim()) slides.push(cur.trim());
-  return slides.length > 0 ? slides : [t];
+export function splitIntoSlides(t: string, _maxWordsOrChars?: number): string[] {
+  if (!t || !t.trim()) return [''];
+  const result = paginateConfession(t);
+  return result.slides.map((s) => s.text);
 }
 
 export function getCardTypography(textLength: number, baseSize: number = 44) {
