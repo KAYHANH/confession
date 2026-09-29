@@ -1,0 +1,21 @@
+name: ConfessionFlow Auto-Publish Cron & Keep-Alive
+
+on:
+  schedule:
+    # Run every 15 minutes
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Allow manual trigger anytime from GitHub UI
+
+jobs:
+  ping-cron:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Auto-Publish Endpoint
+        run: |
+          echo "Pinging ConfessionFlow auto-publish endpoint..."
+          curl -s -X POST "https://confession-5ha2.onrender.com/api/cron/auto-publish" \
+            -H "Content-Type: application/json" \
+            -d '{}' || true
+          echo ""
+          echo "Pinging health keep-alive..."
+          curl -s "https://confession-5ha2.onrender.com/api/health" || true
