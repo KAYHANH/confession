@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { Confession, Template } from '@/types';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { calculateCardTypography, MIN_BODY_FONT_SIZE } from '@/lib/paginationEngine';
 
 export interface ImageGenerationOptions {
   confession: Confession;
@@ -38,9 +39,14 @@ export class ImageService {
   }
 
   /**
-   * Calculate dynamic font size based on text length to prevent overflow in 1080x1080 canvas
+   * Calculate dynamic font size based on text length to prevent overflow in 1080x1080 canvas.
+   * Enforces MIN_BODY_FONT_SIZE: NEVER shrinks below MIN_BODY_FONT_SIZE (28px).
    */
-  public calculateDynamicFontSize(text: string, baseSize: number = 44): {
+  public calculateDynamicFontSize(
+    text: string,
+    baseSize: number = 44,
+    minFontSize: number = MIN_BODY_FONT_SIZE
+  ): {
     fontSize: number;
     lineHeight: number;
     padding: number;
@@ -52,98 +58,22 @@ export class ImageService {
     signatureSize: number;
     warning?: string;
   } {
-    const len = text.length;
-    if (len < 120) {
-      return {
-        fontSize: Math.min(50, baseSize + 6),
-        lineHeight: 1.45,
-        padding: 80,
-        showBigQuote: true,
-        quoteSize: 76,
-        justify: 'center',
-        marginY: 28,
-        signatureMargin: 26,
-        signatureSize: 26,
-      };
-    }
-    if (len < 280) {
-      return {
-        fontSize: Math.min(40, baseSize + 2),
-        lineHeight: 1.4,
-        padding: 75,
-        showBigQuote: true,
-        quoteSize: 60,
-        justify: 'center',
-        marginY: 24,
-        signatureMargin: 22,
-        signatureSize: 24,
-      };
-    }
-    if (len < 500) {
-      return {
-        fontSize: Math.max(26, baseSize - 10),
-        lineHeight: 1.35,
-        padding: 65,
-        showBigQuote: true,
-        quoteSize: 42,
-        justify: 'center',
-        marginY: 18,
-        signatureMargin: 18,
-        signatureSize: 22,
-      };
-    }
-    if (len < 850) {
-      return {
-        fontSize: 21,
-        lineHeight: 1.3,
-        padding: 55,
-        showBigQuote: true,
-        quoteSize: 32,
-        justify: 'flex-start',
-        marginY: 14,
-        signatureMargin: 16,
-        signatureSize: 20,
-      };
-    }
-    if (len < 1400) {
-      return {
-        fontSize: 17.5,
-        lineHeight: 1.25,
-        padding: 50,
-        showBigQuote: false,
-        quoteSize: 0,
-        justify: 'flex-start',
-        marginY: 10,
-        signatureMargin: 12,
-        signatureSize: 18,
-        warning: 'Confession is long. Layout has been adapted to fit in a single post.',
-      };
-    }
-    if (len < 2000) {
-      return {
-        fontSize: 15.5,
-        lineHeight: 1.22,
-        padding: 45,
-        showBigQuote: false,
-        quoteSize: 0,
-        justify: 'flex-start',
-        marginY: 8,
-        signatureMargin: 10,
-        signatureSize: 17,
-        warning: 'Confession is too long for a single post. Consider editing or creating a carousel.',
-      };
-    }
+    const metrics = calculateCardTypography(text, {
+      baseFontSize: baseSize,
+      minFontSize,
+    });
+
     return {
-      fontSize: 14,
-      lineHeight: 1.2,
-      padding: 40,
-      showBigQuote: false,
-      quoteSize: 0,
-      justify: 'flex-start',
-      marginY: 6,
-      signatureMargin: 8,
-      signatureSize: 16,
-      warning: 'Confession is too long for a single post. Consider editing or creating a carousel.',
+      fontSize: metrics.fontSize,
+      lineHeight: metrics.lineHeight,
+      padding: metrics.padding,
+      showBigQuote: metrics.showBigQuote,
+      quoteSize: metrics.quoteSize,
+      justify: metrics.justify,
+      marginY: metrics.marginY,
+      signatureMargin: metrics.signatureMargin,
+      signatureSize: metrics.signatureSize,
+      warning: metrics.warning,
     };
   }
 
@@ -159,10 +89,10 @@ export class ImageService {
     const safeBrand = this.escapeHtml(brandName);
     const safeHandle = this.escapeHtml(instagramHandle);
     const numFormatted = String(confessionNumber).padStart(3, '0');
-    const badgeText =
-      options.totalSlides && options.totalSlides > 1
-        ? `CONFESSION #${numFormatted} (${(options.slideIndex || 0) + 1}/${options.totalSlides})`
-        : `CONFESSION #${numFormatted}`;
+    const isCarousel = Boolean(options.totalSlides && options.totalSlides > 1);
+    const badgeText = isCarousel
+      ? `CONFESSION #${numFormatted} • ${(options.slideIndex || 0) + 1}/${options.totalSlides}`
+      : `CONFESSION #${numFormatted}`;
 
     const cfg = this.calculateDynamicFontSize(rawText, template.font_size);
     const fontFamily = template.font_family === 'serif' 
@@ -184,7 +114,7 @@ export class ImageService {
     
     body {
       width: 1080px;
-      height: 1350px;
+      height: 1080px;
       overflow: hidden;
       background: ${template.background};
       color: ${template.text_color};
@@ -253,7 +183,7 @@ export class ImageService {
       align-items: flex-start;
       margin: ${cfg.marginY}px 0;
       z-index: 2;
-      max-height: 1120px;
+      max-height: 850px;
       overflow: hidden;
       width: 100%;
     }
@@ -351,7 +281,7 @@ export class ImageService {
       <span>&bull;</span>
       <span class="footer-handle">${safeHandle}</span>
     </div>
-    <div>ConfessionFlow Platform</div>
+    <div>${isCarousel ? `${(options.slideIndex || 0) + 1}/${options.totalSlides}` : 'ConfessionFlow'}</div>
   </div>
 </body>
 </html>`;
@@ -493,82 +423,38 @@ export class ImageService {
 
     const isCarousel = Boolean(options.totalSlides && options.totalSlides > 1);
     const badgeText = isCarousel
-      ? `CONFESSION #${numFormatted} (${(options.slideIndex || 0) + 1}/${options.totalSlides})`
+      ? `CONFESSION #${numFormatted} • ${(options.slideIndex || 0) + 1}/${options.totalSlides}`
       : `CONFESSION #${numFormatted}`;
-    const badgeWidth = isCarousel ? 340 : 280;
-    const badgeTextX = isCarousel ? 240 : 210;
+    const badgeWidth = isCarousel ? 360 : 280;
+    const badgeTextX = isCarousel ? 250 : 210;
 
-    const len = rawText.length;
-    let charsPerLine = 38;
-    let fontSize = 36;
-    let lineSpacing = 50;
-    let showQuote = true;
+    const typo = calculateCardTypography(rawText, {
+      baseFontSize: template.font_size,
+    });
+    const fontSize = typo.fontSize;
+    const lineSpacing = typo.lineSpacing;
+    const showQuote = typo.showBigQuote;
+    const lines = typo.renderedLines;
 
-    if (len < 160) {
-      charsPerLine = 34;
-      fontSize = 42;
-      lineSpacing = 58;
-      showQuote = true;
-    } else if (len < 380) {
-      charsPerLine = 40;
-      fontSize = 34;
-      lineSpacing = 48;
-      showQuote = true;
-    } else if (len < 750) {
-      charsPerLine = 46;
-      fontSize = 28;
-      lineSpacing = 40;
-      showQuote = true;
-    } else {
-      charsPerLine = 52;
-      fontSize = 24;
-      lineSpacing = 34;
-      showQuote = false;
-    }
-
-    // Split text into paragraphs to preserve line breaks, then wrap each paragraph into lines
-    const paragraphs = safeText.split(/\r?\n/);
-    const lines: string[] = [];
-    for (const paragraph of paragraphs) {
-      const trimmedPara = paragraph.trim();
-      if (!trimmedPara) {
-        if (lines.length > 0 && lines[lines.length - 1] !== '') {
-          lines.push('');
-        }
-        continue;
-      }
-      const words = trimmedPara.split(/\s+/);
-      let currentLine = '';
-      for (const word of words) {
-        if ((currentLine + ' ' + word).trim().length > charsPerLine) {
-          if (currentLine) lines.push(currentLine.trim());
-          currentLine = word;
-        } else {
-          currentLine = currentLine ? currentLine + ' ' + word : word;
-        }
-      }
-      if (currentLine) lines.push(currentLine.trim());
-    }
-
-    // Footer divider starts at y=1210 in 1350px canvas
-    const footerDividerY = 1210;
+    // Footer divider starts at y=960 in 1080px canvas
+    const footerDividerY = 960;
     const headerBottomY = 135;
-    const signatureSpace = template.show_name ? 60 : 0;
-    const quoteSpace = showQuote ? 60 : 0;
+    const signatureSpace = template.show_name ? 55 : 0;
+    const quoteSpace = showQuote ? 50 : 0;
 
     const totalTextHeight = lines.length * lineSpacing;
     const availableHeight = footerDividerY - headerBottomY - signatureSpace - quoteSpace;
 
     // Dynamically center text vertically within available content area
     let startY = Math.max(
-      headerBottomY + quoteSpace + 20,
-      Math.min(420, Math.round(headerBottomY + quoteSpace + (availableHeight - totalTextHeight) / 2))
+      headerBottomY + quoteSpace + 15,
+      Math.min(340, Math.round(headerBottomY + quoteSpace + (availableHeight - totalTextHeight) / 2))
     );
 
     // Render all lines (no truncation since text is properly paginated)
     const displayLines = lines;
     const lastLineY = startY + Math.max(0, displayLines.length - 1) * lineSpacing;
-    const signatureY = Math.min(1160, Math.max(lastLineY + 44, startY + totalTextHeight + 24));
+    const signatureY = Math.min(925, Math.max(lastLineY + 38, startY + totalTextHeight + 20));
 
     const isSerif = template.font_family === 'serif';
     const textFontFamily = isSerif
@@ -578,14 +464,14 @@ export class ImageService {
 
     const { defs, fill } = this.parseSvgBackground(template.background);
 
-    const svg = `<svg width="1080" height="1350" viewBox="0 0 1080 1350" xmlns="http://www.w3.org/2000/svg">
+    const svg = `<svg width="1080" height="1080" viewBox="0 0 1080 1080" xmlns="http://www.w3.org/2000/svg">
       <defs>
         ${defs}
       </defs>
-      <rect width="1080" height="1350" fill="${fill}" />
+      <rect width="1080" height="1080" fill="${fill}" />
       
       <!-- Ambient Glow Orb -->
-      <circle cx="540" cy="675" r="420" fill="${template.accent_color}" fill-opacity="0.06" />
+      <circle cx="540" cy="540" r="380" fill="${template.accent_color}" fill-opacity="0.06" />
 
       <!-- Header Badge -->
       <rect x="70" y="70" width="${badgeWidth}" height="52" rx="26" fill="${template.accent_color}" fill-opacity="0.14" stroke="${template.accent_color}" stroke-width="2" />
@@ -599,7 +485,7 @@ export class ImageService {
       </text>
 
       ${showQuote ? `<!-- Quote Mark -->
-      <text x="70" y="${startY - 25}" font-family="Georgia, serif" font-size="92" font-weight="bold" fill="${template.accent_color}" opacity="0.85">&#8220;</text>` : ''}
+      <text x="70" y="${startY - 20}" font-family="Georgia, serif" font-size="82" font-weight="bold" fill="${template.accent_color}" opacity="0.85">&#8220;</text>` : ''}
 
       <!-- Confession Text Lines -->
       ${displayLines.map((l, i) => l ? `
@@ -621,7 +507,7 @@ export class ImageService {
         ${this.escapeHtml(brandName)} &#8226; ${this.escapeHtml(instagramHandle)}
       </text>
       <text x="1010" y="${footerDividerY + 46}" font-family="${uiFontFamily}" font-size="18" font-weight="700" fill="${template.accent_color}" opacity="0.9" text-anchor="end">
-        ConfessionFlow
+        ${isCarousel ? `${(options.slideIndex || 0) + 1}/${options.totalSlides}` : 'ConfessionFlow'}
       </text>
     </svg>`;
 

@@ -9,12 +9,38 @@ export interface PaginatedSlide {
   characterCount: number;
 }
 
+export const MIN_BODY_FONT_SIZE = 28;
+export const PREFERRED_BODY_FONT_SIZE = 38;
+export const MAX_BODY_FONT_SIZE = 48;
+
 export interface PaginationConfig {
   fontSize?: number;
+  minBodyFontSize?: number;        // default: 28px
+  preferredBodyFontSize?: number;  // default: 38px
+  maxBodyFontSize?: number;        // default: 48px
   lineHeightRatio?: number;
-  contentWidth?: number;      // default: 940px (1080 - 140px margins)
-  maxAvailableHeight?: number; // default: 840px (1350 - header, footer, signature, quote)
-  minLookbackRatio?: number;  // search for clean break in last 35% of fitting chunk
+  contentWidth?: number;           // default: 940px (1080 - 140px margins)
+  maxAvailableHeight?: number;     // default: 680px for 1080x1080 card
+  minLookbackRatio?: number;       // search for clean break in last 35% of fitting chunk
+}
+
+export interface CardTypographyMetrics {
+  fontSize: number;
+  lineHeight: number;
+  lineSpacing: number;
+  charsPerLine: number;
+  padding: number;
+  maxAvailableHeight: number;
+  showBigQuote: boolean;
+  quoteSize: number;
+  justify: 'center' | 'flex-start';
+  marginY: number;
+  signatureMargin: number;
+  signatureSize: number;
+  fitsOnSingleCard: boolean;
+  totalTextHeight: number;
+  renderedLines: string[];
+  warning?: string;
 }
 
 export interface PaginationResult {
@@ -104,7 +130,109 @@ export function measureRenderedLines(text: string, charsPerLine: number = 42): n
 }
 
 /**
- * Calculates typography and line metrics for 1080x1350 card.
+ * Calculates typography and layout metrics for 1080x1080 card.
+ * Enforces MIN_BODY_FONT_SIZE: NEVER shrinks body text below MIN_BODY_FONT_SIZE.
+ * Returns exact line wrapping and checks if text fits on a single card.
+ */
+export function calculateCardTypography(
+  text: string,
+  options?: {
+    minFontSize?: number;
+    preferredFontSize?: number;
+    baseFontSize?: number;
+    maxAvailableHeight?: number;
+    contentWidth?: number;
+  }
+): CardTypographyMetrics {
+  const minFontSize = options?.minFontSize ?? MIN_BODY_FONT_SIZE;
+  const preferredFontSize = options?.preferredFontSize ?? (options?.baseFontSize ? Math.min(options.baseFontSize, 44) : PREFERRED_BODY_FONT_SIZE);
+  const maxAvailableHeight = options?.maxAvailableHeight ?? 670; // Available vertical space for 1080x1080 card
+  const contentWidth = options?.contentWidth ?? 940; // 1080 - 140px padding
+
+  const cleanText = (text || '').trim();
+  const len = cleanText.length;
+
+  // Candidate font sizes to test from largest readable down to minFontSize
+  const candidateSizes = [
+    Math.min(MAX_BODY_FONT_SIZE, preferredFontSize + 8),
+    Math.min(44, preferredFontSize + 4),
+    preferredFontSize,
+    Math.max(minFontSize, preferredFontSize - 4),
+    Math.max(minFontSize, 32),
+    Math.max(minFontSize, 30),
+    minFontSize,
+  ];
+
+  const uniqueSizes = Array.from(new Set(candidateSizes)).filter((s) => s >= minFontSize).sort((a, b) => b - a);
+
+  let selectedSize = minFontSize;
+  let selectedCharsPerLine = Math.max(28, Math.floor(contentWidth / (minFontSize * 0.57)));
+  let selectedLineSpacing = Math.round(minFontSize * 1.38);
+  let selectedLines: string[] = [];
+  let selectedHeight = 0;
+  let fitsOnSingle = false;
+
+  for (const size of uniqueSizes) {
+    const charsPerLine = Math.max(28, Math.floor(contentWidth / (size * 0.57)));
+    const lineSpacing = Math.round(size * 1.38);
+    const lines = wrapTextIntoLines(cleanText, charsPerLine);
+    const height = lines.length * lineSpacing;
+
+    if (height <= maxAvailableHeight) {
+      selectedSize = size;
+      selectedCharsPerLine = charsPerLine;
+      selectedLineSpacing = lineSpacing;
+      selectedLines = lines;
+      selectedHeight = height;
+      fitsOnSingle = true;
+      break;
+    }
+  }
+
+  // If text could not fit even at minFontSize (e.g. 28px):
+  if (!fitsOnSingle) {
+    selectedSize = minFontSize; // STOP SHRINKING at MIN_BODY_FONT_SIZE!
+    selectedCharsPerLine = Math.max(28, Math.floor(contentWidth / (minFontSize * 0.57)));
+    selectedLineSpacing = Math.round(minFontSize * 1.38);
+    selectedLines = wrapTextIntoLines(cleanText, selectedCharsPerLine);
+    selectedHeight = selectedLines.length * selectedLineSpacing;
+    fitsOnSingle = false;
+  }
+
+  const showBigQuote = selectedLines.length <= 10 && len < 400;
+  const quoteSize = showBigQuote ? (len < 160 ? 76 : 56) : 0;
+  const justify: 'center' | 'flex-start' = selectedLines.length <= 8 ? 'center' : 'flex-start';
+  const padding = selectedLines.length <= 8 ? 75 : 65;
+  const marginY = selectedLines.length <= 8 ? 24 : 14;
+  const signatureMargin = selectedLines.length <= 8 ? 22 : 14;
+  const signatureSize = selectedSize >= 38 ? 24 : 20;
+
+  const warning = !fitsOnSingle
+    ? 'This confession is too long to remain readable on one card. Use Carousel.'
+    : undefined;
+
+  return {
+    fontSize: selectedSize,
+    lineHeight: 1.38,
+    lineSpacing: selectedLineSpacing,
+    charsPerLine: selectedCharsPerLine,
+    padding,
+    maxAvailableHeight,
+    showBigQuote,
+    quoteSize,
+    justify,
+    marginY,
+    signatureMargin,
+    signatureSize,
+    fitsOnSingleCard: fitsOnSingle,
+    totalTextHeight: selectedHeight,
+    renderedLines: selectedLines,
+    warning,
+  };
+}
+
+/**
+ * Calculates typography and line metrics for 1080x1080 card.
  * Consistent across preview, server SVG renderer, and download canvas.
  */
 export function getSlideTypographyMetrics(
@@ -117,58 +245,35 @@ export function getSlideTypographyMetrics(
   maxLinesPerSlide: number;
   maxHeight: number;
 } {
-  // Max available height between header (y=122 + 30) and footer (y=1210) minus signature (56px) and quote (80px)
-  const maxHeight = 840;
-
-  if (textLength < 180) {
-    // Large, spacious display typography for short confessions
-    const fontSize = Math.min(46, baseFontSize + 6);
-    const lineSpacing = Math.round(fontSize * 1.42);
-    const charsPerLine = 36;
-    const maxLinesPerSlide = Math.floor(maxHeight / lineSpacing);
-    return { fontSize, lineSpacing, charsPerLine, maxLinesPerSlide, maxHeight };
-  }
-
-  if (textLength < 450) {
-    // Standard legible typography
-    const fontSize = Math.min(36, baseFontSize);
-    const lineSpacing = Math.round(fontSize * 1.38);
-    const charsPerLine = 42;
-    const maxLinesPerSlide = Math.floor(maxHeight / lineSpacing);
-    return { fontSize, lineSpacing, charsPerLine, maxLinesPerSlide, maxHeight };
-  }
-
-  if (textLength < 900) {
-    // Slightly more compact for medium text
-    const fontSize = 30;
-    const lineSpacing = 42;
-    const charsPerLine = 48;
-    const maxLinesPerSlide = Math.floor(maxHeight / lineSpacing);
-    return { fontSize, lineSpacing, charsPerLine, maxLinesPerSlide, maxHeight };
-  }
-
-  // Carousel slide standard (balanced density and legibility)
-  const fontSize = 28;
-  const lineSpacing = 39;
-  const charsPerLine = 52;
-  const maxLinesPerSlide = Math.floor(maxHeight / lineSpacing);
-  return { fontSize, lineSpacing, charsPerLine, maxLinesPerSlide, maxHeight };
+  const dummyText = 'A'.repeat(textLength);
+  const metrics = calculateCardTypography(dummyText, { baseFontSize });
+  return {
+    fontSize: metrics.fontSize,
+    lineSpacing: metrics.lineSpacing,
+    charsPerLine: metrics.charsPerLine,
+    maxLinesPerSlide: Math.floor(metrics.maxAvailableHeight / metrics.lineSpacing),
+    maxHeight: metrics.maxAvailableHeight,
+  };
 }
 
 /**
- * Check if the entire confession can safely fit on a single 1080x1350 card
- * without visual overflow or shrinking below minimum readable font size (22px).
+ * Check if the entire confession can safely fit on a single 1080x1080 card
+ * without visual overflow or shrinking below minimum readable font size (28px).
  */
-export function canFitOnSingleCard(sourceConfession: string, _template?: Template): boolean {
-  const text = sourceConfession.trim();
+export function canFitOnSingleCard(
+  sourceConfession: string,
+  template?: Template,
+  minFontSize: number = MIN_BODY_FONT_SIZE
+): boolean {
+  const text = (sourceConfession || '').trim();
   if (!text) return true;
 
-  // Single card can scale down to min readable size 24px (charsPerLine ~52, maxLines ~24)
-  const maxSingleCardLines = 24;
-  const charsPerLine = 52;
-  const lines = wrapTextIntoLines(text, charsPerLine);
+  const metrics = calculateCardTypography(text, {
+    minFontSize,
+    baseFontSize: template?.font_size,
+  });
 
-  return lines.length <= maxSingleCardLines;
+  return metrics.fitsOnSingleCard;
 }
 
 /**
@@ -177,11 +282,13 @@ export function canFitOnSingleCard(sourceConfession: string, _template?: Templat
  */
 export function paginateConfession(
   sourceConfession: string,
-  _config?: PaginationConfig
+  config?: PaginationConfig
 ): PaginationResult {
   const cleanSource = (sourceConfession || '').trim();
   const wordCount = cleanSource.split(/\s+/).filter(Boolean).length;
   const characterCount = cleanSource.length;
+  const minBodyFontSize = config?.minBodyFontSize ?? MIN_BODY_FONT_SIZE;
+  const preferredBodyFontSize = config?.preferredBodyFontSize ?? PREFERRED_BODY_FONT_SIZE;
 
   if (!cleanSource) {
     return {
@@ -206,12 +313,13 @@ export function paginateConfession(
     };
   }
 
-  // 1. Check if complete text fits safely on 1 card at comfortable size
-  // Comfortable 1-card limit is ~16 lines at standard size
-  const standardMetrics = getSlideTypographyMetrics(characterCount);
-  const initialLines = wrapTextIntoLines(cleanSource, standardMetrics.charsPerLine);
+  // 1. Check if complete text fits safely on 1 card at readable font size (>= minBodyFontSize)
+  const singleCardMetrics = calculateCardTypography(cleanSource, {
+    minFontSize: minBodyFontSize,
+    preferredFontSize: preferredBodyFontSize,
+  });
 
-  if (initialLines.length <= standardMetrics.maxLinesPerSlide) {
+  if (singleCardMetrics.fitsOnSingleCard) {
     return {
       sourceConfession: cleanSource,
       slides: [
@@ -234,11 +342,11 @@ export function paginateConfession(
     };
   }
 
-  // 2. If it does not fit in 1 standard slide, dynamically paginate across multiple slides
-  // In carousel mode, each slide uses comfortable reading typography
-  const slideMetrics = getSlideTypographyMetrics(500); // 30px fontSize, 48 chars/line
-  const maxLines = Math.min(16, slideMetrics.maxLinesPerSlide); // Keep ~14-16 lines per slide for optimal readability
-  const charsPerLine = slideMetrics.charsPerLine;
+  // 2. If it does not fit in 1 standard slide at readable font, dynamically paginate across multiple slides.
+  // In carousel mode, each slide uses comfortable reading typography (~32px font, max 12 lines)
+  const targetSlideFontSize = 32;
+  const charsPerLine = Math.max(28, Math.floor(940 / (targetSlideFontSize * 0.57))); // ~51 chars/line
+  const maxLines = 12; // 12 lines * (32 * 1.38 = 44px) = 528px <= 670px available height!
 
   const rawSlides: string[] = [];
   let remaining = cleanSource;
@@ -486,14 +594,19 @@ export function validatePublicationPayload(params: {
     }
   }
 
-  // 7. Caption does not contain the full confession unless explicitly requested (Hook mode)
+  // 7. Enforce readable fit on 1 card
+  if (mode === 'fit' && sourceConfession && !canFitOnSingleCard(sourceConfession)) {
+    errors.push('This confession is too long to remain readable on one card. Use Carousel.');
+  }
+
+  // 8. Caption does not contain the full confession unless explicitly requested (Hook mode)
   if (mode !== 'hook' && sourceConfession && sourceConfession.trim().length > 40) {
     if (caption.includes(sourceConfession.trim())) {
       errors.push('Instagram caption must not duplicate the full confession body in visual post mode.');
     }
   }
 
-  // 8. Platform limit: Instagram allows at most 10 carousel items
+  // 9. Platform limit: Instagram allows at most 10 carousel items
   if (slides && slides.length > 10) {
     errors.push(`This confession is too long for one Instagram carousel (has ${slides.length} slides, platform limit is 10). Please shorten it or choose a different publishing format.`);
   }
