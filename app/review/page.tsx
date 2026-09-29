@@ -17,6 +17,7 @@ import { Confession, Template } from '@/types';
 import { PostCardPreview } from '@/components/confessions/PostCardPreview';
 import { useToast } from '@/components/ui/ToastContext';
 import { downloadCardAsPng } from '@/lib/downloadCard';
+import { SmartContentPreparation } from '@/components/growth/SmartContentPreparation';
 
 
 export default function ReviewQueuePage() {
@@ -285,6 +286,9 @@ export default function ReviewQueuePage() {
                       {c.moderation_reason}
                     </div>
                   )}
+
+                  {/* Growth Intelligence Pre-Publishing Advisor */}
+                  <SmartContentPreparation confession={c} />
                 </div>
 
                 {/* Actions */}

@@ -18,6 +18,7 @@ import { Confession, Template } from '@/types';
 import { PostCardPreview, splitIntoSlides } from './PostCardPreview';
 import { useToast } from '../ui/ToastContext';
 import { downloadCardAsPng, downloadAllSlides } from '@/lib/downloadCard';
+import { SmartContentPreparation } from '../growth/SmartContentPreparation';
 
 
 interface PublishModalProps {
@@ -202,6 +203,9 @@ export function PublishModal({
             </div>
           </div>
         )}
+
+        {/* Smart Growth Preparation Recommendation */}
+        <SmartContentPreparation confession={confession} />
 
         {/* Content Preview */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 my-4 bg-zinc-50/80 p-5 rounded-2xl border border-zinc-200/60 items-center">

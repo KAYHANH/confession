@@ -8,6 +8,7 @@ describe('24/7 Autonomous Auto-Publish Engine', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     schedulingService.resetState();
+    vi.spyOn(mockStore, 'getPublishedPosts').mockReturnValue([]);
   });
 
   it('Test 1: should skip auto-publishing when auto_publish is false and mode is MANUAL_APPROVAL', async () => {

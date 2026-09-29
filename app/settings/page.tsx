@@ -13,6 +13,11 @@ import {
   Hash,
   RefreshCw,
   AlertCircle,
+  TrendingUp,
+  Video,
+  BarChart3,
+  FlaskConical,
+  Zap,
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -265,6 +270,7 @@ function SettingsContent() {
     { id: 'moderation', label: 'Moderation & PII', icon: ShieldAlert },
     { id: 'publishing', label: 'Publishing Rules', icon: Send },
     { id: 'hashtags', label: 'Hashtag Presets', icon: Hash },
+    { id: 'growth', label: 'Growth Intelligence', icon: TrendingUp },
   ];
 
   if (loading || !generalSettings || !sheetConfig || !instagramConfig) {
@@ -1067,6 +1073,208 @@ function SettingsContent() {
                   className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer"
                 >
                   Save Hashtags
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 8. GROWTH INTELLIGENCE TAB */}
+          {activeTab === 'growth' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-zinc-900">Growth Intelligence & Controlled Trials</h3>
+                  <p className="text-xs text-zinc-500">
+                    Telemetry collection, 9:16 Reel video synthesis, smart recommendation models, and A/B experiments.
+                  </p>
+                </div>
+                <span
+                  className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                    generalSettings.enable_growth_intelligence
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                  }`}
+                >
+                  {generalSettings.enable_growth_intelligence ? 'Subsystem Enabled' : 'Subsystem Disabled'}
+                </span>
+              </div>
+
+              {/* Master Subsystem Switch */}
+              <div className="p-4 bg-gradient-to-r from-indigo-50/70 to-purple-50/70 rounded-2xl border border-indigo-100 flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <div className="font-bold text-xs text-indigo-950 flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 text-indigo-600" />
+                    <span>Master Growth Intelligence System</span>
+                  </div>
+                  <p className="text-[11px] text-indigo-800/80">
+                    When disabled, all analytics observation tasks, reel synthesis, and recommendation services remain inert.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(generalSettings.enable_growth_intelligence)}
+                    onChange={(e) => updateSettingField('enable_growth_intelligence', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                </label>
+              </div>
+
+              {/* Modular Engine Feature Flags */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold text-zinc-900 uppercase tracking-wider text-[11px]">
+                  Modular Subsystem Flags
+                </h4>
+
+                {/* 1. Analytics Collection */}
+                <div className="p-3.5 bg-zinc-50 rounded-xl border border-zinc-200/80 flex items-center justify-between">
+                  <div className="space-y-0.5 pr-4">
+                    <div className="font-semibold text-xs text-zinc-900 flex items-center gap-1.5">
+                      <BarChart3 className="w-3.5 h-3.5 text-zinc-600" />
+                      <span>Background Performance Collector</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-500">
+                      Polls Meta Graph API v21.0 metrics across 10 lifecycle snapshots (15m, 30m, 1h, 3h, 6h, 12h, 24h, 48h, 72h, 7d).
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(generalSettings.enable_analytics_collection)}
+                      onChange={(e) => updateSettingField('enable_analytics_collection', e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
+
+                {/* 2. Reel Engine */}
+                <div className="p-3.5 bg-zinc-50 rounded-xl border border-zinc-200/80 flex items-center justify-between">
+                  <div className="space-y-0.5 pr-4">
+                    <div className="font-semibold text-xs text-zinc-900 flex items-center gap-1.5">
+                      <Video className="w-3.5 h-3.5 text-zinc-600" />
+                      <span>Dynamic 9:16 Reel Video Generator</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-500">
+                      Renders 1080x1920 MP4/WebM vertical video assets with hook animations (0–1.5s hook, 1.5–7s body, 7–10s CTA).
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(generalSettings.enable_reel_engine)}
+                      onChange={(e) => updateSettingField('enable_reel_engine', e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
+
+                {/* 3. Smart Recommendations */}
+                <div className="p-3.5 bg-zinc-50 rounded-xl border border-zinc-200/80 flex items-center justify-between">
+                  <div className="space-y-0.5 pr-4">
+                    <div className="font-semibold text-xs text-zinc-900 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-zinc-600" />
+                      <span>Smart Pre-Publishing Content Preparation</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-500">
+                      Analyzes historical reach distributions to suggest optimal format (Image vs Reel), timing window, and hook styles.
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(generalSettings.enable_growth_recommendations)}
+                      onChange={(e) => updateSettingField('enable_growth_recommendations', e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
+
+                {/* 4. Automated Timing Optimization */}
+                <div className="p-3.5 bg-zinc-50 rounded-xl border border-zinc-200/80 flex items-center justify-between">
+                  <div className="space-y-0.5 pr-4">
+                    <div className="font-semibold text-xs text-zinc-900 flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-zinc-600" />
+                      <span>Automated Publishing Window Optimization</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-500">
+                      Aligns automated publishing queues with empirical peak engagement hours.
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(generalSettings.enable_auto_optimization)}
+                      onChange={(e) => updateSettingField('enable_auto_optimization', e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
+
+                {/* 5. Experiments */}
+                <div className="p-3.5 bg-zinc-50 rounded-xl border border-zinc-200/80 flex items-center justify-between">
+                  <div className="space-y-0.5 pr-4">
+                    <div className="font-semibold text-xs text-zinc-900 flex items-center gap-1.5">
+                      <FlaskConical className="w-3.5 h-3.5 text-zinc-600" />
+                      <span>Controlled A/B Experimentation Engine</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-500">
+                      Enables single-variable controlled trials with statistical support gates (N &lt; 5 Insufficient, N 5–9 Preliminary, N 10–19 Promising, N &ge; 20 Supported).
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(generalSettings.enable_experiments)}
+                      onChange={(e) => updateSettingField('enable_experiments', e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Safety Guarantees & Non-Causal Boundary Notice */}
+              <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-200/80 space-y-2 text-xs text-zinc-600">
+                <div className="font-bold text-zinc-900 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                  <span>Production Safety &amp; Non-Causal Epistemology Guarantees</span>
+                </div>
+                <ul className="list-disc list-inside space-y-1 text-[11px] text-zinc-500">
+                  <li><strong>Non-Blocking Publishing:</strong> Instagram publishing will always succeed even if analytics collection encounters network failure.</li>
+                  <li><strong>Null vs Zero Metric Integrity:</strong> Unavailable metrics are stored as null (never fabricated as 0).</li>
+                  <li><strong>Correlation vs Causation:</strong> Growth models never claim causality; all insights declare sample size (N) and confounders.</li>
+                </ul>
+              </div>
+
+              <div className="pt-4 border-t border-zinc-100 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const res = await fetch('/api/growth/posts', { method: 'POST' });
+                      const d = await res.json();
+                      if (d.success) success('Instant analytics collection cycle executed!');
+                      else error(d.error || 'Collection cycle failed');
+                    } catch {
+                      error('Failed to trigger collection');
+                    }
+                  }}
+                  className="px-4 py-2 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-xs font-semibold text-zinc-700 cursor-pointer"
+                >
+                  Trigger Snapshot Collection Now
+                </button>
+
+                <button
+                  onClick={() => handleSaveGeneral(generalSettings)}
+                  disabled={saving}
+                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer"
+                >
+                  Save Growth Settings
                 </button>
               </div>
             </div>

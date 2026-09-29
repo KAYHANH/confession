@@ -163,6 +163,12 @@ export interface SystemSettings {
   require_approval: boolean;
   risk_threshold: ModerationRisk;
   default_hashtags: string[];
+  enable_growth_intelligence?: boolean;
+  enable_analytics_collection?: boolean;
+  enable_reel_engine?: boolean;
+  enable_growth_recommendations?: boolean;
+  enable_auto_optimization?: boolean;
+  enable_experiments?: boolean;
 }
 
 export interface ModerationCheckResult {

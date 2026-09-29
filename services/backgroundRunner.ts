@@ -6,6 +6,7 @@ let isRunnerStarted = false;
 let keepAliveTimer: NodeJS.Timeout | null = null;
 let syncTimer: NodeJS.Timeout | null = null;
 let publishTimer: NodeJS.Timeout | null = null;
+let analyticsTimer: NodeJS.Timeout | null = null;
 
 /**
  * Background runner to keep Render instance awake 24/7 and run automated background sync/publishing.
@@ -99,12 +100,29 @@ export function startBackgroundRunner() {
   if (bootTimer.unref) bootTimer.unref();
 
   console.log('✅ [BackgroundRunner] All background routines active (Anti-Sleep, Sheet Sync, Auto-Publish).');
+
+  // 5. Automated Performance Analytics Collection (Runs every 15 minutes, strictly guarded by feature flags)
+  const ANALYTICS_INTERVAL = 15 * 60 * 1000; // 15 minutes
+  analyticsTimer = setInterval(async () => {
+    try {
+      const { getGrowthFeatureFlags } = await import('@/lib/growthConfig');
+      const flags = getGrowthFeatureFlags();
+      if (flags.enableAnalyticsCollection && flags.enableGrowthIntelligence) {
+        const { analyticsCollector } = await import('@/services/growth/analyticsCollector');
+        await analyticsCollector.runCollectionCycle();
+      }
+    } catch (err: any) {
+      console.warn('⚠️ [BackgroundRunner] Analytics collection cycle notice:', err?.message || err);
+    }
+  }, ANALYTICS_INTERVAL);
+  if (analyticsTimer.unref) analyticsTimer.unref();
 }
 
 export function stopBackgroundRunner() {
   if (keepAliveTimer) clearInterval(keepAliveTimer);
   if (syncTimer) clearInterval(syncTimer);
   if (publishTimer) clearInterval(publishTimer);
+  if (analyticsTimer) clearInterval(analyticsTimer);
   isRunnerStarted = false;
   console.log('🛑 [BackgroundRunner] Background scheduler stopped.');
 }

@@ -17,6 +17,7 @@ import {
   ScrollText,
   LogOut,
   Sparkles,
+  TrendingUp,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -29,6 +30,7 @@ const NAV_ITEMS = [
   { label: 'Moderation', href: '/settings?tab=moderation', icon: ShieldAlert },
   { label: 'Instagram', href: '/settings?tab=instagram', icon: Instagram },
   { label: 'Google Sheets', href: '/settings?tab=google-sheets', icon: FileSpreadsheet },
+  { label: 'Growth Intelligence', href: '/growth', icon: TrendingUp },
   { label: 'Settings', href: '/settings', icon: Settings },
   { label: 'Activity Logs', href: '/logs', icon: ScrollText },
 ];

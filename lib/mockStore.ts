@@ -149,6 +149,12 @@ const DEFAULT_SETTINGS: SystemSettings = {
     '#relationshipconfessions',
     '#campuslife',
   ],
+  enable_growth_intelligence: false,
+  enable_analytics_collection: false,
+  enable_reel_engine: false,
+  enable_growth_recommendations: false,
+  enable_auto_optimization: false,
+  enable_experiments: false,
 };
 
 const DEFAULT_CONFESSIONS: Confession[] = [];

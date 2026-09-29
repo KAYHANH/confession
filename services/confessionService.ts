@@ -546,6 +546,25 @@ export class ConfessionService {
         },
       });
 
+      // 10. Asynchronous post-publish analytics registration (completely non-blocking, failures never affect post status)
+      try {
+        import('@/services/growth/analyticsCollector')
+          .then(({ analyticsCollector }) => {
+            if (publishResult.mediaId && publishResult.permalink) {
+              analyticsCollector
+                .registerPublishedMedia(
+                  updated,
+                  { mediaId: publishResult.mediaId, permalink: publishResult.permalink },
+                  'IMAGE'
+                )
+                .catch((err) => {
+                  console.warn('[ConfessionService] Non-blocking analytics registration notice:', err?.message || err);
+                });
+            }
+          })
+          .catch(() => {});
+      } catch {}
+
       return updated;
     } finally {
       this.publishingLocks.delete(id);
