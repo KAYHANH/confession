@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { growthStore } from '@/lib/growthStore';
 import { growthRecommendationService } from '@/services/growth/growthRecommendationService';
 import { mockStore } from '@/lib/mockStore';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const url = new URL(request.url);
     const contentId = url.searchParams.get('contentId') || undefined;
@@ -34,6 +37,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const body = await request.json();
     const { confessionId } = body;

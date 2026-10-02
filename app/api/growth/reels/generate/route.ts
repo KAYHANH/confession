@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { reelRenderService } from '@/services/growth/reelRenderService';
 import { mockStore } from '@/lib/mockStore';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const body = await request.json();
     const { confessionId, animationStyle, hookText, durationMs, ctaText } = body;

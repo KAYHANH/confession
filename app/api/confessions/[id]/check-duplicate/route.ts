@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth';
 import { confessionService } from '@/services/confessionService';
 import { aiService } from '@/services/aiService';
 import { mockStore } from '@/lib/mockStore';
@@ -9,6 +10,8 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const { id } = await params;
     const confession = await confessionService.getConfessionById(id);

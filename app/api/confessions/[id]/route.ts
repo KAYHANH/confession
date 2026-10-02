@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth';
 import { confessionService } from '@/services/confessionService';
 import { imageService } from '@/services/imageService';
 import { mockStore } from '@/lib/mockStore';
@@ -18,9 +19,11 @@ const updateSchema = z.object({
 });
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   props: { params: Promise<{ id: string }> | { id: string } }
 ) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const { id } = await Promise.resolve(props.params);
     const confession = await confessionService.getConfessionById(id);
@@ -37,6 +40,8 @@ export async function PATCH(
   request: NextRequest,
   props: { params: Promise<{ id: string }> | { id: string } }
 ) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const { id } = await Promise.resolve(props.params);
     const body = await request.json();
@@ -83,9 +88,11 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   props: { params: Promise<{ id: string }> | { id: string } }
 ) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const { id } = await Promise.resolve(props.params);
     const deleted = await confessionService.deleteConfession(id);

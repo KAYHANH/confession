@@ -1,10 +1,14 @@
+import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { growthMetricsService } from '@/services/growth/growthMetricsService';
 import { getSafeGrowthPublicFlags } from '@/lib/growthConfig';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const flags = getSafeGrowthPublicFlags();
     const overview = await growthMetricsService.getAccountOverview();

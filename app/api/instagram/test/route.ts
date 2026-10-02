@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { instagramService } from '@/services/instagramService';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const result = await instagramService.testConnection();
     if (result.connected) {
       return NextResponse.json({
@@ -40,6 +43,8 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const body = await request.json().catch(() => ({}));
     const result = await instagramService.testConnection(body.accountId, body.accessToken);
 

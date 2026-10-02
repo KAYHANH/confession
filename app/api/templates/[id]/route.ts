@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { mockStore } from '@/lib/mockStore';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   props: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const { id } = await Promise.resolve(props.params);
     const template = mockStore.getTemplateById(id);
     if (!template) {
@@ -24,6 +27,8 @@ export async function PATCH(
   props: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const { id } = await Promise.resolve(props.params);
     const body = await request.json();
     const updated = mockStore.updateTemplate(id, body);
@@ -37,10 +42,12 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   props: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const { id } = await Promise.resolve(props.params);
     const deleted = mockStore.deleteTemplate(id);
     if (!deleted) {

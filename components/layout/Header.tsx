@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { RefreshCw, Clock, Sparkles } from 'lucide-react';
+import { RefreshCw, Clock, Sparkles, LogOut } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { useToast } from '../ui/ToastContext';
 
 interface HeaderProps {
@@ -10,7 +11,9 @@ interface HeaderProps {
 }
 
 export function Header({ title, subtitle }: HeaderProps) {
+  const router = useRouter();
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [sheetStatus, setSheetStatus] = useState<{ isLive: boolean }>({ isLive: false });
   const [autoPublishActive, setAutoPublishActive] = useState(false);
   const { success, error } = useToast();
@@ -48,12 +51,24 @@ export function Header({ title, subtitle }: HeaderProps) {
         throw new Error(data.error || 'Sync failed');
       }
       success(data.message || 'Google Sheet synced successfully!');
-      // Trigger a light refresh of window event for active data tables
       window.dispatchEvent(new CustomEvent('confessionflow:refresh'));
     } catch (err: any) {
       error(err?.message || 'Sync failed. Please verify sheet settings.');
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+      success('Logged out successfully.');
+      router.replace('/login');
+    } catch {
+      error('Logout failed. Please try again.');
+    } finally {
+      setIsLoggingOut(false);
     }
   };
 
@@ -100,6 +115,17 @@ export function Header({ title, subtitle }: HeaderProps) {
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
           <span>{isSyncing ? 'Syncing...' : 'Sync Now'}</span>
+        </button>
+
+        {/* Logout Button */}
+        <button
+          onClick={handleLogout}
+          disabled={isLoggingOut}
+          title="Sign out"
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-zinc-200 hover:border-red-200 hover:bg-red-50 text-zinc-500 hover:text-red-600 text-xs font-semibold transition-all active:scale-95 disabled:opacity-60 cursor-pointer"
+        >
+          <LogOut className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">{isLoggingOut ? 'Signing out...' : 'Sign Out'}</span>
         </button>
       </div>
     </header>

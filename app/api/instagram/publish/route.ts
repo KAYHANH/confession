@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { confessionService } from '@/services/confessionService';
+import { requireAuth } from '@/lib/auth';
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const body = await request.json();
     const { confessionId } = body;
 

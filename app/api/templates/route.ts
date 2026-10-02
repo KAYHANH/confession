@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { mockStore } from '@/lib/mockStore';
 import { Template } from '@/types';
 import { z } from 'zod';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,8 +21,10 @@ const templateSchema = z.object({
   active: z.boolean().default(true),
 });
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const templates = mockStore.getTemplates();
     return NextResponse.json(templates);
   } catch (error: any) {
@@ -31,6 +34,8 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const body = await request.json();
     const parsed = templateSchema.safeParse(body);
 

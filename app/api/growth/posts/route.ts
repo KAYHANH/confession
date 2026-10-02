@@ -3,10 +3,13 @@ import { growthStore } from '@/lib/growthStore';
 import { growthMetricsService } from '@/services/growth/growthMetricsService';
 import { analyticsCollector } from '@/services/growth/analyticsCollector';
 import { mockStore } from '@/lib/mockStore';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const url = new URL(request.url);
     if (url.searchParams.get('backfill') === 'true') {

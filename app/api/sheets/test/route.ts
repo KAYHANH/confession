@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { googleSheetsService } from '@/services/googleSheetsService';
 import { mockStore } from '@/lib/mockStore';
+import { requireAuth } from '@/lib/auth';
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireAuth(request);
+    if (auth instanceof NextResponse) return auth;
     const body = await request.json().catch(() => ({}));
     const currentConfig = mockStore.getGoogleSheetConfig();
 

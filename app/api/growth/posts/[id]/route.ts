@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { growthMetricsService } from '@/services/growth/growthMetricsService';
 import { growthAnalysisService } from '@/services/growth/growthAnalysisService';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   props: { params: Promise<{ id: string }> | { id: string } }
 ) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const { id } = await Promise.resolve(props.params);
     if (!id) {

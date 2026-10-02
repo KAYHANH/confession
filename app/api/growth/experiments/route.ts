@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { growthStore } from '@/lib/growthStore';
 import { experimentService } from '@/services/growth/experimentService';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const experiments = await growthStore.getExperiments();
     return NextResponse.json({
@@ -20,6 +23,8 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const body = await request.json();
     const { name, hypothesis, factor, variants, notes } = body;
