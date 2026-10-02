@@ -1,60 +1,67 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Sparkles, Lock, Mail, ArrowRight, ShieldCheck, Loader2 } from 'lucide-react';
-import { supabase } from '@/lib/supabase/client';
+import React, { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Sparkles, Lock, Mail, ArrowRight, Loader2 } from 'lucide-react';
 import { useToast } from '@/components/ui/ToastContext';
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gradient-to-b from-zinc-50 to-zinc-100/60 flex items-center justify-center"><Loader2 className="w-6 h-6 animate-spin text-zinc-400" /></div>}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
-  const [email, setEmail] = useState('admin@confessionflow.io');
-  const [password, setPassword] = useState('admin123456');
+  const searchParams = useSearchParams();
+  const redirectPath = searchParams.get('redirect') || '/dashboard';
+
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [attemptsRemaining, setAttemptsRemaining] = useState<number | null>(null);
   const { success, error } = useToast();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading) return;
     setLoading(true);
+    setAttemptsRemaining(null);
 
     try {
-      // Allow instant local admin session when Supabase is not configured
-      if (
-        !process.env.NEXT_PUBLIC_SUPABASE_URL ||
-        process.env.NEXT_PUBLIC_SUPABASE_URL.includes('placeholder')
-      ) {
-        document.cookie = 'confessionflow_session=admin; path=/; max-age=86400';
-        success('Welcome back, Admin!');
-        router.push('/dashboard');
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+        credentials: 'same-origin',
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (res.status === 429) {
+          error('Too many failed attempts. Try again in 15 minutes.');
+        } else if (res.status === 401) {
+          if (typeof data.attemptsRemaining === 'number') {
+            setAttemptsRemaining(data.attemptsRemaining);
+          }
+          error(data.error || 'Invalid email or password.');
+        } else {
+          error(data.error || 'Login failed. Please try again.');
+        }
         return;
       }
 
-      // Real Supabase Auth
-      const { data, error: authError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (authError) {
-        throw new Error(authError.message);
-      }
-
-      if (data.session) {
-        document.cookie = `confessionflow_session=${data.session.access_token}; path=/; max-age=86400`;
-        success('Logged in successfully!');
-        router.push('/dashboard');
-      }
-    } catch (err: any) {
-      error(err?.message || 'Login failed. Please check your credentials.');
+      success('Welcome back!');
+      // Use replace so back-button does not return to login after auth
+      router.replace(redirectPath.startsWith('/') ? redirectPath : '/dashboard');
+    } catch {
+      error('Network error. Please check your connection and try again.');
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleDirectAdminLogin = () => {
-    document.cookie = 'confessionflow_session=admin; path=/; max-age=86400';
-    success('Logged in as Administrator');
-    router.push('/dashboard');
   };
 
   return (
@@ -80,44 +87,59 @@ export default function LoginPage() {
             <span>Admin Authentication</span>
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={handleLogin} className="space-y-4" autoComplete="on">
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
+              <label className="block text-xs font-semibold text-zinc-700 mb-1.5" htmlFor="email">
                 Admin Email Address
               </label>
               <div className="relative">
                 <Mail className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
+                  id="email"
                   type="email"
                   required
+                  autoComplete="username email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-zinc-200 text-sm font-medium text-zinc-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                  disabled={loading}
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-zinc-200 text-sm font-medium text-zinc-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 disabled:opacity-60"
                   placeholder="admin@confessionflow.io"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
+              <label className="block text-xs font-semibold text-zinc-700 mb-1.5" htmlFor="password">
                 Password
               </label>
               <div className="relative">
                 <Lock className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
+                  id="password"
                   type="password"
                   required
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-zinc-200 text-sm font-medium text-zinc-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                  disabled={loading}
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-zinc-200 text-sm font-medium text-zinc-900 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 disabled:opacity-60"
                   placeholder="••••••••"
                 />
               </div>
             </div>
 
+            {/* Attempts warning */}
+            {attemptsRemaining !== null && attemptsRemaining <= 2 && (
+              <p className="text-xs text-red-600 font-medium bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                ⚠️ {attemptsRemaining === 0
+                  ? 'Account locked. Try again in 15 minutes.'
+                  : `Warning: ${attemptsRemaining} attempt${attemptsRemaining !== 1 ? 's' : ''} remaining before lockout.`}
+              </p>
+            )}
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !email || !password}
               className="w-full mt-2 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-bold shadow-md transition-all active:scale-[0.98] disabled:opacity-60 flex items-center justify-center gap-2 cursor-pointer"
             >
               {loading ? (
@@ -133,22 +155,11 @@ export default function LoginPage() {
               )}
             </button>
           </form>
-
-          {/* Quick Admin Access Button */}
-          <div className="mt-6 pt-6 border-t border-zinc-100">
-            <button
-              onClick={handleDirectAdminLogin}
-              type="button"
-              className="w-full py-2.5 rounded-xl border border-brand-200 bg-brand-50/60 hover:bg-brand-100 text-brand-700 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
-            >
-              <ShieldCheck className="w-4 h-4 text-brand-600" />
-              <span>Sign In as Admin (Local Session)</span>
-            </button>
-            <p className="text-[11px] text-center text-zinc-400 mt-2">
-              Instant access for local administrator management.
-            </p>
-          </div>
         </div>
+
+        <p className="text-center text-[11px] text-zinc-400 mt-6">
+          ConfessionFlow · Admin Portal · All access is logged.
+        </p>
       </div>
     </div>
   );
