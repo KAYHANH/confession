@@ -59,6 +59,18 @@ export function PublishModal({
   );
   const [currentSlide, setCurrentSlide] = useState(0);
   const [downloading, setDownloading] = useState(false);
+  const [targetHandle, setTargetHandle] = useState('@_hpsconfession_');
+
+  useEffect(() => {
+    fetch('/api/instagram/status')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.username) {
+          setTargetHandle(d.username.startsWith('@') ? d.username : `@${d.username}`);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   if (!isOpen) return null;
 
@@ -334,7 +346,7 @@ export function PublishModal({
               <span className="font-semibold text-zinc-500 uppercase tracking-wider text-[10px] block mb-1">
                 Target Account
               </span>
-              <p className="font-semibold text-zinc-900 text-sm">@campusconfessions_official</p>
+              <p className="font-semibold text-zinc-900 text-sm">{targetHandle}</p>
             </div>
 
             <div className="flex-1 overflow-y-auto max-h-48 pr-1 border border-zinc-200/80 rounded-xl p-3 bg-white">

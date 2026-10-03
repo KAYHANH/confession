@@ -38,7 +38,7 @@ export function buildCardHtmlForExport(options: DownloadCardOptions): string {
     confessionNumber = 1,
     template,
     brandName = 'Campus Confessions',
-    instagramHandle = '@campusconfessions_official',
+    instagramHandle = '@_hpsconfession_',
     mode = 'fit',
     slideIndex = 0,
     totalSlides = 1,
