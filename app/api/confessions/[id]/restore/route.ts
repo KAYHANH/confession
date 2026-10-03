@@ -12,7 +12,8 @@ export async function POST(
   if (auth instanceof NextResponse) return auth;
 
   try {
-    const { id } = await Promise.resolve(props.params);
+    const rawParams = await Promise.resolve(props.params);
+    const id = decodeURIComponent(rawParams.id || '').trim();
     const restored = await confessionService.restoreConfession(id);
     if (!restored) {
       return NextResponse.json(

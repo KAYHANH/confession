@@ -234,7 +234,7 @@ export default function ConfessionEditorPage({
   const handleSoftDelete = async () => {
     if (!confirm('Move this confession to the Deleted archive? Queue timings for remaining posts will automatically update.')) return;
     try {
-      const res = await fetch(`/api/confessions/${confessionId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/confessions/${encodeURIComponent(confessionId)}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete');
       success('Moved to Deleted (queue timings updated)');
@@ -247,7 +247,7 @@ export default function ConfessionEditorPage({
   const handlePermanentDelete = async () => {
     if (!confirm('Permanently delete this confession? It will be removed forever and will NEVER be re-imported from Google Sheets.')) return;
     try {
-      const res = await fetch(`/api/confessions/${confessionId}?permanent=true`, { method: 'DELETE' });
+      const res = await fetch(`/api/confessions/${encodeURIComponent(confessionId)}?permanent=true`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Failed to permanently delete');
       success('Permanently deleted');
@@ -259,7 +259,7 @@ export default function ConfessionEditorPage({
 
   const handleRestore = async () => {
     try {
-      const res = await fetch(`/api/confessions/${confessionId}/restore`, { method: 'POST' });
+      const res = await fetch(`/api/confessions/${encodeURIComponent(confessionId)}/restore`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Failed to restore');
       success('Confession restored to queue (timings updated)');

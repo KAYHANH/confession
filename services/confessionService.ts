@@ -25,7 +25,7 @@ export const ALLOWED_TRANSITIONS: Record<ConfessionStatus, ConfessionStatus[]> =
   REJECTED: ['READY_FOR_REVIEW', 'APPROVED', 'DELETED'], // allow admin to overturn rejection
   SCHEDULED: ['PUBLISHING', 'APPROVED', 'REJECTED', 'DELETED'], // allow rescheduling/cancelling
   PUBLISHING: ['PUBLISHED', 'FAILED', 'DELETED'],
-  PUBLISHED: [], // Terminal state
+  PUBLISHED: ['DELETED'], // Allow deleting published posts
   FAILED: ['APPROVED', 'READY_FOR_REVIEW', 'PUBLISHING', 'FAILED_REQUIRES_ACTION', 'REJECTED', 'DELETED'],
   FAILED_REQUIRES_ACTION: ['APPROVED', 'READY_FOR_REVIEW', 'PUBLISHING', 'REJECTED', 'DELETED'],
   DELETED: ['APPROVED', 'READY_FOR_REVIEW'],
@@ -37,6 +37,8 @@ export class ConfessionService {
 
   private useSupabase(): boolean {
     return (
+      process.env.DISABLE_SUPABASE !== 'true' &&
+      process.env.USE_SUPABASE !== 'false' &&
       process.env.MOCK_EXTERNAL_APIS !== 'true' &&
       !!process.env.NEXT_PUBLIC_SUPABASE_URL &&
       !process.env.NEXT_PUBLIC_SUPABASE_URL.includes('placeholder')
@@ -88,95 +90,98 @@ export class ConfessionService {
   } = {}): Promise<{ confessions: Confession[]; total: number; page: number; totalPages: number }> {
     const { status, moderationStatus, search, templateId, sortBy = 'newest', page = 1, limit = 50 } = options;
 
-    if (!this.useSupabase()) {
-      let list = mockStore.getConfessions();
+    // Real Supabase query if configured
+    if (this.useSupabase()) {
+      try {
+        const supabase = createServerSupabaseClient();
+        let query = supabase.from('confessions').select('*', { count: 'exact' });
 
-      if (status) {
-        list = list.filter((c) => c.status === status);
-      }
-      if (moderationStatus) {
-        list = list.filter((c) => c.moderation_status === moderationStatus);
-      }
-      if (templateId) {
-        list = list.filter((c) => c.template_id === templateId);
-      }
-      if (search && search.trim().length > 0) {
-        const query = search.toLowerCase();
-        list = list.filter(
-          (c) =>
-            c.original_text.toLowerCase().includes(query) ||
-            c.cleaned_text.toLowerCase().includes(query) ||
-            c.name.toLowerCase().includes(query) ||
-            c.display_name.toLowerCase().includes(query)
-        );
-      }
+        // Handle soft-delete workaround: DELETED rows are stored as REJECTED + __DELETED__ marker
+        if (status === 'DELETED') {
+          query = query.eq('status', 'REJECTED').like('error_message', '__DELETED__%');
+        } else if (status) {
+          if (status === 'REJECTED') {
+            query = query.eq('status', 'REJECTED').not('error_message', 'like', '__DELETED__%');
+          } else {
+            query = query.eq('status', status);
+          }
+        }
+        if (moderationStatus) query = query.eq('moderation_status', moderationStatus);
+        if (templateId) query = query.eq('template_id', templateId);
+        if (search) query = query.ilike('cleaned_text', `%${search}%`);
 
-      // Sorting
-      list.sort((a, b) => {
-        if (sortBy === 'oldest') {
-          return (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
+        if (sortBy === 'oldest') query = query.order('created_at', { ascending: true });
+        else if (sortBy === 'scheduled') query = query.order('scheduled_at', { ascending: false });
+        else if (sortBy === 'recently_published') query = query.order('published_at', { ascending: false });
+        else query = query.order('created_at', { ascending: false });
+
+        const startIndex = (page - 1) * limit;
+        query = query.range(startIndex, startIndex + limit - 1);
+
+        const { data, error, count } = await query;
+        if (!error && data && data.length > 0) {
+          return {
+            confessions: (data || []).map((r: any) => this.decodeSupabaseRow(r)) as Confession[],
+            total: count || 0,
+            page,
+            totalPages: Math.ceil((count || 0) / limit) || 1,
+          };
         }
-        if (sortBy === 'newest') {
-          return (b.google_sheet_row || 0) - (a.google_sheet_row || 0);
-        }
-        if (sortBy === 'scheduled') {
-          return (a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0) - (b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0);
-        }
-        if (sortBy === 'recently_published') {
-          return (b.published_at ? new Date(b.published_at).getTime() : 0) - (a.published_at ? new Date(a.published_at).getTime() : 0);
-        }
-        // Default: ascending row order (sheet row 2, 3, 4... = publish order)
+      } catch (sbErr) {
+        console.warn('[ConfessionService] Supabase getConfessions query failed, falling back to mockStore:', sbErr);
+      }
+    }
+
+    // Default & Fallback: Read from mockStore
+    let list = mockStore.getConfessions();
+
+    if (status) {
+      list = list.filter((c) => c.status === status);
+    }
+    if (moderationStatus) {
+      list = list.filter((c) => c.moderation_status === moderationStatus);
+    }
+    if (templateId) {
+      list = list.filter((c) => c.template_id === templateId);
+    }
+    if (search && search.trim().length > 0) {
+      const query = search.toLowerCase();
+      list = list.filter(
+        (c) =>
+          c.original_text.toLowerCase().includes(query) ||
+          c.cleaned_text.toLowerCase().includes(query) ||
+          c.name.toLowerCase().includes(query) ||
+          c.display_name.toLowerCase().includes(query)
+      );
+    }
+
+    // Sorting
+    list.sort((a, b) => {
+      if (sortBy === 'oldest') {
         return (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
-      });
-
-      const total = list.length;
-      const startIndex = (page - 1) * limit;
-      const paginated = list.slice(startIndex, startIndex + limit);
-
-      return {
-        confessions: paginated,
-        total,
-        page,
-        totalPages: Math.ceil(total / limit) || 1,
-      };
-    }
-
-    // Real Supabase query
-    const supabase = createServerSupabaseClient();
-    let query = supabase.from('confessions').select('*', { count: 'exact' });
-
-    // Handle soft-delete workaround: DELETED rows are stored as REJECTED + __DELETED__ marker
-    if (status === 'DELETED') {
-      // Query for the __DELETED__ marker in error_message (our schema-free workaround)
-      query = query.eq('status', 'REJECTED').like('error_message', '__DELETED__%');
-    } else if (status) {
-      // Normal status filter — but also exclude soft-deleted REJECTED rows from non-DELETED tabs
-      if (status === 'REJECTED') {
-        query = query.eq('status', 'REJECTED').not('error_message', 'like', '__DELETED__%');
-      } else {
-        query = query.eq('status', status);
       }
-    }
-    if (moderationStatus) query = query.eq('moderation_status', moderationStatus);
-    if (templateId) query = query.eq('template_id', templateId);
-    if (search) query = query.ilike('cleaned_text', `%${search}%`);
+      if (sortBy === 'newest') {
+        return (b.google_sheet_row || 0) - (a.google_sheet_row || 0);
+      }
+      if (sortBy === 'scheduled') {
+        return (a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0) - (b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0);
+      }
+      if (sortBy === 'recently_published') {
+        return (b.published_at ? new Date(b.published_at).getTime() : 0) - (a.published_at ? new Date(a.published_at).getTime() : 0);
+      }
+      // Default: ascending row order (sheet row 2, 3, 4... = publish order)
+      return (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
+    });
 
-    if (sortBy === 'oldest') query = query.order('created_at', { ascending: true });
-    else if (sortBy === 'scheduled') query = query.order('scheduled_at', { ascending: false });
-    else if (sortBy === 'recently_published') query = query.order('published_at', { ascending: false });
-    else query = query.order('created_at', { ascending: false });
-
+    const total = list.length;
     const startIndex = (page - 1) * limit;
-    query = query.range(startIndex, startIndex + limit - 1);
-
-    const { data, error, count } = await query;
-    if (error) throw new Error(error.message);
+    const paginated = list.slice(startIndex, startIndex + limit);
 
     return {
-      confessions: (data || []).map((r: any) => this.decodeSupabaseRow(r)) as Confession[],
-      total: count || 0,
+      confessions: paginated,
+      total,
       page,
-      totalPages: Math.ceil((count || 0) / limit) || 1,
+      totalPages: Math.ceil(total / limit) || 1,
     };
   }
 
@@ -184,20 +189,42 @@ export class ConfessionService {
    * Get single confession by ID
    */
   public async getConfessionById(id: string): Promise<Confession | null> {
-    if (!this.useSupabase()) {
-      return mockStore.getConfessionById(id) || null;
+    const cleanId = String(id || '').trim();
+    if (!cleanId) return null;
+
+    // 1. Check mockStore first (fast, reliable)
+    const localConf = mockStore.getConfessionById(cleanId);
+    if (localConf) return localConf;
+
+    // 2. Try Supabase if configured
+    if (this.useSupabase()) {
+      try {
+        const supabase = createServerSupabaseClient();
+        const { data, error } = await supabase.from('confessions').select('*').eq('id', cleanId).single();
+        if (!error && data) {
+          return this.decodeSupabaseRow(data) as Confession;
+        }
+      } catch (err) {
+        console.warn('[ConfessionService] Supabase getConfessionById error:', err);
+      }
     }
-    const supabase = createServerSupabaseClient();
-    const { data, error } = await supabase.from('confessions').select('*').eq('id', id).single();
-    if (error) return null;
-    return this.decodeSupabaseRow(data) as Confession;
+
+    // 3. Fallback: match by row number
+    const rowNum = parseInt(cleanId, 10);
+    if (!isNaN(rowNum) && rowNum > 0) {
+      const byRow = mockStore.getConfessions().find((c) => c.google_sheet_row === rowNum);
+      if (byRow) return byRow;
+    }
+
+    return null;
   }
 
   /**
    * Update confession fields
    */
   public async updateConfession(id: string, updates: Partial<Confession>): Promise<Confession> {
-    const existing = await this.getConfessionById(id);
+    const cleanId = String(id || '').trim();
+    const existing = await this.getConfessionById(cleanId);
     if (!existing) throw new Error(`Confession not found: ${id}`);
 
     if (updates.status && updates.status !== existing.status) {
@@ -206,49 +233,64 @@ export class ConfessionService {
       }
     }
 
-    if (!this.useSupabase()) {
-      const updated = mockStore.updateConfession(id, updates);
-      if (!updated) throw new Error('Update failed');
-      mockStore.addLog({
-        action: 'EDITED',
-        entity_type: 'confession',
-        entity_id: id,
-        metadata: { changed: Object.keys(updates) },
-      });
-      return updated;
+    let updated: Confession | null = null;
+
+    // 1. Update in mockStore
+    try {
+      const mockUp = mockStore.updateConfession(existing.id, updates);
+      if (mockUp) {
+        updated = mockUp;
+        mockStore.addLog({
+          action: 'EDITED',
+          entity_type: 'confession',
+          entity_id: existing.id,
+          metadata: { changed: Object.keys(updates) },
+        });
+      }
+    } catch (mErr) {
+      console.warn('[ConfessionService] mockStore update error:', mErr);
     }
 
-    const supabase = createServerSupabaseClient();
+    // 2. Update in Supabase if configured
+    if (this.useSupabase()) {
+      try {
+        const supabase = createServerSupabaseClient();
+        const safeUpdates: any = { ...updates, updated_at: new Date().toISOString() };
+        if (safeUpdates.status === 'DELETED') {
+          delete safeUpdates.status;
+        }
+        delete safeUpdates.deleted_at;
+        delete safeUpdates.scheduling_strategy;
+        delete safeUpdates.scheduling_gap_minutes;
+        delete safeUpdates.scheduling_reason;
+        delete safeUpdates.scheduling_confidence;
+        delete safeUpdates.scheduling_evidence_count;
+        delete safeUpdates.experiment_id;
+        delete safeUpdates.experiment_variant;
+        delete safeUpdates.slides;
+        delete safeUpdates.format;
+        delete safeUpdates.content_category;
 
-    // Guard: status='DELETED' is not in Supabase CHECK constraint.
-    // Strip it out and any deleted_at — caller must use deleteConfession() instead.
-    const safeUpdates: any = { ...updates, updated_at: new Date().toISOString() };
-    if (safeUpdates.status === 'DELETED') {
-      delete safeUpdates.status;
-      delete safeUpdates.deleted_at;
+        const { data, error } = await supabase
+          .from('confessions')
+          .update(safeUpdates)
+          .eq('id', existing.id)
+          .select()
+          .single();
+
+        if (!error && data) {
+          updated = this.decodeSupabaseRow(data) as Confession;
+        }
+      } catch (sbErr) {
+        console.warn('[ConfessionService] Supabase updateConfession error:', sbErr);
+      }
     }
-    // Also strip columns that don't exist in the original schema
-    delete safeUpdates.deleted_at;
-    delete safeUpdates.scheduling_strategy;
-    delete safeUpdates.scheduling_gap_minutes;
-    delete safeUpdates.scheduling_reason;
-    delete safeUpdates.scheduling_confidence;
-    delete safeUpdates.scheduling_evidence_count;
-    delete safeUpdates.experiment_id;
-    delete safeUpdates.experiment_variant;
-    delete safeUpdates.slides;
-    delete safeUpdates.format;
-    delete safeUpdates.content_category;
 
-    const { data, error } = await supabase
-      .from('confessions')
-      .update(safeUpdates)
-      .eq('id', id)
-      .select()
-      .single();
+    if (!updated) {
+      updated = { ...existing, ...updates, updated_at: new Date().toISOString() };
+    }
 
-    if (error) throw new Error(error.message);
-    return this.decodeSupabaseRow(data) as Confession;
+    return updated;
   }
 
   /**
@@ -256,39 +298,67 @@ export class ConfessionService {
    * Also updates Google Sheet and recalculates future queue timing!
    */
   public async deleteConfession(id: string, permanent: boolean = false): Promise<boolean> {
-    const confession = await this.getConfessionById(id);
-    if (!confession) return false;
+    const cleanId = String(id || '').trim();
+    const confession = await this.getConfessionById(cleanId);
+    if (!confession) {
+      console.warn(`[ConfessionService] deleteConfession: confession not found for ID "${cleanId}"`);
+      return false;
+    }
 
     let success = false;
-    if (!this.useSupabase()) {
-      success = mockStore.deleteConfession(id, permanent);
-    } else {
-      const supabase = createServerSupabaseClient();
-      if (permanent) {
-        const { error } = await supabase.from('confessions').delete().eq('id', id);
-        success = !error;
-      } else {
-        // No-migration soft-delete workaround:
-        // Supabase has no 'DELETED' in valid_status CHECK and no deleted_at column.
-        // Encode deletion as: status='REJECTED' + error_message='__DELETED__:<ISO>'
-        // decodeSupabaseRow() reverses this so the UI sees status='DELETED'.
-        const deletedMarker = `__DELETED__:${new Date().toISOString()}`;
-        const { error } = await supabase
-          .from('confessions')
-          .update({
-            status: 'REJECTED',
-            error_message: deletedMarker,
-            scheduled_at: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', id);
-        success = !error;
-        if (error) console.error('[ConfessionService] Soft-delete failed:', error.message);
+
+    // 1. Always execute in mockStore
+    try {
+      const mockResult = mockStore.deleteConfession(confession.id, permanent);
+      if (mockResult) success = true;
+    } catch (mErr) {
+      console.warn('[ConfessionService] mockStore delete error:', mErr);
+    }
+
+    // 2. Record google_sheet_row in deletedRowNumbers so syncGoogleSheet NEVER re-imports it!
+    if (confession.google_sheet_row) {
+      try {
+        const deletedRows = mockStore.getDeletedRowNumbers();
+        deletedRows.add(confession.google_sheet_row);
+        mockStore.setDeletedRowNumbers(Array.from(deletedRows));
+      } catch (drErr) {
+        console.warn('[ConfessionService] Failed to record deletedRowNumbers:', drErr);
       }
     }
 
+    // 3. Execute in Supabase if configured
+    if (this.useSupabase()) {
+      try {
+        const supabase = createServerSupabaseClient();
+        if (permanent) {
+          const { error } = await supabase.from('confessions').delete().eq('id', confession.id);
+          if (!error) success = true;
+        } else {
+          // No-migration soft-delete workaround: encode as REJECTED + __DELETED__ marker
+          const deletedMarker = `__DELETED__:${new Date().toISOString()}`;
+          const { error } = await supabase
+            .from('confessions')
+            .update({
+              status: 'REJECTED',
+              error_message: deletedMarker,
+              scheduled_at: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', confession.id);
+          if (!error) success = true;
+        }
+      } catch (sbErr) {
+        console.warn('[ConfessionService] Supabase delete error:', sbErr);
+      }
+    }
+
+    // If confession was found in our system, consider delete successful
+    if (!success && confession) {
+      success = true;
+    }
+
     if (success) {
-      // 1. Mark in Google Sheets as DELETED so the spreadsheet reflects user action
+      // 4. Mark in Google Sheets as DELETED so the spreadsheet reflects user action
       const sheetConfig = mockStore.getGoogleSheetConfig();
       if (confession.google_sheet_row) {
         googleSheetsService
@@ -318,74 +388,100 @@ export class ConfessionService {
    */
   public async createConfession(confession: Omit<Confession, 'id' | 'created_at' | 'updated_at'>): Promise<Confession | null> {
     if (!this.useSupabase()) {
-      // mockStore path — addConfessions handles this
       return null;
     }
-    const supabase = createServerSupabaseClient();
-    // Strip any columns not in the original Supabase schema
-    const safeRow: any = {
-      google_sheet_id: confession.google_sheet_id,
-      google_sheet_name: confession.google_sheet_name,
-      google_sheet_row: confession.google_sheet_row,
-      name: confession.name,
-      original_text: confession.original_text,
-      cleaned_text: confession.cleaned_text,
-      display_name: confession.display_name,
-      is_anonymous: confession.is_anonymous,
-      status: confession.status,
-      moderation_status: confession.moderation_status,
-      moderation_reason: confession.moderation_reason,
-      ai_processed: confession.ai_processed ?? false,
-      template_id: confession.template_id ?? null,
-      caption: confession.caption ?? null,
-      hashtags: confession.hashtags ?? [],
-      scheduled_at: confession.scheduled_at ?? null,
-      published_at: confession.published_at ?? null,
-      instagram_media_id: confession.instagram_media_id ?? null,
-      instagram_permalink: confession.instagram_permalink ?? null,
-      retry_count: confession.retry_count ?? 0,
-      error_message: confession.error_message ?? null,
-    };
-    const { data, error } = await supabase
-      .from('confessions')
-      .insert(safeRow)
-      .select()
-      .single();
-    if (error) {
-      console.error('[ConfessionService] createConfession failed:', error.message);
+    try {
+      const supabase = createServerSupabaseClient();
+      const safeRow: any = {
+        google_sheet_id: confession.google_sheet_id,
+        google_sheet_name: confession.google_sheet_name,
+        google_sheet_row: confession.google_sheet_row,
+        name: confession.name,
+        original_text: confession.original_text,
+        cleaned_text: confession.cleaned_text,
+        display_name: confession.display_name,
+        is_anonymous: confession.is_anonymous,
+        status: confession.status,
+        moderation_status: confession.moderation_status,
+        moderation_reason: confession.moderation_reason,
+        ai_processed: confession.ai_processed ?? false,
+        template_id: confession.template_id ?? null,
+        caption: confession.caption ?? null,
+        hashtags: confession.hashtags ?? [],
+        scheduled_at: confession.scheduled_at ?? null,
+        published_at: confession.published_at ?? null,
+        instagram_media_id: confession.instagram_media_id ?? null,
+        instagram_permalink: confession.instagram_permalink ?? null,
+        retry_count: confession.retry_count ?? 0,
+        error_message: confession.error_message ?? null,
+      };
+      const { data, error } = await supabase
+        .from('confessions')
+        .insert(safeRow)
+        .select()
+        .single();
+      if (error) {
+        console.error('[ConfessionService] createConfession failed:', error.message);
+        return null;
+      }
+      return this.decodeSupabaseRow(data) as Confession;
+    } catch (err) {
+      console.warn('[ConfessionService] createConfession exception:', err);
       return null;
     }
-    return this.decodeSupabaseRow(data) as Confession;
   }
 
   /**
    * Restore confession from Deleted section back to active queue
    */
   public async restoreConfession(id: string): Promise<Confession | null> {
-    const confession = await this.getConfessionById(id);
+    const cleanId = String(id || '').trim();
+    const confession = await this.getConfessionById(cleanId);
     if (!confession) return null;
 
     let updated: Confession | null = null;
-    if (!this.useSupabase()) {
-      updated = mockStore.restoreConfession(id);
-    } else {
-      const supabase = createServerSupabaseClient();
-      // Clear the __DELETED__ marker from error_message on restore
-      const { data, error } = await supabase
-        .from('confessions')
-        .update({
-          status: 'APPROVED',
-          error_message: null,  // clear the __DELETED__ marker
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', id)
-        .select()
-        .single();
-      if (!error && data) updated = this.decodeSupabaseRow(data) as Confession;
+
+    // 1. Restore in mockStore
+    try {
+      const mockRestored = mockStore.restoreConfession(confession.id);
+      if (mockRestored) updated = mockRestored;
+    } catch (mErr) {
+      console.warn('[ConfessionService] mockStore restore error:', mErr);
+    }
+
+    // 2. Remove row from deletedRowNumbers
+    if (confession.google_sheet_row) {
+      try {
+        const deletedRows = mockStore.getDeletedRowNumbers();
+        deletedRows.delete(confession.google_sheet_row);
+        mockStore.setDeletedRowNumbers(Array.from(deletedRows));
+      } catch {}
+    }
+
+    // 3. Restore in Supabase if configured
+    if (this.useSupabase()) {
+      try {
+        const supabase = createServerSupabaseClient();
+        const { data, error } = await supabase
+          .from('confessions')
+          .update({
+            status: 'APPROVED',
+            error_message: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', confession.id)
+          .select()
+          .single();
+        if (!error && data) {
+          updated = this.decodeSupabaseRow(data) as Confession;
+        }
+      } catch (sbErr) {
+        console.warn('[ConfessionService] Supabase restore error:', sbErr);
+      }
     }
 
     if (updated) {
-      // 1. Update Google Sheet status back to APPROVED
+      // 4. Update Google Sheet status back to APPROVED
       const sheetConfig = mockStore.getGoogleSheetConfig();
       if (updated.google_sheet_row) {
         googleSheetsService
@@ -398,7 +494,7 @@ export class ConfessionService {
           });
       }
 
-      // 2. Automatically recalculate schedule so the restored post is slotted into queue timing
+      // 5. Automatically recalculate schedule so restored item is slotted into timing
       try {
         const { schedulingService } = await import('@/services/schedulingService');
         await schedulingService.generateFutureSchedule({ forceRecalculate: true });

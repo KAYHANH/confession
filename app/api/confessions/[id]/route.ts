@@ -25,7 +25,8 @@ export async function GET(
   const auth = await requireAuth(request);
   if (auth instanceof NextResponse) return auth;
   try {
-    const { id } = await Promise.resolve(props.params);
+    const rawParams = await Promise.resolve(props.params);
+    const id = decodeURIComponent(rawParams.id || '').trim();
     const confession = await confessionService.getConfessionById(id);
     if (!confession) {
       return NextResponse.json({ error: 'Confession not found' }, { status: 404 });
@@ -43,7 +44,8 @@ export async function PATCH(
   const auth = await requireAuth(request);
   if (auth instanceof NextResponse) return auth;
   try {
-    const { id } = await Promise.resolve(props.params);
+    const rawParams = await Promise.resolve(props.params);
+    const id = decodeURIComponent(rawParams.id || '').trim();
     const body = await request.json();
     const parsed = updateSchema.safeParse(body);
 
@@ -94,7 +96,8 @@ export async function DELETE(
   const auth = await requireAuth(request);
   if (auth instanceof NextResponse) return auth;
   try {
-    const { id } = await Promise.resolve(props.params);
+    const rawParams = await Promise.resolve(props.params);
+    const id = decodeURIComponent(rawParams.id || '').trim();
     const permanent = request.nextUrl.searchParams.get('permanent') === 'true';
     const deleted = await confessionService.deleteConfession(id, permanent);
     if (!deleted) {

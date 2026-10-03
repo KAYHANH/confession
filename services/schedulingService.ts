@@ -121,36 +121,36 @@ export class SchedulingService {
     const config = mockStore.getGoogleSheetConfig();
     const rows = await googleSheetsService.fetchRows(config);
 
-    // Load existing confessions from the real store (Supabase or mockStore).
-    // We must fetch ALL to detect DELETED ones and avoid re-importing them.
-    let existing: Confession[];
-    const useSupabase = process.env.MOCK_EXTERNAL_APIS !== 'true' &&
+    // Load existing confessions from both stores to have complete visibility
+    const mockConfessions = mockStore.getConfessions();
+    let dbConfessions: Confession[] = [];
+    const useSupabase = process.env.DISABLE_SUPABASE !== 'true' &&
+      process.env.USE_SUPABASE !== 'false' &&
+      process.env.MOCK_EXTERNAL_APIS !== 'true' &&
       !!process.env.NEXT_PUBLIC_SUPABASE_URL &&
       !process.env.NEXT_PUBLIC_SUPABASE_URL.includes('placeholder');
 
     if (useSupabase) {
-      // Fetch all (no status filter) so we see DELETED (REJECTED+marker) rows too
-      const allPages = await confessionService.getConfessions({ limit: 1000 });
-      existing = allPages.confessions;
-      // Also fetch deleted specifically (uses the __DELETED__ marker query)
-      const deletedPage = await confessionService.getConfessions({ status: 'DELETED', limit: 1000 });
-      existing = [...existing, ...deletedPage.confessions.filter(d => !existing.find(e => e.id === d.id))];
-    } else {
-      existing = mockStore.getConfessions();
+      try {
+        const allPages = await confessionService.getConfessions({ limit: 1000 });
+        dbConfessions = allPages.confessions || [];
+      } catch (err) {
+        console.warn('[SchedulingService] Failed to load confessions from Supabase for sync:', err);
+      }
     }
 
-    // Build deleted row number set from the fetched confessions (works for both Supabase and mockStore)
-    const deletedFromDb = new Set(
-      existing.filter(c => c.status === 'DELETED').map(c => c.google_sheet_row).filter(Boolean)
-    );
-    // Also include legacy deletedRowNumbers from mockStore (for non-Supabase mode)
-    const deletedRowNumbers = useSupabase ? deletedFromDb : new Set([
+    const existing = [...mockConfessions, ...dbConfessions];
+
+    // Combine deleted rows from ALL sources:
+    // 1) Explicitly saved deletedRowNumbers in mockStore
+    // 2) Any confession in existing list with status === 'DELETED'
+    const deletedRowNumbers = new Set<number>([
       ...mockStore.getDeletedRowNumbers(),
-      ...deletedFromDb,
+      ...(existing.filter((c) => c.status === 'DELETED').map((c) => c.google_sheet_row).filter(Boolean) as number[]),
     ]);
 
     const existingRowSet = new Set(
-      existing.map((c) => c.google_sheet_row)
+      existing.map((c) => c.google_sheet_row).filter(Boolean)
     );
 
     const newConfessions: Confession[] = [];
@@ -169,6 +169,12 @@ export class SchedulingService {
       const isDeletedInSheet = rawStatus === 'DELETED';
 
       if (isDeletedInSheet) {
+        if (!deletedRowNumbers.has(row.rowNumber)) {
+          deletedRowNumbers.add(row.rowNumber);
+          try {
+            mockStore.setDeletedRowNumbers(Array.from(deletedRowNumbers));
+          } catch {}
+        }
         continue;
       }
 
@@ -273,15 +279,16 @@ export class SchedulingService {
     }
 
     if (newConfessions.length > 0) {
+      // Always store in mockStore so local file cache is never empty
+      mockStore.addConfessions(newConfessions);
+
       if (useSupabase) {
-        // Write new rows to Supabase instead of the local file store
+        // Also sync new rows to Supabase if configured
         for (const confession of newConfessions) {
           await confessionService.createConfession(confession as any).catch((err: any) => {
             console.warn('[SchedulingService] Failed to insert confession to Supabase:', err?.message);
           });
         }
-      } else {
-        mockStore.addConfessions(newConfessions);
       }
     }
 

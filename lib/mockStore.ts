@@ -291,7 +291,11 @@ class MockStore {
 
   public getConfessionById(id: string): Confession | undefined {
     this.ensureFresh();
-    return this.data.confessions.find((c) => c.id === id);
+    const cleanId = String(id || '').trim();
+    if (!cleanId) return undefined;
+    return this.data.confessions.find(
+      (c) => c.id === cleanId || String(c.id) === cleanId || (c.google_sheet_row && String(c.google_sheet_row) === cleanId)
+    );
   }
 
   public addConfession(confession: Confession) {
@@ -318,7 +322,11 @@ class MockStore {
   }
 
   public updateConfession(id: string, updates: Partial<Confession>): Confession | null {
-    const index = this.data.confessions.findIndex((c) => c.id === id);
+    this.ensureFresh();
+    const cleanId = String(id || '').trim();
+    const index = this.data.confessions.findIndex(
+      (c) => c.id === cleanId || String(c.id) === cleanId || (c.google_sheet_row && String(c.google_sheet_row) === cleanId)
+    );
     if (index === -1) return null;
     const updated = {
       ...this.data.confessions[index],
@@ -332,7 +340,10 @@ class MockStore {
 
   public softDeleteConfession(id: string): boolean {
     this.ensureFresh();
-    const conf = this.data.confessions.find((c) => c.id === id);
+    const cleanId = String(id || '').trim();
+    const conf = this.data.confessions.find(
+      (c) => c.id === cleanId || String(c.id) === cleanId || (c.google_sheet_row && String(c.google_sheet_row) === cleanId)
+    );
     if (!conf) return false;
 
     conf.status = 'DELETED';
@@ -350,7 +361,7 @@ class MockStore {
     this.addLog({
       action: 'DELETED',
       entity_type: 'confession',
-      entity_id: id,
+      entity_id: conf.id,
       metadata: { row: conf.google_sheet_row, text: (conf.cleaned_text || conf.original_text || '').slice(0, 60) },
     });
 
@@ -360,7 +371,10 @@ class MockStore {
 
   public permanentlyDeleteConfession(id: string): boolean {
     this.ensureFresh();
-    const conf = this.data.confessions.find((c) => c.id === id);
+    const cleanId = String(id || '').trim();
+    const conf = this.data.confessions.find(
+      (c) => c.id === cleanId || String(c.id) === cleanId || (c.google_sheet_row && String(c.google_sheet_row) === cleanId)
+    );
     if (conf && conf.google_sheet_row) {
       if (!this.data.deletedRowNumbers) this.data.deletedRowNumbers = [];
       if (!this.data.deletedRowNumbers.includes(conf.google_sheet_row)) {
@@ -369,7 +383,9 @@ class MockStore {
     }
 
     const prevLen = this.data.confessions.length;
-    this.data.confessions = this.data.confessions.filter((c) => c.id !== id);
+    this.data.confessions = this.data.confessions.filter(
+      (c) => c.id !== cleanId && String(c.id) !== cleanId && (!c.google_sheet_row || String(c.google_sheet_row) !== cleanId)
+    );
     if (this.data.confessions.length !== prevLen) {
       this.save();
       return true;
@@ -379,7 +395,10 @@ class MockStore {
 
   public restoreConfession(id: string): Confession | null {
     this.ensureFresh();
-    const conf = this.data.confessions.find((c) => c.id === id);
+    const cleanId = String(id || '').trim();
+    const conf = this.data.confessions.find(
+      (c) => c.id === cleanId || String(c.id) === cleanId || (c.google_sheet_row && String(c.google_sheet_row) === cleanId)
+    );
     if (!conf) return null;
 
     conf.status = 'APPROVED';
@@ -393,7 +412,7 @@ class MockStore {
     this.addLog({
       action: 'RESTORED',
       entity_type: 'confession',
-      entity_id: id,
+      entity_id: conf.id,
       metadata: { row: conf.google_sheet_row },
     });
 

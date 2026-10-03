@@ -270,25 +270,41 @@ export default function ConfessionsPage() {
       : 'Move this confession to the Deleted archive? Queue timings for remaining posts will be automatically recalculated.';
     if (!confirm(msg)) return;
     try {
-      const res = await fetch(`/api/confessions/${id}${permanent ? '?permanent=true' : ''}`, { method: 'DELETE' });
+      // Optimistically update UI so user immediately sees the post move
+      if (permanent) {
+        setAllConfessions((prev) => prev.filter((c) => c.id !== id));
+      } else {
+        setAllConfessions((prev) =>
+          prev.map((c) => (c.id === id ? { ...c, status: 'DELETED', deleted_at: new Date().toISOString() } : c))
+        );
+      }
+
+      const res = await fetch(`/api/confessions/${encodeURIComponent(id)}${permanent ? '?permanent=true' : ''}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
       success(permanent ? 'Permanently deleted' : 'Moved to Deleted (queue timings updated)');
       loadData();
     } catch (err: any) {
       error(err?.message || 'Delete failed');
+      loadData();
     }
   };
 
   const handleRestore = async (id: string) => {
     try {
-      const res = await fetch(`/api/confessions/${id}/restore`, { method: 'POST' });
+      // Optimistically restore in UI
+      setAllConfessions((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, status: 'APPROVED', deleted_at: null } : c))
+      );
+
+      const res = await fetch(`/api/confessions/${encodeURIComponent(id)}/restore`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Restore failed');
       success('Confession restored to queue (timings updated)');
       loadData();
     } catch (err: any) {
       error(err?.message || 'Restore failed');
+      loadData();
     }
   };
 
