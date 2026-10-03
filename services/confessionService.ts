@@ -17,17 +17,18 @@ import {
 
 // Valid status transitions map
 export const ALLOWED_TRANSITIONS: Record<ConfessionStatus, ConfessionStatus[]> = {
-  NEW: ['IMPORTED'],
-  IMPORTED: ['PROCESSING'],
-  PROCESSING: ['READY_FOR_REVIEW', 'REJECTED'],
-  READY_FOR_REVIEW: ['APPROVED', 'REJECTED', 'PUBLISHING'],
-  APPROVED: ['SCHEDULED', 'PUBLISHING', 'REJECTED'],
-  REJECTED: ['READY_FOR_REVIEW', 'APPROVED'], // allow admin to overturn rejection
-  SCHEDULED: ['PUBLISHING', 'APPROVED', 'REJECTED'], // allow rescheduling/cancelling
-  PUBLISHING: ['PUBLISHED', 'FAILED'],
-  PUBLISHED: [], // Terminal state, no further publishing
-  FAILED: ['APPROVED', 'READY_FOR_REVIEW', 'PUBLISHING', 'FAILED_REQUIRES_ACTION', 'REJECTED'],
-  FAILED_REQUIRES_ACTION: ['APPROVED', 'READY_FOR_REVIEW', 'PUBLISHING', 'REJECTED'],
+  NEW: ['IMPORTED', 'DELETED'],
+  IMPORTED: ['PROCESSING', 'DELETED'],
+  PROCESSING: ['READY_FOR_REVIEW', 'REJECTED', 'DELETED'],
+  READY_FOR_REVIEW: ['APPROVED', 'SCHEDULED', 'REJECTED', 'PUBLISHING', 'DELETED'],
+  APPROVED: ['SCHEDULED', 'PUBLISHING', 'REJECTED', 'DELETED'],
+  REJECTED: ['READY_FOR_REVIEW', 'APPROVED', 'DELETED'], // allow admin to overturn rejection
+  SCHEDULED: ['PUBLISHING', 'APPROVED', 'REJECTED', 'DELETED'], // allow rescheduling/cancelling
+  PUBLISHING: ['PUBLISHED', 'FAILED', 'DELETED'],
+  PUBLISHED: [], // Terminal state
+  FAILED: ['APPROVED', 'READY_FOR_REVIEW', 'PUBLISHING', 'FAILED_REQUIRES_ACTION', 'REJECTED', 'DELETED'],
+  FAILED_REQUIRES_ACTION: ['APPROVED', 'READY_FOR_REVIEW', 'PUBLISHING', 'REJECTED', 'DELETED'],
+  DELETED: ['APPROVED', 'READY_FOR_REVIEW'],
 };
 
 export class ConfessionService {
@@ -197,15 +198,130 @@ export class ConfessionService {
   }
 
   /**
-   * Delete confession
+   * Delete confession (soft delete moves to Deleted section; permanent completely purges)
+   * Also updates Google Sheet and recalculates future queue timing!
    */
-  public async deleteConfession(id: string): Promise<boolean> {
+  public async deleteConfession(id: string, permanent: boolean = false): Promise<boolean> {
+    const confession = await this.getConfessionById(id);
+    if (!confession) return false;
+
+    let success = false;
     if (!this.useSupabase()) {
-      return mockStore.deleteConfession(id);
+      success = mockStore.deleteConfession(id, permanent);
+    } else {
+      const supabase = createServerSupabaseClient();
+      if (permanent) {
+        const { error } = await supabase.from('confessions').delete().eq('id', id);
+        success = !error;
+      } else {
+        const { error } = await supabase
+          .from('confessions')
+          .update({
+            status: 'DELETED',
+            deleted_at: new Date().toISOString(),
+            scheduled_at: null,
+          })
+          .eq('id', id);
+        success = !error;
+      }
     }
-    const supabase = createServerSupabaseClient();
-    const { error } = await supabase.from('confessions').delete().eq('id', id);
-    return !error;
+
+    if (success) {
+      // 1. Mark in Google Sheets as DELETED so the spreadsheet reflects user action
+      const sheetConfig = mockStore.getGoogleSheetConfig();
+      if (confession.google_sheet_row) {
+        googleSheetsService
+          .updateRowStatus(sheetConfig, confession.google_sheet_row, {
+            status: 'DELETED',
+            error: 'Deleted by user in ConfessionFlow',
+          })
+          .catch((err) => {
+            console.warn('[ConfessionService] Failed to sync DELETED status to Google Sheet:', err);
+          });
+      }
+
+      // 2. Automatically recalculate schedule so all remaining queue items update their timing!
+      try {
+        const { schedulingService } = await import('@/services/schedulingService');
+        await schedulingService.generateFutureSchedule({ forceRecalculate: true });
+      } catch (recalcErr) {
+        console.warn('[ConfessionService] Failed to recalculate schedule after deletion:', recalcErr);
+      }
+    }
+
+    return success;
+  }
+
+  /**
+   * Restore confession from Deleted section back to active queue
+   */
+  public async restoreConfession(id: string): Promise<Confession | null> {
+    const confession = await this.getConfessionById(id);
+    if (!confession) return null;
+
+    let updated: Confession | null = null;
+    if (!this.useSupabase()) {
+      updated = mockStore.restoreConfession(id);
+    } else {
+      const supabase = createServerSupabaseClient();
+      const { data, error } = await supabase
+        .from('confessions')
+        .update({
+          status: 'APPROVED',
+          deleted_at: null,
+        })
+        .eq('id', id)
+        .select()
+        .single();
+      if (!error && data) updated = data as Confession;
+    }
+
+    if (updated) {
+      // 1. Update Google Sheet status back to APPROVED
+      const sheetConfig = mockStore.getGoogleSheetConfig();
+      if (updated.google_sheet_row) {
+        googleSheetsService
+          .updateRowStatus(sheetConfig, updated.google_sheet_row, {
+            status: 'APPROVED',
+            error: '',
+          })
+          .catch((err) => {
+            console.warn('[ConfessionService] Failed to sync APPROVED status to Google Sheet on restore:', err);
+          });
+      }
+
+      // 2. Automatically recalculate schedule so the restored post is slotted into queue timing
+      try {
+        const { schedulingService } = await import('@/services/schedulingService');
+        await schedulingService.generateFutureSchedule({ forceRecalculate: true });
+      } catch (recalcErr) {
+        console.warn('[ConfessionService] Failed to recalculate schedule after restore:', recalcErr);
+      }
+    }
+
+    return updated;
+  }
+
+  public async bulkDelete(ids: string[], permanent: boolean = false): Promise<{ deleted: string[]; failed: string[] }> {
+    const deleted: string[] = [];
+    const failed: string[] = [];
+    for (const id of ids) {
+      const ok = await this.deleteConfession(id, permanent);
+      if (ok) deleted.push(id);
+      else failed.push(id);
+    }
+    return { deleted, failed };
+  }
+
+  public async bulkRestore(ids: string[]): Promise<{ restored: string[]; failed: string[] }> {
+    const restored: string[] = [];
+    const failed: string[] = [];
+    for (const id of ids) {
+      const res = await this.restoreConfession(id);
+      if (res) restored.push(id);
+      else failed.push(id);
+    }
+    return { restored, failed };
   }
 
   /**
@@ -929,7 +1045,7 @@ export class ConfessionService {
     const settings = mockStore.getSettings();
 
     return {
-      total: all.length,
+      total: all.filter((c) => c.status !== 'DELETED').length,
       pendingReview: all.filter((c) => c.status === 'READY_FOR_REVIEW').length,
       approved: all.filter((c) => c.status === 'APPROVED').length,
       scheduled: all.filter((c) => c.status === 'SCHEDULED').length,

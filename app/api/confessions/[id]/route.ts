@@ -95,11 +95,12 @@ export async function DELETE(
   if (auth instanceof NextResponse) return auth;
   try {
     const { id } = await Promise.resolve(props.params);
-    const deleted = await confessionService.deleteConfession(id);
+    const permanent = request.nextUrl.searchParams.get('permanent') === 'true';
+    const deleted = await confessionService.deleteConfession(id, permanent);
     if (!deleted) {
       return NextResponse.json({ error: 'Failed to delete or confession not found' }, { status: 404 });
     }
-    return NextResponse.json({ success: true, id });
+    return NextResponse.json({ success: true, id, permanent });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Failed to delete confession' }, { status: 500 });
   }

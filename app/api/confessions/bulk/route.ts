@@ -43,7 +43,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(result);
     }
 
-    return NextResponse.json({ error: 'Invalid action. Supported: approve, reject, process, retry' }, { status: 400 });
+    if (action === 'delete') {
+      const result = await confessionService.bulkDelete(ids, false);
+      return NextResponse.json(result);
+    }
+
+    if (action === 'restore') {
+      const result = await confessionService.bulkRestore(ids);
+      return NextResponse.json(result);
+    }
+
+    if (action === 'permanent_delete') {
+      const result = await confessionService.bulkDelete(ids, true);
+      return NextResponse.json(result);
+    }
+
+    return NextResponse.json({ error: 'Invalid action. Supported: approve, reject, process, retry, delete, restore, permanent_delete' }, { status: 400 });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Bulk operation failed' }, { status: 500 });
   }

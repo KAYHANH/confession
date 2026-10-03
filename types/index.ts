@@ -9,7 +9,8 @@ export type ConfessionStatus =
   | 'PUBLISHING'
   | 'PUBLISHED'
   | 'FAILED'
-  | 'FAILED_REQUIRES_ACTION';
+  | 'FAILED_REQUIRES_ACTION'
+  | 'DELETED';
 
 export type ModerationRisk = 'LOW' | 'MEDIUM' | 'HIGH';
 
@@ -36,6 +37,7 @@ export interface Confession {
   hashtags: string[];
   scheduled_at: string | null;
   published_at: string | null;
+  deleted_at?: string | null;
   instagram_media_id: string | null;
   instagram_permalink: string | null;
   retry_count: number;
@@ -98,7 +100,9 @@ export interface ActivityLog {
     | 'STALE_QUEUE_REPAIRED'
     | 'SHEET_SYNC'
     | 'INSTAGRAM_CONNECTED'
-    | 'SETTINGS_UPDATED';
+    | 'SETTINGS_UPDATED'
+    | 'DELETED'
+    | 'RESTORED';
   entity_type: 'confession' | 'sheet' | 'instagram' | 'template' | 'settings' | 'queue';
   entity_id?: string | null;
   metadata: Record<string, any>;

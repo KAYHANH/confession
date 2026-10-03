@@ -12,6 +12,7 @@ export interface MockDatabase {
   googleSheet: GoogleSheetConfig;
   instagram: InstagramAccountConfig;
   settings: SystemSettings;
+  deletedRowNumbers?: number[];
 }
 
 const DEFAULT_TEMPLATES: Template[] = [
@@ -219,6 +220,9 @@ class MockStore {
             }
           });
         }
+        if (!Array.isArray(parsed.deletedRowNumbers)) {
+          parsed.deletedRowNumbers = [];
+        }
         return parsed;
       }
     } catch (_e) {
@@ -238,6 +242,7 @@ class MockStore {
         },
       ],
       publishedPosts: [],
+      deletedRowNumbers: [],
       googleSheet: {
         spreadsheet_id: process.env.GOOGLE_SHEETS_SPREADSHEET_ID || '1S5HcRCh27paVdqyiCAqAI_1x-LCABtb73R6Fisn-QJs',
         sheet_name: process.env.GOOGLE_SHEETS_SHEET_NAME || 'Confessions',
@@ -325,7 +330,44 @@ class MockStore {
     return updated;
   }
 
-  public deleteConfession(id: string): boolean {
+  public softDeleteConfession(id: string): boolean {
+    this.ensureFresh();
+    const conf = this.data.confessions.find((c) => c.id === id);
+    if (!conf) return false;
+
+    conf.status = 'DELETED';
+    conf.deleted_at = new Date().toISOString();
+    conf.updated_at = new Date().toISOString();
+    conf.scheduled_at = null; // Clear scheduled slot so it doesn't block timing
+
+    if (conf.google_sheet_row) {
+      if (!this.data.deletedRowNumbers) this.data.deletedRowNumbers = [];
+      if (!this.data.deletedRowNumbers.includes(conf.google_sheet_row)) {
+        this.data.deletedRowNumbers.push(conf.google_sheet_row);
+      }
+    }
+
+    this.addLog({
+      action: 'DELETED',
+      entity_type: 'confession',
+      entity_id: id,
+      metadata: { row: conf.google_sheet_row, text: (conf.cleaned_text || conf.original_text || '').slice(0, 60) },
+    });
+
+    this.save();
+    return true;
+  }
+
+  public permanentlyDeleteConfession(id: string): boolean {
+    this.ensureFresh();
+    const conf = this.data.confessions.find((c) => c.id === id);
+    if (conf && conf.google_sheet_row) {
+      if (!this.data.deletedRowNumbers) this.data.deletedRowNumbers = [];
+      if (!this.data.deletedRowNumbers.includes(conf.google_sheet_row)) {
+        this.data.deletedRowNumbers.push(conf.google_sheet_row);
+      }
+    }
+
     const prevLen = this.data.confessions.length;
     this.data.confessions = this.data.confessions.filter((c) => c.id !== id);
     if (this.data.confessions.length !== prevLen) {
@@ -333,6 +375,47 @@ class MockStore {
       return true;
     }
     return false;
+  }
+
+  public restoreConfession(id: string): Confession | null {
+    this.ensureFresh();
+    const conf = this.data.confessions.find((c) => c.id === id);
+    if (!conf) return null;
+
+    conf.status = 'APPROVED';
+    conf.deleted_at = null;
+    conf.updated_at = new Date().toISOString();
+
+    if (conf.google_sheet_row && this.data.deletedRowNumbers) {
+      this.data.deletedRowNumbers = this.data.deletedRowNumbers.filter((r) => r !== conf.google_sheet_row);
+    }
+
+    this.addLog({
+      action: 'RESTORED',
+      entity_type: 'confession',
+      entity_id: id,
+      metadata: { row: conf.google_sheet_row },
+    });
+
+    this.save();
+    return conf;
+  }
+
+  public deleteConfession(id: string, permanent: boolean = false): boolean {
+    if (permanent) {
+      return this.permanentlyDeleteConfession(id);
+    }
+    return this.softDeleteConfession(id);
+  }
+
+  public getDeletedRowNumbers(): Set<number> {
+    this.ensureFresh();
+    return new Set(this.data.deletedRowNumbers || []);
+  }
+
+  public setDeletedRowNumbers(rows: number[]): void {
+    this.data.deletedRowNumbers = [...rows];
+    this.save();
   }
 
   public getTemplates(): Template[] {

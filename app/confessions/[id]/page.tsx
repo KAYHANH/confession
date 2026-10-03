@@ -18,6 +18,8 @@ import {
   AlertTriangle,
   Tag,
   Download,
+  Trash2,
+  Undo2,
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Confession, Template } from '@/types';
@@ -229,6 +231,43 @@ export default function ConfessionEditorPage({
     }
   };
 
+  const handleSoftDelete = async () => {
+    if (!confirm('Move this confession to the Deleted archive? Queue timings for remaining posts will automatically update.')) return;
+    try {
+      const res = await fetch(`/api/confessions/${confessionId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete');
+      success('Moved to Deleted (queue timings updated)');
+      loadData();
+    } catch (err: any) {
+      error(err?.message || 'Error deleting');
+    }
+  };
+
+  const handlePermanentDelete = async () => {
+    if (!confirm('Permanently delete this confession? It will be removed forever and will NEVER be re-imported from Google Sheets.')) return;
+    try {
+      const res = await fetch(`/api/confessions/${confessionId}?permanent=true`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to permanently delete');
+      success('Permanently deleted');
+      router.push('/confessions');
+    } catch (err: any) {
+      error(err?.message || 'Error permanently deleting');
+    }
+  };
+
+  const handleRestore = async () => {
+    try {
+      const res = await fetch(`/api/confessions/${confessionId}/restore`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to restore');
+      success('Confession restored to queue (timings updated)');
+      loadData();
+    } catch (err: any) {
+      error(err?.message || 'Error restoring');
+    }
+  };
 
   if (loading) {
     return (
@@ -343,9 +382,67 @@ export default function ConfessionEditorPage({
               Already Published
             </span>
           )}
+
+          {confession.status === 'DELETED' ? (
+            <>
+              <button
+                onClick={handleRestore}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+                <span>Restore</span>
+              </button>
+              <button
+                onClick={handlePermanentDelete}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-700 hover:bg-rose-600 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Permanently Delete</span>
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleSoftDelete}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold border border-rose-200 transition-colors cursor-pointer"
+              title="Move to Deleted (auto-updates queue timing)"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete</span>
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Deleted Banner */}
+      {confession.status === 'DELETED' && (
+        <div className="flex items-center justify-between p-4 mb-6 bg-rose-50 border border-rose-200 rounded-2xl text-rose-900 gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-rose-100 rounded-xl text-rose-600 shrink-0">
+              <Trash2 className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="font-semibold text-sm">This confession is in the Deleted archive</div>
+              <div className="text-xs text-rose-700 mt-0.5">
+                Deleted on {confession.deleted_at ? new Date(confession.deleted_at).toLocaleString('en-IN') : 'recently'}. It is excluded from queue timings and will NEVER be re-imported from Google Sheets.
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleRestore}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-sm transition-colors cursor-pointer"
+            >
+              <Undo2 className="w-3.5 h-3.5" /> Restore
+            </button>
+            <button
+              onClick={handlePermanentDelete}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-700 hover:bg-rose-800 text-white rounded-xl shadow-sm transition-colors cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Permanently Delete
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Two-Column Editor Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">

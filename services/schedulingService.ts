@@ -121,6 +121,7 @@ export class SchedulingService {
     const config = mockStore.getGoogleSheetConfig();
     const rows = await googleSheetsService.fetchRows(config);
     const existing = mockStore.getConfessions();
+    const deletedRowNumbers = mockStore.getDeletedRowNumbers();
 
     const existingRowSet = new Set(
       existing.map((c) => c.google_sheet_row)
@@ -130,15 +131,30 @@ export class SchedulingService {
     const now = new Date();
 
     for (const row of rows) {
+      // 1. Guard against re-importing any row explicitly deleted by user
+      if (deletedRowNumbers.has(row.rowNumber)) {
+        continue;
+      }
+
       const rawStatus = (row.status || '').trim().toUpperCase();
       const isAlreadyPublished = rawStatus === 'PUBLISHED' || rawStatus === 'POSTED';
       const isRejected = rawStatus === 'REJECTED';
       const isScheduled = rawStatus === 'SCHEDULED';
+      const isDeletedInSheet = rawStatus === 'DELETED';
+
+      if (isDeletedInSheet) {
+        continue;
+      }
 
       // If row already exists in memory, sync any updated status from the sheet (e.g. if marked PUBLISHED or REJECTED)
       if (existingRowSet.has(row.rowNumber)) {
+        const existingConf = existing.find((c) => c.google_sheet_row === row.rowNumber);
+        if (existingConf && existingConf.status === 'DELETED') {
+          // Already in Deleted section, ignore
+          continue;
+        }
+
         if (isAlreadyPublished) {
-          const existingConf = existing.find((c) => c.google_sheet_row === row.rowNumber);
           if (existingConf && existingConf.status !== 'PUBLISHED') {
             mockStore.updateConfession(existingConf.id, {
               status: 'PUBLISHED',
@@ -147,7 +163,6 @@ export class SchedulingService {
             });
           }
         } else if (isRejected) {
-          const existingConf = existing.find((c) => c.google_sheet_row === row.rowNumber);
           if (existingConf && existingConf.status !== 'REJECTED') {
             mockStore.updateConfession(existingConf.id, {
               status: 'REJECTED',
@@ -482,6 +497,7 @@ export class SchedulingService {
           (c) =>
             c.status !== 'PUBLISHED' &&
             c.status !== 'REJECTED' &&
+            c.status !== 'DELETED' &&
             c.status !== 'PUBLISHING' &&
             (c.status === 'APPROVED' || c.status === 'READY_FOR_REVIEW') &&
             allowedRisks.includes(c.moderation_status) &&
@@ -784,6 +800,7 @@ export class SchedulingService {
       (c) =>
         c.status !== 'PUBLISHED' &&
         c.status !== 'REJECTED' &&
+        c.status !== 'DELETED' &&
         c.status !== 'PUBLISHING' &&
         !c.published_at &&
         !c.instagram_media_id

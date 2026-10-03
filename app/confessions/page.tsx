@@ -19,6 +19,7 @@ import {
   AlertTriangle,
   Wrench,
   Zap,
+  Undo2,
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -27,7 +28,7 @@ import { PublishModal } from '@/components/confessions/PublishModal';
 import { ScheduleModal } from '@/components/confessions/ScheduleModal';
 import { useToast } from '@/components/ui/ToastContext';
 
-type TabType = 'queue' | 'scheduled' | 'published';
+type TabType = 'queue' | 'scheduled' | 'published' | 'deleted';
 
 export default function ConfessionsPage() {
   const [allConfessions, setAllConfessions] = useState<Confession[]>([]);
@@ -153,10 +154,11 @@ export default function ConfessionsPage() {
 
   // ─── Section filters ──────────────────────────────────────────────────────
   const queueConfessions = allConfessions.filter(
-    (c) => !['PUBLISHED', 'SCHEDULED', 'REJECTED'].includes(c.status)
+    (c) => !['PUBLISHED', 'SCHEDULED', 'REJECTED', 'DELETED'].includes(c.status)
   );
   const scheduledConfessions = allConfessions.filter((c) => c.status === 'SCHEDULED');
   const publishedConfessions = allConfessions.filter((c) => c.status === 'PUBLISHED');
+  const deletedConfessions = allConfessions.filter((c) => c.status === 'DELETED');
   const failedConfessions = allConfessions.filter(
     (c) =>
       (c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION') &&
@@ -185,7 +187,8 @@ export default function ConfessionsPage() {
   const activeList = applyFilters(
     activeTab === 'queue' ? queueConfessions :
     activeTab === 'scheduled' ? scheduledConfessions :
-    publishedConfessions
+    activeTab === 'published' ? publishedConfessions :
+    deletedConfessions
   );
 
   const totalPages = Math.max(1, Math.ceil(activeList.length / LIMIT));
@@ -261,13 +264,32 @@ export default function ConfessionsPage() {
     finally { setBulkProcessing(false); }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this confession?')) return;
+  const handleDelete = async (id: string, permanent = false) => {
+    const msg = permanent
+      ? 'Permanently delete this confession? It will be removed forever and will NEVER be re-imported from Google Sheets.'
+      : 'Move this confession to the Deleted archive? Queue timings for remaining posts will be automatically recalculated.';
+    if (!confirm(msg)) return;
     try {
-      await fetch(`/api/confessions/${id}`, { method: 'DELETE' });
-      success('Deleted');
+      const res = await fetch(`/api/confessions/${id}${permanent ? '?permanent=true' : ''}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
+      success(permanent ? 'Permanently deleted' : 'Moved to Deleted (queue timings updated)');
       loadData();
-    } catch { error('Delete failed'); }
+    } catch (err: any) {
+      error(err?.message || 'Delete failed');
+    }
+  };
+
+  const handleRestore = async (id: string) => {
+    try {
+      const res = await fetch(`/api/confessions/${id}/restore`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Restore failed');
+      success('Confession restored to queue (timings updated)');
+      loadData();
+    } catch (err: any) {
+      error(err?.message || 'Restore failed');
+    }
   };
 
   const [restartingQueue, setRestartingQueue] = useState(false);
@@ -303,6 +325,69 @@ export default function ConfessionsPage() {
     await handleRestartQueue(selectedIds);
   };
 
+  const handleBulkRestore = async () => {
+    if (!confirm(`Restore ${selectedIds.length} confession(s) back to queue? Queue schedule will recalculate automatically.`)) return;
+    setBulkProcessing(true);
+    try {
+      const res = await fetch('/api/confessions/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'restore', ids: selectedIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Bulk restore failed');
+      success(`${selectedIds.length} restored to queue (timings updated)`);
+      setSelectedIds([]);
+      loadData();
+    } catch (err: any) {
+      error(err?.message || 'Bulk restore failed');
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  const handleBulkPermanentDelete = async () => {
+    if (!confirm(`Permanently delete ${selectedIds.length} confession(s)? They will NEVER return or re-import from Google Sheets.`)) return;
+    setBulkProcessing(true);
+    try {
+      const res = await fetch('/api/confessions/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'permanent_delete', ids: selectedIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Bulk permanent delete failed');
+      success(`${selectedIds.length} permanently deleted`);
+      setSelectedIds([]);
+      loadData();
+    } catch (err: any) {
+      error(err?.message || 'Bulk permanent delete failed');
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  const handleBulkSoftDelete = async () => {
+    if (!confirm(`Move ${selectedIds.length} confession(s) to Deleted? Queue timings will recalculate automatically.`)) return;
+    setBulkProcessing(true);
+    try {
+      const res = await fetch('/api/confessions/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', ids: selectedIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Bulk delete failed');
+      success(`${selectedIds.length} moved to Deleted (queue timings updated)`);
+      setSelectedIds([]);
+      loadData();
+    } catch (err: any) {
+      error(err?.message || 'Bulk delete failed');
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
   // ─── Tab config ───────────────────────────────────────────────────────────
   const tabs: { id: TabType; label: string; icon: React.ReactNode; count: number; color: string }[] = [
     {
@@ -326,17 +411,26 @@ export default function ConfessionsPage() {
       count: publishedConfessions.length,
       color: 'emerald',
     },
+    {
+      id: 'deleted',
+      label: 'Deleted',
+      icon: <Trash2 className="w-4 h-4" />,
+      count: deletedConfessions.length,
+      color: 'rose',
+    },
   ];
 
   const tabColorMap: Record<string, string> = {
     indigo: 'border-indigo-500 text-indigo-700 bg-indigo-50',
     amber:  'border-amber-500 text-amber-700 bg-amber-50',
     emerald:'border-emerald-500 text-emerald-700 bg-emerald-50',
+    rose:   'border-rose-500 text-rose-700 bg-rose-50',
   };
   const badgeColorMap: Record<string, string> = {
     indigo: 'bg-indigo-100 text-indigo-700',
     amber:  'bg-amber-100 text-amber-700',
     emerald:'bg-emerald-100 text-emerald-700',
+    rose:   'bg-rose-100 text-rose-700',
   };
 
   // ─── Render helpers ───────────────────────────────────────────────────────
@@ -354,6 +448,7 @@ export default function ConfessionsPage() {
       APPROVED: 'bg-indigo-100 text-indigo-700 border-indigo-200',
       REJECTED: 'bg-rose-100 text-rose-700 border-rose-200',
       FAILED: 'bg-rose-100 text-rose-700 border-rose-200',
+      DELETED: 'bg-zinc-100 text-zinc-600 border-zinc-300 line-through',
     };
     const cls = map[status] || 'bg-zinc-100 text-zinc-700 border-zinc-200';
     return <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${cls}`}>{status.replace(/_/g, ' ')}</span>;
@@ -368,7 +463,10 @@ export default function ConfessionsPage() {
           <div>
             <h1 className="text-2xl font-bold text-zinc-900">Confessions</h1>
             <p className="text-sm text-zinc-500 mt-0.5">
-              {allConfessions.length} total · {queueConfessions.length} queued · {publishedConfessions.length} published
+              {allConfessions.filter(c => c.status !== 'DELETED').length} active · {queueConfessions.length} queued · {publishedConfessions.length} published
+              {deletedConfessions.length > 0 && (
+                <span className="ml-2 font-semibold text-zinc-500">· {deletedConfessions.length} deleted</span>
+              )}
               {failedConfessions.length > 0 && (
                 <span className="ml-2 font-semibold text-rose-600">· {failedConfessions.length} failed</span>
               )}
@@ -538,15 +636,41 @@ export default function ConfessionsPage() {
           {selectedIds.length > 0 && (
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-sm text-zinc-600 font-medium">{selectedIds.length} selected</span>
-              <button onClick={handleBulkApprove} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
-                <Check className="w-3.5 h-3.5" /> Approve All
-              </button>
-              <button onClick={handleBulkRetry} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors" title="Restart and retry selected failed confessions">
-                <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} /> Retry Selected
-              </button>
-              <button onClick={handleBulkReject} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors">
-                <X className="w-3.5 h-3.5" /> Reject All
-              </button>
+              {activeTab === 'deleted' ? (
+                <>
+                  <button
+                    onClick={handleBulkRestore}
+                    disabled={bulkProcessing}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
+                    title="Restore selected confessions to queue"
+                  >
+                    <Undo2 className="w-3.5 h-3.5" /> Restore Selected
+                  </button>
+                  <button
+                    onClick={handleBulkPermanentDelete}
+                    disabled={bulkProcessing}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors shadow-sm"
+                    title="Permanently purge selected confessions"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Permanently Delete
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button onClick={handleBulkApprove} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
+                    <Check className="w-3.5 h-3.5" /> Approve All
+                  </button>
+                  <button onClick={handleBulkRetry} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors" title="Restart and retry selected failed confessions">
+                    <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} /> Retry Selected
+                  </button>
+                  <button onClick={handleBulkReject} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-zinc-700 text-white rounded-lg hover:bg-zinc-800 transition-colors">
+                    <X className="w-3.5 h-3.5" /> Reject All
+                  </button>
+                  <button onClick={handleBulkSoftDelete} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors">
+                    <Trash2 className="w-3.5 h-3.5" /> Move to Deleted
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -561,10 +685,12 @@ export default function ConfessionsPage() {
             {activeTab === 'queue' && <ListTodo className="w-10 h-10" />}
             {activeTab === 'scheduled' && <Clock className="w-10 h-10" />}
             {activeTab === 'published' && <CheckCircle2 className="w-10 h-10" />}
+            {activeTab === 'deleted' && <Trash2 className="w-10 h-10" />}
             <p className="text-sm font-medium">
               {activeTab === 'queue' && 'No confessions in queue'}
               {activeTab === 'scheduled' && 'No scheduled confessions'}
               {activeTab === 'published' && 'No published confessions yet'}
+              {activeTab === 'deleted' && 'No deleted confessions (trash is empty)'}
             </p>
           </div>
         ) : (
@@ -590,6 +716,7 @@ export default function ConfessionsPage() {
                       {activeTab === 'queue' && '📅 Estimated Upload'}
                       {activeTab === 'scheduled' && '🕐 Scheduled For'}
                       {activeTab === 'published' && '✅ Published At'}
+                      {activeTab === 'deleted' && '🗑️ Deleted At'}
                     </th>
                     <th className="py-3.5 px-4 w-36 text-right pr-6">Actions</th>
                   </tr>
@@ -637,7 +764,18 @@ export default function ConfessionsPage() {
 
                         {/* Time column — changes per tab */}
                         <td className="py-3.5 px-4 whitespace-nowrap">
-                          {activeTab === 'published' ? (
+                          {activeTab === 'deleted' ? (
+                            c.deleted_at ? (
+                              <div className="text-[11px]">
+                                <div className="text-rose-600 font-semibold">
+                                  {new Date(c.deleted_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })}
+                                </div>
+                                <div className="text-zinc-400">
+                                  {new Date(c.deleted_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
+                                </div>
+                              </div>
+                            ) : <span className="text-zinc-400 text-[11px]">Deleted</span>
+                          ) : activeTab === 'published' ? (
                             c.published_at ? (
                               <div className="text-[11px]">
                                 <div className="text-emerald-600 font-semibold">
@@ -692,28 +830,52 @@ export default function ConfessionsPage() {
                         {/* Actions */}
                         <td className="py-3.5 px-4 text-right whitespace-nowrap pr-6">
                           <div className="flex items-center justify-end gap-2">
-                            {c.status === 'FAILED' && (
-                              <button
-                                onClick={() => handleRestartQueue([c.id])}
-                                disabled={restartingQueue}
-                                className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-50 transition-colors"
-                                title="Restart & Retry this confession"
-                              >
-                                <RotateCcw className="w-4 h-4" />
-                              </button>
+                            {activeTab === 'deleted' ? (
+                              <>
+                                <Link href={`/confessions/${c.id}`} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors" title="View Details">
+                                  <Eye className="w-4 h-4" />
+                                </Link>
+                                <button
+                                  onClick={() => handleRestore(c.id)}
+                                  className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors cursor-pointer"
+                                  title="Restore to Queue (auto-updates queue timing)"
+                                >
+                                  <Undo2 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDelete(c.id, true)}
+                                  className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                  title="Permanently Delete (never re-imports)"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                {c.status === 'FAILED' && (
+                                  <button
+                                    onClick={() => handleRestartQueue([c.id])}
+                                    disabled={restartingQueue}
+                                    className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-50 transition-colors"
+                                    title="Restart & Retry this confession"
+                                  >
+                                    <RotateCcw className="w-4 h-4" />
+                                  </button>
+                                )}
+                                <Link href={`/confessions/${c.id}`} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors" title="View">
+                                  <Eye className="w-4 h-4" />
+                                </Link>
+                                <button onClick={() => setSelectedForSchedule(c)} className="p-1.5 rounded-lg text-indigo-500 hover:bg-indigo-50 transition-colors" title="Schedule">
+                                  <Calendar className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => setSelectedForPublish(c)} className="p-1.5 rounded-lg text-pink-500 hover:bg-pink-50 transition-colors" title="Publish Now">
+                                  <Instagram className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => handleDelete(c.id, false)} className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer" title="Move to Deleted">
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </>
                             )}
-                            <Link href={`/confessions/${c.id}`} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors" title="View">
-                              <Eye className="w-4 h-4" />
-                            </Link>
-                            <button onClick={() => setSelectedForSchedule(c)} className="p-1.5 rounded-lg text-indigo-500 hover:bg-indigo-50 transition-colors" title="Schedule">
-                              <Calendar className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => setSelectedForPublish(c)} className="p-1.5 rounded-lg text-pink-500 hover:bg-pink-50 transition-colors" title="Publish Now">
-                              <Instagram className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => handleDelete(c.id)} className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors" title="Delete">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
                           </div>
                         </td>
                       </tr>
