@@ -388,3 +388,71 @@ export interface AccountGrowthOverview {
     follows: number;
   };
 }
+
+// -------------------------------------------------------------
+// Adaptive Growth-Aware Scheduling Domain Types
+// -------------------------------------------------------------
+
+export type CadenceStrategyType =
+  | 'BALANCED_CADENCE'
+  | 'BURST_AND_COOLDOWN'
+  | 'PEAK_WINDOW_PACING'
+  | 'OFF_PEAK_SPACING'
+  | 'EXPLORATORY_BASELINE'
+  | 'EXPERIMENTAL_CADENCE'
+  | 'ADMIN_OVERRIDE';
+
+export type SchedulingMode = 'baseline' | 'growth_optimized' | 'experiment' | 'manual';
+
+export interface PreferredPostingWindow {
+  start: string; // "18:00"
+  end: string;   // "21:30"
+  dayOfWeek?: number; // 0-6 (0=Sunday)
+  medianReach?: number;
+  label?: string;
+}
+
+export interface SchedulerRecommendation {
+  id: string;
+  strategy: CadenceStrategyType;
+  mode: SchedulingMode;
+  recommendedGapRangeMinutes: {
+    min: number;
+    max: number;
+  };
+  recommendedPostsPerHour: number;
+  recommendedPostsPerThreeHours: number;
+  cooldownMinutes: number;
+  preferredWindows: PreferredPostingWindow[];
+  confidence: ConfidenceLevel;
+  supportState: StatisticalSupportState;
+  evidenceCount: number;
+  reason: string;
+  explorationAllowed: boolean;
+  formatCadenceMap?: Record<string, { minGap: number; maxGap: number; reason: string }>;
+  categoryCadenceMap?: Record<string, { minGap: number; maxGap: number; reason: string }>;
+  viralCooldownPolicy?: {
+    triggerReachMultiplier: number;
+    cooldownMinutes: number;
+    reason: string;
+  };
+  experimentId?: string;
+  experimentFactor?: string;
+  generated_at: string;
+  version: string;
+}
+
+export interface StaleQueueRepairResult {
+  repairedCount: number;
+  repairedConfessions: {
+    id: string;
+    rowNumber: number;
+    previousScheduledAt: string | null;
+    newScheduledAt: string;
+    gapMinutes: number;
+    strategy: string;
+  }[];
+  strategy: CadenceStrategyType;
+  reason: string;
+}
+

@@ -35,6 +35,7 @@ import {
   HookPerformanceStats,
   PostGrowthAnalysis,
   PostingExperiment,
+  SchedulerRecommendation,
 } from '@/types/growth';
 
 type GrowthTab = 'overview' | 'formats' | 'timing' | 'content' | 'experiments' | 'diagnostics';
@@ -56,6 +57,8 @@ export default function GrowthIntelligencePage() {
   const [postDiagnostics, setPostDiagnostics] = useState<PostGrowthAnalysis | null>(null);
   const [analysis, setAnalysis] = useState<any | null>(null);
   const [experiments, setExperiments] = useState<PostingExperiment[]>([]);
+  const [cadenceRec, setCadenceRec] = useState<SchedulerRecommendation | null>(null);
+  const [queueDiagnostics, setQueueDiagnostics] = useState<any | null>(null);
 
   // Reel modal state
   const [isReelModalOpen, setIsReelModalOpen] = useState(false);
@@ -77,7 +80,7 @@ export default function GrowthIntelligencePage() {
   const loadAllGrowthData = useCallback(async () => {
     try {
       setLoading(true);
-      const [ovRes, fmtRes, timeRes, gapRes, catRes, hookRes, postRes, expRes, anaRes] = await Promise.all([
+      const [ovRes, fmtRes, timeRes, gapRes, catRes, hookRes, postRes, expRes, anaRes, cadRes] = await Promise.all([
         fetch('/api/growth/overview'),
         fetch('/api/growth/formats'),
         fetch('/api/growth/times'),
@@ -87,6 +90,7 @@ export default function GrowthIntelligencePage() {
         fetch('/api/growth/posts'),
         fetch('/api/growth/experiments'),
         fetch('/api/growth/analysis'),
+        fetch('/api/growth/cadence').catch(() => null),
       ]);
 
       const [ovData, fmtData, timeData, gapData, catData, hookData, postData, expData, anaData] = await Promise.all([
@@ -100,6 +104,16 @@ export default function GrowthIntelligencePage() {
         expRes.json(),
         anaRes.json(),
       ]);
+
+      if (cadRes && cadRes.ok) {
+        try {
+          const cData = await cadRes.json();
+          if (cData.success) {
+            setCadenceRec(cData.recommendation);
+            setQueueDiagnostics(cData.diagnostics);
+          }
+        } catch {}
+      }
 
       if (ovData.success) {
         setOverview(ovData.data);
@@ -682,6 +696,86 @@ export default function GrowthIntelligencePage() {
         {/* ================= TAB 3: TIMING & GAPS ================= */}
         {activeTab === 'timing' && (
           <div className="space-y-6">
+            {/* Live Adaptive Cadence Strategy & Scheduler Engine */}
+            <div className="bg-gradient-to-br from-purple-50/60 via-indigo-50/40 to-white rounded-2xl border border-purple-200/80 p-6 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-purple-600" />
+                    <h3 className="font-bold text-zinc-900 text-lg">Growth Cadence Scheduling Strategy</h3>
+                  </div>
+                  <p className="text-xs text-zinc-600 mt-0.5">
+                    Account-level historical performance analyzed to adapt future post intervals, queue spacing, and time windows.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border shadow-xs ${
+                    cadenceRec?.mode === 'growth_optimized'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                      : cadenceRec?.mode === 'manual'
+                      ? 'bg-amber-50 text-amber-700 border-amber-300'
+                      : 'bg-blue-50 text-blue-700 border-blue-300'
+                  }`}>
+                    {cadenceRec?.mode ? cadenceRec.mode.replace(/_/g, ' ') : 'Adaptive'}
+                  </span>
+                  <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-white text-purple-800 border border-purple-200">
+                    Confidence: {cadenceRec?.confidence || 'LOW'} (N={cadenceRec?.evidenceCount || 0})
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                <div className="p-4 rounded-xl bg-white border border-purple-100 shadow-xs">
+                  <span className="text-xs font-semibold text-zinc-500 block mb-1">Cadence Strategy</span>
+                  <span className="text-base font-bold text-purple-950 block">
+                    {cadenceRec?.strategy ? cadenceRec.strategy.replace(/_/g, ' ') : 'BALANCED CADENCE'}
+                  </span>
+                  <span className="text-[11px] text-purple-700 font-medium mt-1 block">
+                    Support: {cadenceRec?.supportState?.replace(/_/g, ' ') || 'PRELIMINARY'}
+                  </span>
+                </div>
+
+                <div className="p-4 rounded-xl bg-white border border-purple-100 shadow-xs">
+                  <span className="text-xs font-semibold text-zinc-500 block mb-1">Evidence-Backed Interval</span>
+                  <span className="text-base font-bold text-zinc-900 block font-mono">
+                    {cadenceRec?.recommendedGapRangeMinutes
+                      ? `${cadenceRec.recommendedGapRangeMinutes.min}m – ${cadenceRec.recommendedGapRangeMinutes.max}m`
+                      : '30m – 75m'}
+                  </span>
+                  <span className="text-[11px] text-zinc-500 mt-1 block">
+                    Controlled Jitter Inside Range
+                  </span>
+                </div>
+
+                <div className="p-4 rounded-xl bg-white border border-purple-100 shadow-xs">
+                  <span className="text-xs font-semibold text-zinc-500 block mb-1">Frequency & Cooldown</span>
+                  <span className="text-base font-bold text-zinc-900 block">
+                    ~{cadenceRec?.recommendedPostsPerHour || 1}/hr · {cadenceRec?.cooldownMinutes || 30}m rest
+                  </span>
+                  <span className="text-[11px] text-zinc-500 mt-1 block">
+                    Max {cadenceRec?.recommendedPostsPerThreeHours || 3} posts per 3h block
+                  </span>
+                </div>
+
+                <div className="p-4 rounded-xl bg-white border border-purple-100 shadow-xs">
+                  <span className="text-xs font-semibold text-zinc-500 block mb-1">Queue Diagnostics</span>
+                  <span className="text-base font-bold text-zinc-900 block">
+                    {queueDiagnostics?.futureScheduled ?? 0} scheduled
+                  </span>
+                  <span className="text-[11px] text-zinc-500 mt-1 block">
+                    Today: {queueDiagnostics?.postsScheduledToday ?? 0}/{queueDiagnostics?.maxDailyPosts ?? 8} cap
+                  </span>
+                </div>
+              </div>
+
+              {cadenceRec?.reason && (
+                <div className="p-3.5 rounded-xl bg-purple-100/60 border border-purple-200 text-xs text-purple-950 leading-relaxed">
+                  <strong className="text-purple-900 font-semibold mr-1.5">Observational Reasoning:</strong>
+                  {cadenceRec.reason}
+                </div>
+              )}
+            </div>
+
             {/* Post Gap Analysis */}
             <div className="bg-white rounded-2xl border border-zinc-200 p-6 shadow-sm">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">

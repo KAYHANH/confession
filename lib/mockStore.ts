@@ -133,9 +133,9 @@ const DEFAULT_SETTINGS: SystemSettings = {
   auto_publish_start_hour: parseInt(process.env.AUTO_PUBLISH_START_HOUR || '9', 10),
   auto_publish_end_hour: parseInt(process.env.AUTO_PUBLISH_END_HOUR || '22', 10),
   random_gap_enabled: process.env.RANDOM_GAP_ENABLED !== 'false',
-  min_gap_minutes: parseInt(process.env.MIN_GAP_MINUTES || '45', 10),
-  max_gap_minutes: parseInt(process.env.MAX_GAP_MINUTES || '95', 10),
-  current_random_gap_minutes: 53,
+  min_gap_minutes: parseInt(process.env.QUEUE_RANDOM_GAP_MIN_MINUTES || process.env.MIN_GAP_MINUTES || '30', 10),
+  max_gap_minutes: parseInt(process.env.QUEUE_RANDOM_GAP_MAX_MINUTES || process.env.MAX_GAP_MINUTES || '75', 10),
+  current_random_gap_minutes: 60,
   anti_bot_jitter_minutes: 30,
   current_jitter_minutes: Math.floor(Math.random() * 31),
   enable_profanity_filter: true,
@@ -155,6 +155,9 @@ const DEFAULT_SETTINGS: SystemSettings = {
   enable_growth_recommendations: false,
   enable_auto_optimization: false,
   enable_experiments: false,
+  scheduling_strategy_mode: (process.env.QUEUE_SCHEDULING_MODE as any) || 'AUTO',
+  manual_fixed_gap_minutes: 60,
+  enable_experimental_scheduling: false,
 };
 
 const DEFAULT_CONFESSIONS: Confession[] = [];

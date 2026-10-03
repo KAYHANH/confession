@@ -40,6 +40,17 @@ export interface Confession {
   instagram_permalink: string | null;
   retry_count: number;
   error_message: string | null;
+  // Adaptive Growth-Aware Scheduling metadata
+  scheduling_strategy?: string | null;
+  scheduling_gap_minutes?: number | null;
+  scheduling_reason?: string | null;
+  scheduling_confidence?: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+  scheduling_evidence_count?: number | null;
+  experiment_id?: string | null;
+  experiment_variant?: string | null;
+  slides?: string[];
+  format?: 'IMAGE' | 'CAROUSEL' | 'REEL' | 'VIDEO' | 'OTHER';
+  content_category?: string;
   created_at: string;
   updated_at: string;
 }
@@ -84,10 +95,11 @@ export interface ActivityLog {
     | 'AUTO_PUBLISHED'
     | 'PUBLISH_FAILED'
     | 'QUEUE_RESTARTED'
+    | 'STALE_QUEUE_REPAIRED'
     | 'SHEET_SYNC'
     | 'INSTAGRAM_CONNECTED'
     | 'SETTINGS_UPDATED';
-  entity_type: 'confession' | 'sheet' | 'instagram' | 'template' | 'settings';
+  entity_type: 'confession' | 'sheet' | 'instagram' | 'template' | 'settings' | 'queue';
   entity_id?: string | null;
   metadata: Record<string, any>;
   created_at: string;
@@ -169,6 +181,10 @@ export interface SystemSettings {
   enable_growth_recommendations?: boolean;
   enable_auto_optimization?: boolean;
   enable_experiments?: boolean;
+  // Adaptive Scheduling Settings
+  scheduling_strategy_mode?: 'AUTO' | 'GROWTH_OPTIMIZED' | 'BASELINE' | 'MANUAL';
+  manual_fixed_gap_minutes?: number;
+  enable_experimental_scheduling?: boolean;
 }
 
 export interface ModerationCheckResult {

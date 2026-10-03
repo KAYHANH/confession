@@ -17,6 +17,8 @@ import {
   ListTodo,
   RotateCcw,
   AlertTriangle,
+  Wrench,
+  Zap,
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -52,6 +54,19 @@ export default function ConfessionsPage() {
     interval: number; startHour: number; endHour: number;
   }>({ interval: 120, startHour: 9, endHour: 23 });
 
+  // Growth Cadence Intelligence state
+  const [cadenceInfo, setCadenceInfo] = useState<{
+    strategy: string;
+    mode: string;
+    gapMin: number;
+    gapMax: number;
+    confidence: string;
+    evidenceCount: number;
+    reason: string;
+  } | null>(null);
+  const [repairingQueue, setRepairingQueue] = useState(false);
+  const [recalculatingQueue, setRecalculatingQueue] = useState(false);
+
   const { success, error } = useToast();
 
   const loadData = useCallback(async () => {
@@ -62,10 +77,11 @@ export default function ConfessionsPage() {
       params.set('sortBy', 'oldest');
       params.set('limit', '500');
 
-      const [res, tplRes, settingsRes] = await Promise.all([
+      const [res, tplRes, settingsRes, cadenceRes] = await Promise.all([
         fetch(`/api/confessions?${params.toString()}`),
         fetch('/api/templates'),
         fetch('/api/settings'),
+        fetch('/api/growth/cadence').catch(() => null),
       ]);
       const [data, tpls, settings] = await Promise.all([res.json(), tplRes.json(), settingsRes.json()]);
 
@@ -78,12 +94,59 @@ export default function ConfessionsPage() {
           endHour: settings.auto_publish_end_hour ?? 22,
         });
       }
+
+      if (cadenceRes && cadenceRes.ok) {
+        try {
+          const cData = await cadenceRes.json();
+          if (cData.success && cData.recommendation) {
+            setCadenceInfo({
+              strategy: cData.recommendation.strategy,
+              mode: cData.recommendation.mode,
+              gapMin: cData.recommendation.recommendedGapRangeMinutes?.min ?? 30,
+              gapMax: cData.recommendation.recommendedGapRangeMinutes?.max ?? 75,
+              confidence: cData.recommendation.confidence,
+              evidenceCount: cData.recommendation.evidenceCount,
+              reason: cData.recommendation.reason,
+            });
+          }
+        } catch {}
+      }
     } catch {
       error('Failed to load confessions');
     } finally {
       setLoading(false);
     }
   }, [error]);
+
+  const handleRepairQueue = async () => {
+    setRepairingQueue(true);
+    try {
+      const res = await fetch('/api/growth/cadence/repair', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Queue repair failed');
+      success(`Queue repaired: ${data.result?.repairedCount ?? 0} stale posts rescheduled using ${data.result?.strategy || 'Adaptive Cadence'}`);
+      await loadData();
+    } catch (err: any) {
+      error(err?.message || 'Failed to repair queue');
+    } finally {
+      setRepairingQueue(false);
+    }
+  };
+
+  const handleRecalculateSchedule = async () => {
+    setRecalculatingQueue(true);
+    try {
+      const res = await fetch('/api/growth/cadence/recalculate', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Recalculation failed');
+      success(`Schedule recalculated: ${data.result?.newlyScheduledCount ?? 0} slots aligned to Growth Strategy`);
+      await loadData();
+    } catch (err: any) {
+      error(err?.message || 'Failed to recalculate schedule');
+    } finally {
+      setRecalculatingQueue(false);
+    }
+  };
 
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { setPage(1); setSelectedIds([]); }, [activeTab, search, riskFilter]);
@@ -426,6 +489,51 @@ export default function ConfessionsPage() {
             </button>
           )}
 
+          {(activeTab === 'queue' || activeTab === 'scheduled') && (
+            <>
+              <button
+                onClick={handleRepairQueue}
+                disabled={repairingQueue}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition-colors shadow-sm cursor-pointer"
+                title="Repair past-due scheduled posts starting from now without arbitrary shifts"
+              >
+                <Wrench className={`w-3.5 h-3.5 ${repairingQueue ? 'animate-spin' : ''}`} />
+                {repairingQueue ? 'Repairing…' : 'Repair Queue'}
+              </button>
+
+              <button
+                onClick={handleRecalculateSchedule}
+                disabled={recalculatingQueue}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-xl hover:bg-purple-100 transition-colors shadow-sm cursor-pointer"
+                title="Recalculate queue timestamps using Growth Intelligence cadence strategy"
+              >
+                <Zap className={`w-3.5 h-3.5 ${recalculatingQueue ? 'animate-spin' : ''}`} />
+                {recalculatingQueue ? 'Recalculating…' : 'Recalculate Schedule'}
+              </button>
+            </>
+          )}
+
+          {cadenceInfo && (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200/80 text-[11px] text-purple-900 shadow-xs" title={cadenceInfo.reason}>
+              <Sparkles className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+              <span className="font-semibold">
+                {cadenceInfo.mode === 'growth_optimized'
+                  ? 'Growth Optimized'
+                  : cadenceInfo.mode === 'baseline'
+                  ? 'Baseline Exploration'
+                  : cadenceInfo.mode === 'experiment'
+                  ? 'Experiment Cadence'
+                  : 'Manual Override'}
+              </span>
+              <span className="text-purple-400">·</span>
+              <span className="text-purple-700">{cadenceInfo.gapMin}–{cadenceInfo.gapMax}m gap</span>
+              <span className="text-purple-400">·</span>
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-white/80 border border-purple-200 text-purple-800">
+                {cadenceInfo.confidence} (N={cadenceInfo.evidenceCount})
+              </span>
+            </div>
+          )}
+
           {/* Bulk actions */}
           {selectedIds.length > 0 && (
             <div className="flex items-center gap-2 ml-auto">
@@ -549,6 +657,21 @@ export default function ConfessionsPage() {
                                 <div className="text-zinc-400">
                                   {new Date(c.scheduled_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
                                 </div>
+                                {c.scheduling_strategy && (
+                                  <div className="mt-1">
+                                    <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded font-medium bg-purple-50 text-purple-700 border border-purple-200" title={c.scheduling_reason || undefined}>
+                                      <Sparkles className="w-2.5 h-2.5" />
+                                      {c.scheduling_strategy === 'BURST_AND_COOLDOWN' ? 'Burst & Cooldown' :
+                                       c.scheduling_strategy === 'PEAK_WINDOW_PACING' ? 'Peak Window' :
+                                       c.scheduling_strategy === 'OFF_PEAK_SPACING' ? 'Off-Peak Spacing' :
+                                       c.scheduling_strategy === 'BALANCED_CADENCE' ? 'Balanced Cadence' :
+                                       c.scheduling_strategy === 'EXPLORATORY_BASELINE' ? 'Baseline' :
+                                       c.scheduling_strategy === 'EXPERIMENTAL_CADENCE' ? 'Experiment' :
+                                       'Manual Override'}
+                                      {c.scheduling_gap_minutes ? ` · ${c.scheduling_gap_minutes}m` : ''}
+                                    </span>
+                                  </div>
+                                )}
                               </div>
                             ) : <span className="text-zinc-300 text-[11px]">—</span>
                           ) : (
@@ -558,7 +681,9 @@ export default function ConfessionsPage() {
                             ) : qIdx >= 0 ? (
                               <div className="text-[11px]">
                                 <div className="text-indigo-600 font-semibold">{formatETA(computeETA(qIdx))}</div>
-                                <div className="text-zinc-400">Queue #{qIdx + 1} · {publishSettings.interval}m interval</div>
+                                <div className="text-zinc-400">
+                                  Queue #{qIdx + 1} · {cadenceInfo ? `${cadenceInfo.mode === 'growth_optimized' ? 'Growth' : 'Adaptive'} · ${publishSettings.interval}m gap` : `${publishSettings.interval}m interval`}
+                                </div>
                               </div>
                             ) : <span className="text-zinc-300 text-[11px]">—</span>
                           )}

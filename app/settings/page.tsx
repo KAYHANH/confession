@@ -23,6 +23,7 @@ import {
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { SystemSettings, GoogleSheetConfig, InstagramAccountConfig } from '@/types';
+import { SchedulerRecommendation } from '@/types/growth';
 import { useToast } from '@/components/ui/ToastContext';
 
 function SettingsContent() {
@@ -37,6 +38,7 @@ function SettingsContent() {
   const [generalSettings, setGeneralSettings] = useState<SystemSettings | null>(null);
   const [sheetConfig, setSheetConfig] = useState<GoogleSheetConfig | null>(null);
   const [instagramConfig, setInstagramConfig] = useState<InstagramAccountConfig | null>(null);
+  const [cadenceRec, setCadenceRec] = useState<SchedulerRecommendation | null>(null);
 
   // Test Connection States
   const [testingSheet, setTestingSheet] = useState(false);
@@ -76,10 +78,11 @@ function SettingsContent() {
   const loadAllSettings = useCallback(async () => {
     setLoading(true);
     try {
-      const [genRes, sheetRes, igRes] = await Promise.all([
+      const [genRes, sheetRes, igRes, cadenceRes] = await Promise.all([
         fetch('/api/settings'),
         fetch('/api/sheets/status'),
         fetch('/api/instagram/status'),
+        fetch('/api/growth/cadence').catch(() => null),
       ]);
 
       const [genData, sheetData, igData] = await Promise.all([
@@ -87,6 +90,15 @@ function SettingsContent() {
         sheetRes.json(),
         igRes.json(),
       ]);
+
+      if (cadenceRes && cadenceRes.ok) {
+        try {
+          const cData = await cadenceRes.json();
+          if (cData.success && cData.recommendation) {
+            setCadenceRec(cData.recommendation);
+          }
+        } catch {}
+      }
 
       // Check browser localStorage for persistent user preference backups
       let effectiveGenData = genData;
@@ -122,6 +134,26 @@ function SettingsContent() {
       setLoading(false);
     }
   }, [error]);
+
+  const handleUpdateCadenceOverride = async (mode: 'AUTO' | 'BASELINE' | 'MANUAL', fixedGap?: number) => {
+    setSaving(true);
+    try {
+      const res = await fetch('/api/growth/cadence/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, fixedGapMinutes: fixedGap }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to update cadence mode');
+      setCadenceRec(data.recommendation);
+      success(`Scheduling mode set to ${mode}`);
+      loadAllSettings();
+    } catch (err: any) {
+      error(err?.message || 'Failed to update scheduling mode');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   useEffect(() => {
     loadAllSettings();
@@ -908,7 +940,7 @@ function SettingsContent() {
                     </select>
                     <span className="text-[10px] text-zinc-500 mt-1 block">
                       {generalSettings.random_gap_enabled !== false
-                        ? `Varies randomly: ~49m, ~53m, ~70m, ~1.5h`
+                        ? `Adaptive cadence active: ~${generalSettings.current_random_gap_minutes ?? 45}m upcoming gap`
                         : 'Fixed base cooldown interval.'}
                     </span>
                   </div>
@@ -917,40 +949,41 @@ function SettingsContent() {
                     <div>
                       <div className="flex items-center justify-between mb-1.5">
                         <label className="block font-semibold text-zinc-700">
-                          Random Gap Range
+                          Exploratory Gap Range
                         </label>
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
-                          {generalSettings.current_random_gap_minutes ?? 53}m next
+                          {generalSettings.current_random_gap_minutes ?? 45}m active
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
                         <select
-                          value={generalSettings.min_gap_minutes ?? 45}
+                          value={generalSettings.min_gap_minutes ?? 30}
                           onChange={(e) => updateSettingField('min_gap_minutes', parseInt(e.target.value, 10))}
                           className="w-1/2 px-2 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
                         >
+                          <option value={25}>25m min</option>
+                          <option value={30}>30m min (Default)</option>
                           <option value={35}>35m min</option>
                           <option value={40}>40m min</option>
-                          <option value={45}>45m min (Default)</option>
-                          <option value={50}>50m min</option>
+                          <option value={45}>45m min</option>
                           <option value={60}>60m min</option>
                         </select>
                         <span className="text-zinc-500 text-xs">to</span>
                         <select
-                          value={generalSettings.max_gap_minutes ?? 95}
+                          value={generalSettings.max_gap_minutes ?? 75}
                           onChange={(e) => updateSettingField('max_gap_minutes', parseInt(e.target.value, 10))}
                           className="w-1/2 px-2 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
                         >
-                          <option value={75}>75m max</option>
+                          <option value={60}>60m max</option>
+                          <option value={75}>75m max (Default)</option>
                           <option value={85}>85m max</option>
                           <option value={90}>90m max (1.5h)</option>
-                          <option value={95}>95m max (Default)</option>
-                          <option value={110}>110m max</option>
+                          <option value={105}>105m max</option>
                           <option value={120}>120m max (2h)</option>
                         </select>
                       </div>
                       <span className="text-[10px] text-zinc-500 mt-1 block">
-                        Randomly rolls between {generalSettings.min_gap_minutes ?? 45}m and {generalSettings.max_gap_minutes ?? 95}m.
+                        Base baseline interval range ({generalSettings.min_gap_minutes ?? 30}m–{generalSettings.max_gap_minutes ?? 75}m) used for exploration.
                       </span>
                     </div>
                   ) : (
@@ -1031,6 +1064,69 @@ function SettingsContent() {
                   </div>
                 </div>
 
+                {/* Growth Intelligence Cadence Card */}
+                <div className="p-4 rounded-xl border border-purple-200 bg-gradient-to-br from-purple-50/50 via-indigo-50/30 to-white text-zinc-900 space-y-3 mt-4 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-purple-600" />
+                      <span className="font-bold text-xs text-purple-950">Growth Cadence Scheduling Strategy</span>
+                    </div>
+                    <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider border ${
+                      cadenceRec?.mode === 'growth_optimized'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : cadenceRec?.mode === 'manual'
+                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                        : 'bg-blue-50 text-blue-700 border-blue-200'
+                    }`}>
+                      {cadenceRec?.mode ? cadenceRec.mode.replace(/_/g, ' ') : 'Adaptive'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                    <div className="p-3 bg-white/90 rounded-lg border border-purple-100 shadow-xs">
+                      <span className="text-[10px] text-zinc-500 font-medium block">Active Strategy</span>
+                      <span className="font-semibold text-purple-950 text-xs mt-0.5 block">
+                        {cadenceRec?.strategy ? cadenceRec.strategy.replace(/_/g, ' ') : 'BALANCED CADENCE'}
+                      </span>
+                      <span className="text-[10px] text-zinc-500 mt-1 block">
+                        Confidence: <strong className="text-purple-700 font-semibold">{cadenceRec?.confidence || 'LOW'}</strong> (N={cadenceRec?.evidenceCount || 0})
+                      </span>
+                    </div>
+
+                    <div className="p-3 bg-white/90 rounded-lg border border-purple-100 shadow-xs">
+                      <span className="text-[10px] text-zinc-500 font-medium block">Evidence-Backed Interval</span>
+                      <span className="font-semibold text-zinc-900 text-xs mt-0.5 block">
+                        {cadenceRec?.recommendedGapRangeMinutes
+                          ? `${cadenceRec.recommendedGapRangeMinutes.min}m – ${cadenceRec.recommendedGapRangeMinutes.max}m`
+                          : '30m – 75m'}
+                      </span>
+                      <span className="text-[10px] text-zinc-500 mt-1 block">
+                        Max ~{cadenceRec?.recommendedPostsPerHour || 1}/hr · Cooldown {cadenceRec?.cooldownMinutes || 30}m
+                      </span>
+                    </div>
+
+                    <div className="p-3 bg-white/90 rounded-lg border border-purple-100 shadow-xs">
+                      <span className="text-[10px] text-zinc-500 font-medium block">Strategy Mode Mode</span>
+                      <select
+                        value={generalSettings.scheduling_strategy_mode || 'AUTO'}
+                        onChange={(e) => handleUpdateCadenceOverride(e.target.value as any, generalSettings.manual_fixed_gap_minutes)}
+                        className="w-full mt-1 px-2 py-1.5 rounded-md border border-zinc-200 text-xs font-medium bg-white focus:outline-none focus:ring-1 focus:ring-purple-400"
+                      >
+                        <option value="AUTO">AUTO (Growth Adaptive)</option>
+                        <option value="BASELINE">BASELINE (Exploration)</option>
+                        <option value="MANUAL">MANUAL (Admin Override)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {cadenceRec?.reason && (
+                    <div className="text-[11px] text-purple-950 bg-purple-100/60 p-2.5 rounded-lg border border-purple-200/60 leading-relaxed">
+                      <span className="font-semibold text-purple-900 block mb-0.5">Observational Reasoning:</span>
+                      {cadenceRec.reason}
+                    </div>
+                  )}
+                </div>
+
                 {/* Meta Account Safety & Trust Score Guide */}
                 <div className="p-4 rounded-xl border border-amber-200/80 bg-gradient-to-r from-amber-50 to-orange-50 text-amber-950 space-y-2 mt-4">
                   <div className="flex items-center gap-2 font-bold text-xs text-amber-900">
@@ -1043,11 +1139,11 @@ function SettingsContent() {
                       <p className="text-zinc-600">Active 9:00 AM to 10:00 PM only. Shuts down overnight to mimic natural human sleep cycles.</p>
                     </div>
                     <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/60 shadow-xs">
-                      <p className="font-semibold text-zinc-900 mb-0.5">🎲 Organic Random Gaps</p>
+                      <p className="font-semibold text-zinc-900 mb-0.5">🎲 Adaptive Cadence</p>
                       <p className="text-zinc-600">
                         {generalSettings.random_gap_enabled !== false ? (
                           <>
-                            <strong className="text-emerald-700 font-semibold">{generalSettings.current_random_gap_minutes ?? 53}m random gap</strong> active for upcoming post. Gaps vary organically between {generalSettings.min_gap_minutes ?? 45}m and {generalSettings.max_gap_minutes ?? 95}m (e.g. 49m, 53m, 70m, 1.5h) to eliminate robotic clockwork patterns.
+                            <strong className="text-emerald-700 font-semibold">{generalSettings.current_random_gap_minutes ?? 45}m gap</strong> active for upcoming post. Gaps adapt based on {cadenceRec?.strategy ? cadenceRec.strategy.replace(/_/g, ' ') : 'Growth Intelligence'}.
                           </>
                         ) : (
                           <>
