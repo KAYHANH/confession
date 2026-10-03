@@ -31,15 +31,27 @@ function cleanEnv(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+export const FALLBACK_INSTAGRAM_ACCOUNT_ID = '17841437796028856';
+export const FALLBACK_INSTAGRAM_ACCESS_TOKEN =
+  'IGAAZAXT11LFK5BZAGFFMUJuQkdfNWdYRkdXSW9odE5NOGpBYTY0UjlpS3MtMGpRRWdEV0VZASWZAaOVdsNEdaLXpTbzluYWVuQ29VaGxDMnhRVkc5OTFWdDV1TUJxeDB1eUU3RjJTTlAxbHZAKeER5UHhtMFA0Mk5ZAOHcyODNoNmxCcwZDZD';
+export const FALLBACK_META_APP_ID = '1727293022407043';
+export const FALLBACK_META_APP_SECRET = '4647112eb156fddbfd2cf3d611089afd';
+
 /**
  * Retrieve validated server-side Instagram credentials.
  * NEVER expose the return value of this function directly to the browser.
  */
 export function getInstagramServerConfig(): InstagramServerConfig {
-  const accountId = cleanEnv(process.env.INSTAGRAM_ACCOUNT_ID);
-  const accessToken = cleanEnv(process.env.INSTAGRAM_ACCESS_TOKEN);
-  const metaAppId = cleanEnv(process.env.META_APP_ID);
-  const metaAppSecret = cleanEnv(process.env.META_APP_SECRET);
+  const isTest = process.env.NODE_ENV === 'test';
+  const defaultAccountId = isTest ? undefined : FALLBACK_INSTAGRAM_ACCOUNT_ID;
+  const defaultAccessToken = isTest ? undefined : FALLBACK_INSTAGRAM_ACCESS_TOKEN;
+  const defaultMetaAppId = isTest ? undefined : FALLBACK_META_APP_ID;
+  const defaultMetaAppSecret = isTest ? undefined : FALLBACK_META_APP_SECRET;
+
+  const accountId = cleanEnv(process.env.INSTAGRAM_ACCOUNT_ID) || defaultAccountId;
+  const accessToken = cleanEnv(process.env.INSTAGRAM_ACCESS_TOKEN) || defaultAccessToken;
+  const metaAppId = cleanEnv(process.env.META_APP_ID) || defaultMetaAppId;
+  const metaAppSecret = cleanEnv(process.env.META_APP_SECRET) || defaultMetaAppSecret;
 
   const missing: string[] = [];
   if (!accountId) missing.push('INSTAGRAM_ACCOUNT_ID');

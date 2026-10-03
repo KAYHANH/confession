@@ -25,7 +25,7 @@ export const ALLOWED_TRANSITIONS: Record<ConfessionStatus, ConfessionStatus[]> =
   REJECTED: ['READY_FOR_REVIEW', 'APPROVED', 'DELETED'], // allow admin to overturn rejection
   SCHEDULED: ['PUBLISHING', 'APPROVED', 'REJECTED', 'DELETED'], // allow rescheduling/cancelling
   PUBLISHING: ['PUBLISHED', 'FAILED', 'DELETED'],
-  PUBLISHED: ['DELETED'], // Allow deleting published posts
+  PUBLISHED: [],
   FAILED: ['APPROVED', 'READY_FOR_REVIEW', 'PUBLISHING', 'FAILED_REQUIRES_ACTION', 'REJECTED', 'DELETED'],
   FAILED_REQUIRES_ACTION: ['APPROVED', 'READY_FOR_REVIEW', 'PUBLISHING', 'REJECTED', 'DELETED'],
   DELETED: ['APPROVED', 'READY_FOR_REVIEW'],

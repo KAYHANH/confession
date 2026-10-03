@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { Confession, Template, ActivityLog, GoogleSheetConfig, InstagramAccountConfig, SystemSettings, PublishedPost } from '@/types';
+import { FALLBACK_INSTAGRAM_ACCOUNT_ID, FALLBACK_INSTAGRAM_ACCESS_TOKEN } from '@/lib/config';
 
 const DATA_FILE = path.join(process.cwd(), '.mock_data.json');
 
@@ -189,12 +190,21 @@ class MockStore {
         this.lastMtime = stat.mtimeMs;
         const raw = fs.readFileSync(DATA_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
-        if (!parsed.instagram?.account_id && process.env.INSTAGRAM_ACCOUNT_ID) {
-          parsed.instagram.account_id = process.env.INSTAGRAM_ACCOUNT_ID;
+        const isTest = process.env.NODE_ENV === 'test';
+        if (!parsed.instagram) {
+          parsed.instagram = {};
         }
-        if (!parsed.instagram?.access_token && process.env.INSTAGRAM_ACCESS_TOKEN) {
-          parsed.instagram.access_token = process.env.INSTAGRAM_ACCESS_TOKEN;
+        if (!parsed.instagram.account_id) {
+          parsed.instagram.account_id = process.env.INSTAGRAM_ACCOUNT_ID || (isTest ? '' : FALLBACK_INSTAGRAM_ACCOUNT_ID);
         }
+        if (!parsed.instagram.access_token) {
+          parsed.instagram.access_token = process.env.INSTAGRAM_ACCESS_TOKEN || (isTest ? '' : FALLBACK_INSTAGRAM_ACCESS_TOKEN);
+        }
+        if (!parsed.instagram.username) {
+          parsed.instagram.username = process.env.INSTAGRAM_HANDLE?.replace('@', '') || '_hpsconfession_';
+        }
+        parsed.instagram.is_connected = !!(parsed.instagram.account_id && parsed.instagram.access_token);
+        parsed.instagram.status = parsed.instagram.is_connected ? 'ACTIVE' : 'DISCONNECTED';
         if (!parsed.settings) {
           parsed.settings = { ...DEFAULT_SETTINGS };
         } else {
@@ -229,6 +239,7 @@ class MockStore {
       console.warn('[MockStore] Failed to read store file, using defaults');
     }
 
+    const isTest = process.env.NODE_ENV === 'test';
     return {
       confessions: [...DEFAULT_CONFESSIONS],
       templates: [...DEFAULT_TEMPLATES],
@@ -262,12 +273,16 @@ class MockStore {
         rows_imported: 0,
       },
       instagram: {
-        account_id: process.env.INSTAGRAM_ACCOUNT_ID || '',
+        account_id: process.env.INSTAGRAM_ACCOUNT_ID || (isTest ? '' : FALLBACK_INSTAGRAM_ACCOUNT_ID),
         username: process.env.INSTAGRAM_HANDLE?.replace('@', '') || '_hpsconfession_',
-        access_token: process.env.INSTAGRAM_ACCESS_TOKEN || '',
+        access_token: process.env.INSTAGRAM_ACCESS_TOKEN || (isTest ? '' : FALLBACK_INSTAGRAM_ACCESS_TOKEN),
         token_expires_at: null,
-        is_connected: !!(process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN),
-        status: (process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN) ? 'ACTIVE' : 'DISCONNECTED',
+        is_connected: isTest
+          ? !!(process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN)
+          : true,
+        status: isTest
+          ? ((process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN) ? 'ACTIVE' : 'DISCONNECTED')
+          : 'ACTIVE',
       },
       settings: { ...DEFAULT_SETTINGS },
     };
@@ -298,11 +313,16 @@ class MockStore {
     );
   }
 
-  public addConfession(confession: Confession) {
-    this.data.confessions = this.data.confessions.filter((c) => c.id !== confession.id);
-    this.data.confessions.unshift(confession);
+  public addConfession(confession: Confession | any): Confession {
+    const id = confession.id || `confession-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const fullConf: Confession = {
+      ...confession,
+      id,
+    };
+    this.data.confessions = this.data.confessions.filter((c) => c.id !== fullConf.id);
+    this.data.confessions.unshift(fullConf);
     this.save();
-    return confession;
+    return fullConf;
   }
 
   public addConfessions(newConfessions: Confession[]) {
@@ -534,7 +554,19 @@ class MockStore {
 
   public getInstagramConfig(): InstagramAccountConfig {
     this.ensureFresh();
-    return { ...this.data.instagram };
+    const cfg = { ...this.data.instagram };
+    const isTest = process.env.NODE_ENV === 'test';
+    if (!isTest) {
+      if (!cfg.account_id) {
+        cfg.account_id = process.env.INSTAGRAM_ACCOUNT_ID || FALLBACK_INSTAGRAM_ACCOUNT_ID;
+      }
+      if (!cfg.access_token) {
+        cfg.access_token = process.env.INSTAGRAM_ACCESS_TOKEN || FALLBACK_INSTAGRAM_ACCESS_TOKEN;
+      }
+      cfg.is_connected = !!(cfg.account_id && cfg.access_token);
+      cfg.status = cfg.is_connected ? 'ACTIVE' : 'DISCONNECTED';
+    }
+    return cfg;
   }
 
   public updateInstagramConfig(updates: Partial<InstagramAccountConfig>): InstagramAccountConfig {

@@ -518,9 +518,16 @@ export class SchedulingService {
         } else if (
           (c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION') &&
           c.error_message &&
-          (c.error_message.includes('https://https://') || c.error_message.includes('cannot download the card image'))
+          (
+            c.error_message.includes('https://https://') ||
+            c.error_message.includes('cannot download the card image') ||
+            c.error_message.includes('credentials are not configured') ||
+            c.error_message.includes('Instagram credentials') ||
+            c.error_message.includes('MISSING_ACCESS_TOKEN') ||
+            c.error_message.includes('MISSING_ACCOUNT_ID')
+          )
         ) {
-          console.log(`[AutoPublisher] Auto-healing confession #${c.google_sheet_row} that failed due to URL glitch back to APPROVED.`);
+          console.log(`[AutoPublisher] Auto-healing confession #${c.google_sheet_row} (Error: "${c.error_message}") back to APPROVED.`);
           await confessionService.updateConfession(c.id, {
             status: 'APPROVED',
             error_message: null,

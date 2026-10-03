@@ -30,3 +30,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: error?.message || 'Auto-publish execution failed' }, { status: 500 });
   }
 }
+
+export async function GET(request: NextRequest) {
+  return POST(request);
+}
