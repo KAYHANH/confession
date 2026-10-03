@@ -150,7 +150,13 @@ export default function ConfessionsPage() {
     }
   };
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    loadData();
+    const pollInterval = setInterval(() => {
+      loadData();
+    }, 20000);
+    return () => clearInterval(pollInterval);
+  }, [loadData]);
   useEffect(() => { setPage(1); setSelectedIds([]); }, [activeTab, search, riskFilter]);
 
   // ─── Section filters ──────────────────────────────────────────────────────

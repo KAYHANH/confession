@@ -70,9 +70,15 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadDashboardData();
+    const pollInterval = setInterval(() => {
+      loadDashboardData();
+    }, 20000);
     const onRefresh = () => loadDashboardData();
     window.addEventListener('confessionflow:refresh', onRefresh);
-    return () => window.removeEventListener('confessionflow:refresh', onRefresh);
+    return () => {
+      clearInterval(pollInterval);
+      window.removeEventListener('confessionflow:refresh', onRefresh);
+    };
   }, [loadDashboardData]);
 
   const handleApprove = async (id: string) => {
