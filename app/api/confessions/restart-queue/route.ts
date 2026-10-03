@@ -17,6 +17,13 @@ export async function POST(request: NextRequest) {
       Array.isArray(ids) && ids.length > 0 ? ids : undefined
     );
 
+    // Automatically recalculate schedule so all restarted posts are aligned into one continuous FIFO timeline
+    try {
+      await schedulingService.generateFutureSchedule({ forceRecalculate: true });
+    } catch (schedErr: any) {
+      console.warn('[RestartQueue] Auto-reschedule notice:', schedErr?.message || schedErr);
+    }
+
     // If auto publish is enabled or requested, trigger cycle in background immediately
     const settings = mockStore.getSettings();
     const shouldPublish = triggerPublish && (settings.auto_publish || settings.publishing_mode === 'AUTO_PUBLISH');

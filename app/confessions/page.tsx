@@ -196,22 +196,39 @@ export default function ConfessionsPage() {
   const paginated = activeList.slice((page - 1) * LIMIT, page * LIMIT);
 
   // ─── ETA helpers ─────────────────────────────────────────────────────────
+  const getOrganicGap = useCallback((idx: number): number => {
+    const minGap = cadenceInfo?.gapMin ?? 30;
+    const maxGap = cadenceInfo?.gapMax ?? 75;
+    const spread = Math.max(1, maxGap - minGap);
+    const primes = [37, 53, 41, 67, 31, 59, 43, 71, 47, 61];
+    const p = primes[idx % primes.length];
+    return minGap + ((p * (idx + 1) * 7) % (spread + 1));
+  }, [cadenceInfo]);
+
   const computeETA = (queueIndex: number): Date => {
-    const { interval, startHour, endHour } = publishSettings;
-    const msInterval = interval * 60 * 1000;
-    let slotTime = new Date(Math.ceil(Date.now() / msInterval) * msInterval);
-    let slotsRemaining = queueIndex + 1;
-    let safety = 0;
-    while (slotsRemaining > 0 && safety < 500) {
-      safety++;
-      const hour = parseInt(
-        new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(slotTime), 10
-      );
-      if (hour >= startHour && hour < endHour) {
-        slotsRemaining--;
-        if (slotsRemaining === 0) break;
+    const { startHour, endHour } = publishSettings;
+    let slotTime = new Date(Date.now() + 5 * 60 * 1000);
+    for (let i = 0; i <= queueIndex; i++) {
+      const stepGapMs = getOrganicGap(i) * 60 * 1000;
+      slotTime = new Date(slotTime.getTime() + stepGapMs);
+
+      let safety = 0;
+      while (safety < 48) {
+        safety++;
+        const hour = parseInt(
+          new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(slotTime), 10
+        );
+        if (hour >= startHour && hour < endHour) {
+          break;
+        }
+        if (hour >= endHour) {
+          const advanceHours = 24 - hour + startHour;
+          slotTime = new Date(slotTime.getTime() + advanceHours * 60 * 60 * 1000);
+        } else if (hour < startHour) {
+          const advanceHours = startHour - hour;
+          slotTime = new Date(slotTime.getTime() + advanceHours * 60 * 60 * 1000);
+        }
       }
-      slotTime = new Date(slotTime.getTime() + msInterval);
     }
     return slotTime;
   };
@@ -904,8 +921,7 @@ export default function ConfessionsPage() {
                                     const actualGap = c.scheduling_gap_minutes;
                                     const modeLabel = cadenceInfo ? (cadenceInfo.mode === 'growth_optimized' ? 'Growth' : 'Adaptive') : 'Adaptive';
                                     if (actualGap) return `Queue #${qIdx + 1} · ${modeLabel} · ${actualGap}m gap`;
-                                    if (cadenceInfo) return `Queue #${qIdx + 1} · ${modeLabel} · ${cadenceInfo.gapMin}–${cadenceInfo.gapMax}m`;
-                                    return `Queue #${qIdx + 1} · ${publishSettings.interval}m interval`;
+                                    return `Queue #${qIdx + 1} · ${modeLabel} · ~${getOrganicGap(qIdx)}m gap`;
                                   })()}
                                 </div>
                               </div>

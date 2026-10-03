@@ -871,19 +871,18 @@ export class SchedulingService {
       }
     }
 
-    // Sort items that need a new schedule:
-    // Stale scheduled posts first (preserve prior intended order), then APPROVED, then READY_FOR_REVIEW
-    itemsToSchedule.sort((a, b) => {
-      const aIsStale = a.status === 'SCHEDULED';
-      const bIsStale = b.status === 'SCHEDULED';
-      if (aIsStale && !bIsStale) return -1;
-      if (!aIsStale && bIsStale) return 1;
+    // If any item that needs scheduling has an earlier row number than preserved items,
+    // merge them together so earlier submissions (#028) are NEVER leapfrogged by later ones (#051)!
+    const minScheduleRow = itemsToSchedule.length > 0 ? Math.min(...itemsToSchedule.map((c) => c.google_sheet_row || 0)) : Infinity;
+    const maxPreservedRow = preservedItems.length > 0 ? Math.max(...preservedItems.map((c) => c.google_sheet_row || 0)) : -Infinity;
 
-      if (a.status === 'APPROVED' && b.status !== 'APPROVED') return -1;
-      if (b.status === 'APPROVED' && a.status !== 'APPROVED') return 1;
+    if (minScheduleRow < maxPreservedRow) {
+      itemsToSchedule.push(...preservedItems);
+      preservedItems.length = 0;
+    }
 
-      return (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
-    });
+    // Sort strictly in FIFO order by Google Sheet row number
+    itemsToSchedule.sort((a, b) => (a.google_sheet_row || 0) - (b.google_sheet_row || 0));
 
     // Track daily post volume across days to enforce max_daily_posts
     const postsPerDay = new Map<string, number>();
@@ -923,10 +922,20 @@ export class SchedulingService {
       reason?: string;
     }> = [];
 
+    let lastRolledGap = 0;
     for (const c of itemsToSchedule) {
       const format: MediaFormatType = c.slides && c.slides.length > 1 ? 'CAROUSEL' : 'IMAGE';
       const category = (c as any).content_category || undefined;
       const gapInfo = cadenceAnalyzer.calculateEffectiveGap(rec, format, category);
+
+      // Prevent adjacent identical gaps (e.g. 70m, 70m) to guarantee organic human variation
+      if (gapInfo.rolledGap === lastRolledGap && gapInfo.max > gapInfo.min) {
+        gapInfo.rolledGap = Math.floor(Math.random() * (gapInfo.max - gapInfo.min + 1)) + gapInfo.min;
+        if (gapInfo.rolledGap === lastRolledGap) {
+          gapInfo.rolledGap = gapInfo.rolledGap > gapInfo.min ? gapInfo.rolledGap - 5 : gapInfo.rolledGap + 5;
+        }
+      }
+      lastRolledGap = gapInfo.rolledGap;
 
       // Advance cursor by the evidence-backed interval
       cursor = new Date(cursor.getTime() + gapInfo.rolledGap * 60 * 1000);
