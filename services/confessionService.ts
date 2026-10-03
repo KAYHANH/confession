@@ -44,6 +44,28 @@ export class ConfessionService {
   }
 
   /**
+   * Decode a raw Supabase row, remapping the soft-delete workaround back to
+   * logical status='DELETED'. Because Supabase's valid_status CHECK constraint
+   * does not include 'DELETED', soft-deletes are stored as:
+   *   status = 'REJECTED'
+   *   error_message = '__DELETED__:<ISO_TIMESTAMP>'
+   * This helper reverses that encoding so the rest of the app sees status='DELETED'
+   * and deleted_at=<timestamp> exactly as if the column existed.
+   */
+  private decodeSupabaseRow(row: any): any {
+    if (row && typeof row.error_message === 'string' && row.error_message.startsWith('__DELETED__:')) {
+      const isoTimestamp = row.error_message.slice('__DELETED__:'.length);
+      return {
+        ...row,
+        status: 'DELETED',
+        deleted_at: isoTimestamp,
+        error_message: null, // hide the marker from the UI
+      };
+    }
+    return row;
+  }
+
+  /**
    * Validate if a status transition is permitted
    */
   public isValidTransition(current: ConfessionStatus, next: ConfessionStatus): boolean {
@@ -140,7 +162,7 @@ export class ConfessionService {
     if (error) throw new Error(error.message);
 
     return {
-      confessions: (data as Confession[]) || [],
+      confessions: (data || []).map((r: any) => this.decodeSupabaseRow(r)) as Confession[],
       total: count || 0,
       page,
       totalPages: Math.ceil((count || 0) / limit) || 1,
@@ -157,7 +179,7 @@ export class ConfessionService {
     const supabase = createServerSupabaseClient();
     const { data, error } = await supabase.from('confessions').select('*').eq('id', id).single();
     if (error) return null;
-    return data as Confession;
+    return this.decodeSupabaseRow(data) as Confession;
   }
 
   /**
@@ -186,15 +208,36 @@ export class ConfessionService {
     }
 
     const supabase = createServerSupabaseClient();
+
+    // Guard: status='DELETED' is not in Supabase CHECK constraint.
+    // Strip it out and any deleted_at — caller must use deleteConfession() instead.
+    const safeUpdates: any = { ...updates, updated_at: new Date().toISOString() };
+    if (safeUpdates.status === 'DELETED') {
+      delete safeUpdates.status;
+      delete safeUpdates.deleted_at;
+    }
+    // Also strip columns that don't exist in the original schema
+    delete safeUpdates.deleted_at;
+    delete safeUpdates.scheduling_strategy;
+    delete safeUpdates.scheduling_gap_minutes;
+    delete safeUpdates.scheduling_reason;
+    delete safeUpdates.scheduling_confidence;
+    delete safeUpdates.scheduling_evidence_count;
+    delete safeUpdates.experiment_id;
+    delete safeUpdates.experiment_variant;
+    delete safeUpdates.slides;
+    delete safeUpdates.format;
+    delete safeUpdates.content_category;
+
     const { data, error } = await supabase
       .from('confessions')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update(safeUpdates)
       .eq('id', id)
       .select()
       .single();
 
     if (error) throw new Error(error.message);
-    return data as Confession;
+    return this.decodeSupabaseRow(data) as Confession;
   }
 
   /**
@@ -214,15 +257,22 @@ export class ConfessionService {
         const { error } = await supabase.from('confessions').delete().eq('id', id);
         success = !error;
       } else {
+        // No-migration soft-delete workaround:
+        // Supabase has no 'DELETED' in valid_status CHECK and no deleted_at column.
+        // Encode deletion as: status='REJECTED' + error_message='__DELETED__:<ISO>'
+        // decodeSupabaseRow() reverses this so the UI sees status='DELETED'.
+        const deletedMarker = `__DELETED__:${new Date().toISOString()}`;
         const { error } = await supabase
           .from('confessions')
           .update({
-            status: 'DELETED',
-            deleted_at: new Date().toISOString(),
+            status: 'REJECTED',
+            error_message: deletedMarker,
             scheduled_at: null,
+            updated_at: new Date().toISOString(),
           })
           .eq('id', id);
         success = !error;
+        if (error) console.error('[ConfessionService] Soft-delete failed:', error.message);
       }
     }
 
@@ -264,16 +314,18 @@ export class ConfessionService {
       updated = mockStore.restoreConfession(id);
     } else {
       const supabase = createServerSupabaseClient();
+      // Clear the __DELETED__ marker from error_message on restore
       const { data, error } = await supabase
         .from('confessions')
         .update({
           status: 'APPROVED',
-          deleted_at: null,
+          error_message: null,  // clear the __DELETED__ marker
+          updated_at: new Date().toISOString(),
         })
         .eq('id', id)
         .select()
         .single();
-      if (!error && data) updated = data as Confession;
+      if (!error && data) updated = this.decodeSupabaseRow(data) as Confession;
     }
 
     if (updated) {
