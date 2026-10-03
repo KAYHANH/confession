@@ -20,6 +20,7 @@ import {
   Wrench,
   Zap,
   Undo2,
+  Settings,
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -456,7 +457,7 @@ export default function ConfessionsPage() {
     return <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">LOW</span>;
   };
 
-  const statusBadge = (status: string) => {
+  const statusBadge = (status: string, errorMessage?: string | null) => {
     const map: Record<string, string> = {
       PUBLISHED: 'bg-emerald-100 text-emerald-700 border-emerald-200',
       PUBLISHING: 'bg-blue-100 text-blue-700 border-blue-200',
@@ -464,10 +465,26 @@ export default function ConfessionsPage() {
       APPROVED: 'bg-indigo-100 text-indigo-700 border-indigo-200',
       REJECTED: 'bg-rose-100 text-rose-700 border-rose-200',
       FAILED: 'bg-rose-100 text-rose-700 border-rose-200',
+      FAILED_REQUIRES_ACTION: 'bg-rose-200 text-rose-900 border-rose-300',
       DELETED: 'bg-zinc-100 text-zinc-600 border-zinc-300 line-through',
     };
     const cls = map[status] || 'bg-zinc-100 text-zinc-700 border-zinc-200';
-    return <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${cls}`}>{status.replace(/_/g, ' ')}</span>;
+    const isFailed = status === 'FAILED' || status === 'FAILED_REQUIRES_ACTION';
+    return (
+      <div className="flex flex-col items-start gap-1">
+        <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${cls}`}>
+          {status.replace(/_/g, ' ')}
+        </span>
+        {isFailed && errorMessage && (
+          <span
+            className="text-[10px] text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded max-w-[190px] truncate block cursor-help font-medium"
+            title={errorMessage}
+          >
+            {errorMessage}
+          </span>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -518,31 +535,76 @@ export default function ConfessionsPage() {
         </div>
 
         {/* ── Failed Alert & Quick Restart Banner ── */}
-        {failedConfessions.length > 0 && (
-          <div className="flex items-center justify-between p-4 bg-rose-50/90 border border-rose-200 rounded-2xl text-rose-900 gap-4 flex-wrap">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-rose-100 rounded-xl text-rose-600 shrink-0">
-                <AlertTriangle className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="font-semibold text-sm">
-                  {failedConfessions.length} confession{failedConfessions.length > 1 ? 's' : ''} failed to publish
+        {failedConfessions.length > 0 && (() => {
+          const sampleErr = failedConfessions.find((c) => c.error_message)?.error_message;
+          const isMissingCreds = sampleErr?.toLowerCase().includes('credentials are not configured');
+          const isExpiredToken = sampleErr?.toLowerCase().includes('expired') || sampleErr?.toLowerCase().includes('code 190');
+          const isRateLimit = sampleErr?.toLowerCase().includes('limit') || sampleErr?.toLowerCase().includes('quota');
+
+          return (
+            <div className="p-4 bg-rose-50/90 border border-rose-200 rounded-2xl text-rose-900 space-y-3">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-rose-100 rounded-xl text-rose-600 shrink-0">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="font-semibold text-sm">
+                      {failedConfessions.length} confession{failedConfessions.length > 1 ? 's' : ''} failed to publish
+                    </div>
+                    <div className="text-xs text-rose-700 mt-0.5">
+                      Click <strong>Restart Failed Queue</strong> to re-attempt publishing. Rejected posts and already published posts will strictly <strong>never</strong> be re-uploaded.
+                    </div>
+                  </div>
                 </div>
-                <div className="text-xs text-rose-700 mt-0.5">
-                  Click <strong>Restart Queue</strong> to re-attempt publishing. Rejected posts and already published posts will strictly <strong>never</strong> be re-uploaded.
+
+                <div className="flex items-center gap-2 ml-auto">
+                  <Link
+                    href="/settings?tab=instagram"
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-800 bg-white border border-rose-200 rounded-xl hover:bg-rose-100/50 transition-colors shadow-xs"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    Instagram Settings
+                  </Link>
+                  <button
+                    onClick={() => handleRestartQueue()}
+                    disabled={restartingQueue}
+                    className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm transition-all disabled:opacity-50"
+                  >
+                    <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} />
+                    {restartingQueue ? 'Restarting Queue…' : `Restart Failed Queue (${failedConfessions.length})`}
+                  </button>
                 </div>
               </div>
+
+              {sampleErr && (
+                <div className="pt-2 border-t border-rose-200/60 flex items-start gap-2 text-xs text-rose-800">
+                  <span className="font-bold shrink-0 bg-rose-200/70 text-rose-900 px-2 py-0.5 rounded text-[11px]">Recorded Error:</span>
+                  <div className="space-y-1">
+                    <code className="font-mono text-[11px] bg-white/80 px-2 py-0.5 rounded border border-rose-200 block max-w-2xl break-all">
+                      {sampleErr}
+                    </code>
+                    {isMissingCreds && (
+                      <p className="text-[11px] text-rose-700">
+                        💡 <strong>Root Cause:</strong> Instagram credentials reset when the Render server restarted. Add <code className="font-mono bg-white px-1 py-0.5 rounded text-[10px]">INSTAGRAM_ACCOUNT_ID</code> and <code className="font-mono bg-white px-1 py-0.5 rounded text-[10px]">INSTAGRAM_ACCESS_TOKEN</code> into Render Dashboard Environment Variables so they persist across restarts.
+                      </p>
+                    )}
+                    {isExpiredToken && (
+                      <p className="text-[11px] text-rose-700">
+                        💡 <strong>Root Cause:</strong> Meta Access Token has expired. Generate a fresh Long-Lived Token in Meta Graph API Explorer and update Settings.
+                      </p>
+                    )}
+                    {isRateLimit && (
+                      <p className="text-[11px] text-rose-700">
+                        💡 <strong>Root Cause:</strong> Meta publishing rate limit reached for the rolling 24-hour window. Wait a few hours for the quota to refresh.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-            <button
-              onClick={() => handleRestartQueue()}
-              disabled={restartingQueue}
-              className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm transition-all disabled:opacity-50 ml-auto"
-            >
-              <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} />
-              {restartingQueue ? 'Restarting Queue…' : `Restart Failed Queue (${failedConfessions.length})`}
-            </button>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ── 3 Tabs ── */}
         <div className="flex gap-2 border-b border-zinc-200">
@@ -776,7 +838,7 @@ export default function ConfessionsPage() {
 
                         <td className="py-3.5 px-3 whitespace-nowrap">{riskBadge(c.moderation_status)}</td>
 
-                        <td className="py-3.5 px-3 whitespace-nowrap">{statusBadge(c.status)}</td>
+                        <td className="py-3.5 px-3 whitespace-nowrap">{statusBadge(c.status, c.error_message)}</td>
 
                         {/* Time column — changes per tab */}
                         <td className="py-3.5 px-4 whitespace-nowrap">

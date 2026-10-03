@@ -13,6 +13,7 @@ import {
   Hash,
   RefreshCw,
   AlertCircle,
+  AlertTriangle,
   TrendingUp,
   Video,
   BarChart3,
@@ -590,6 +591,23 @@ function SettingsContent() {
                   </span>
                 </div>
               </div>
+
+              {instagramConfig?.is_connected && !instagramConfig?.configured_via_env && (
+                <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1.5">
+                  <div className="font-bold flex items-center gap-1.5 text-amber-950">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Important: Persist Credentials on Render</span>
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-relaxed">
+                    Credentials are currently saved in temporary server memory. If Render sleeps or redeploys, memory resets and publishing will pause with <em>&quot;Instagram credentials are not configured&quot;</em>.
+                    To make them 100% permanent across all restarts and redeploys, add these two environment variables in your <strong>Render Dashboard → Environment</strong>:
+                  </p>
+                  <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/80 font-mono text-[11px] text-zinc-800 space-y-1 select-all">
+                    <div><strong>INSTAGRAM_ACCOUNT_ID</strong> = {instagramConfig.account_id || '17841437796028856'}</div>
+                    <div><strong>INSTAGRAM_ACCESS_TOKEN</strong> = (paste your long-lived token)</div>
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-4 text-xs">
                 <div>
