@@ -667,23 +667,29 @@ export class ConfessionService {
         error_message: null,
       });
 
-      // 7. Update Google Sheet — status only (permalink stored internally, not in your spreadsheet)
+      // 7. Update Google Sheet — status only (non-blocking in production so UI returns instantly)
       const sheetConfig = mockStore.getGoogleSheetConfig();
       if (confession.google_sheet_row) {
-        try {
-          console.log(`[ConfessionService] Marking Google Sheet row #${confession.google_sheet_row} as PUBLISHED...`);
-          const sheetOk = await googleSheetsService.updateRowStatus(sheetConfig, confession.google_sheet_row, {
+        console.log(`[ConfessionService] Marking Google Sheet row #${confession.google_sheet_row} as PUBLISHED...`);
+        const sheetUpdatePromise = googleSheetsService
+          .updateRowStatus(sheetConfig, confession.google_sheet_row, {
             status: 'PUBLISHED',
             processedAt: publishedAt,
             error: '',
+          })
+          .then((sheetOk) => {
+            if (sheetOk) {
+              console.log(`[ConfessionService] Successfully marked row #${confession.google_sheet_row} as PUBLISHED on Google Sheet.`);
+            } else {
+              console.warn(`[ConfessionService] Warning: Could not write PUBLISHED status to row #${confession.google_sheet_row} on Google Sheet.`);
+            }
+          })
+          .catch((sheetErr: any) => {
+            console.error(`[ConfessionService] Error updating Google Sheet row #${confession.google_sheet_row}:`, sheetErr?.message || sheetErr);
           });
-          if (sheetOk) {
-            console.log(`[ConfessionService] Successfully marked row #${confession.google_sheet_row} as PUBLISHED on Google Sheet.`);
-          } else {
-            console.warn(`[ConfessionService] Warning: Could not write PUBLISHED status to row #${confession.google_sheet_row} on Google Sheet.`);
-          }
-        } catch (sheetErr: any) {
-          console.error(`[ConfessionService] Error updating Google Sheet row #${confession.google_sheet_row}:`, sheetErr?.message || sheetErr);
+
+        if (process.env.NODE_ENV === 'test') {
+          await sheetUpdatePromise;
         }
       }
 

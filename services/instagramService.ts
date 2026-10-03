@@ -285,7 +285,7 @@ export class InstagramService {
     creationId: string,
     accessToken: string,
     maxAttempts: number = 15,
-    delayMs: number = 1000
+    delayMs: number = 800
   ): Promise<{ ready: boolean; error?: string }> {
     let attempts = 0;
 
@@ -554,49 +554,67 @@ export class InstagramService {
     }
 
     try {
-      // Step 1: Create media item containers for each slide (is_carousel_item: true)
-      const childContainerIds: string[] = [];
+      // Step 1: Concurrently create media item containers for all slides
+      const childContainerResults = await Promise.all(
+        resolvedUrls.map(async (itemUrl, i) => {
+          const mediaEndpoint = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media`;
+          const itemResp = await fetch(mediaEndpoint, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              image_url: itemUrl,
+              is_carousel_item: true,
+            }),
+          });
 
-      for (let i = 0; i < resolvedUrls.length; i++) {
-        const itemUrl = resolvedUrls[i];
-        const mediaEndpoint = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media`;
-        const itemResp = await fetch(mediaEndpoint, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            image_url: itemUrl,
-            is_carousel_item: true,
-          }),
-        });
+          const itemData = await itemResp.json().catch(() => ({}));
+          if (!itemResp.ok || itemData.error || !itemData.id) {
+            const errMsg = itemData.error?.message || `Failed to create item container for slide #${i + 1}`;
+            return {
+              success: false as const,
+              error: `Slide ${i + 1}/${resolvedUrls.length} container creation failed: ${errMsg}`,
+            };
+          }
 
-        const itemData = await itemResp.json().catch(() => ({}));
+          return { success: true as const, id: itemData.id as string };
+        })
+      );
 
-        if (!itemResp.ok || itemData.error || !itemData.id) {
-          const errMsg = itemData.error?.message || `Failed to create item container for slide #${i + 1}`;
-          return {
-            success: false,
-            errorCode: 'CHILD_CONTAINER_FAILED',
-            error: `Slide ${i + 1}/${resolvedUrls.length} container creation failed: ${errMsg}`,
-          };
-        }
-
-        childContainerIds.push(itemData.id);
+      const failedCreation = childContainerResults.find((r) => !r.success);
+      if (failedCreation && !failedCreation.success) {
+        return {
+          success: false,
+          errorCode: 'CHILD_CONTAINER_FAILED',
+          error: failedCreation.error,
+        };
       }
 
-      // Step 2: Poll status of all child containers until FINISHED
-      for (let i = 0; i < childContainerIds.length; i++) {
-        const childId = childContainerIds[i];
-        const pollRes = await this.pollContainerStatus(childId, accessToken);
-        if (!pollRes.ready) {
-          return {
-            success: false,
-            errorCode: 'CHILD_PROCESSING_FAILED',
-            error: `Slide ${i + 1} processing failed: ${pollRes.error || 'Container not ready'}`,
-          };
-        }
+      const childContainerIds = childContainerResults.map((r) => (r as { success: true; id: string }).id);
+
+      // Step 2: Concurrently poll status of all child containers until FINISHED
+      const pollResults = await Promise.all(
+        childContainerIds.map(async (childId, i) => {
+          const pollRes = await this.pollContainerStatus(childId, accessToken);
+          if (!pollRes.ready) {
+            return {
+              success: false as const,
+              error: `Slide ${i + 1} processing failed: ${pollRes.error || 'Container not ready'}`,
+            };
+          }
+          return { success: true as const };
+        })
+      );
+
+      const failedPoll = pollResults.find((r) => !r.success);
+      if (failedPoll && !failedPoll.success) {
+        return {
+          success: false,
+          errorCode: 'CHILD_PROCESSING_FAILED',
+          error: failedPoll.error,
+        };
       }
 
       // Step 3: Create parent CAROUSEL container

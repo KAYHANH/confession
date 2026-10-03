@@ -571,35 +571,34 @@ export class ImageService {
       confessionNumber = optionsArg.confessionNumber;
     }
 
-    const results: Array<{ localPath: string; publicUrl: string; slideIndex: number }> = [];
+    const results = await Promise.all(
+      slides.map(async (slideText, i) => {
+        const filename = slides.length > 1
+          ? `${confession.id}-slide-${i + 1}.png`
+          : `${confession.id}.png`;
 
-    for (let i = 0; i < slides.length; i++) {
-      const slideText = slides[i];
-      const filename = slides.length > 1
-        ? `${confession.id}-slide-${i + 1}.png`
-        : `${confession.id}.png`;
+        const res = await this.generatePostImage({
+          confession: {
+            ...confession,
+            cleaned_text: slideText,
+          },
+          template,
+          brandName,
+          instagramHandle,
+          confessionNumber: confessionNumber || confession.google_sheet_row || 1,
+          slideText,
+          slideIndex: i,
+          totalSlides: slides.length,
+          customFilename: filename,
+        });
 
-      const res = await this.generatePostImage({
-        confession: {
-          ...confession,
-          cleaned_text: slideText,
-        },
-        template,
-        brandName,
-        instagramHandle,
-        confessionNumber: confessionNumber || confession.google_sheet_row || 1,
-        slideText,
-        slideIndex: i,
-        totalSlides: slides.length,
-        customFilename: filename,
-      });
-
-      results.push({
-        localPath: res.localPath,
-        publicUrl: res.publicUrl,
-        slideIndex: i + 1,
-      });
-    }
+        return {
+          localPath: res.localPath,
+          publicUrl: res.publicUrl,
+          slideIndex: i + 1,
+        };
+      })
+    );
 
     return results;
   }

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Instagram,
@@ -42,6 +42,8 @@ export function PublishModal({
   onSuccess,
 }: PublishModalProps) {
   const [publishing, setPublishing] = useState(false);
+  const [publishStep, setPublishStep] = useState<number>(0);
+  const [publishStepMessage, setPublishStepMessage] = useState<string>('');
   const [isSuccess, setIsSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const { success, error } = useToast();
@@ -92,6 +94,8 @@ export function PublishModal({
 
   const handlePublish = async () => {
     setPublishing(true);
+    setPublishStep(1);
+    setPublishStepMessage('Rendering high-contrast visual card...');
     setErrorMessage(null);
 
     // Pre-flight payload validation
@@ -109,6 +113,21 @@ export function PublishModal({
       return;
     }
 
+    const timer1 = setTimeout(() => {
+      setPublishStep(2);
+      setPublishStepMessage('Uploading media container to Meta Graph API...');
+    }, 1800);
+
+    const timer2 = setTimeout(() => {
+      setPublishStep(3);
+      setPublishStepMessage('Meta CDN is ingesting & transcoding image...');
+    }, 4500);
+
+    const timer3 = setTimeout(() => {
+      setPublishStep(4);
+      setPublishStepMessage(`Broadcasting live to ${targetHandle}...`);
+    }, 11000);
+
     try {
       const res = await fetch(`/api/confessions/${confession.id}/publish`, {
         method: 'POST',
@@ -125,6 +144,8 @@ export function PublishModal({
         throw new Error(data.error || 'Failed to publish');
       }
 
+      setPublishStep(4);
+      setPublishStepMessage('Post successfully live on Instagram!');
       setIsSuccess(true);
       success('Published successfully to Instagram!');
       if (onSuccess) onSuccess();
@@ -137,6 +158,9 @@ export function PublishModal({
       setErrorMessage(err?.message || 'Instagram publishing failed');
       error(err?.message || 'Publishing failed');
     } finally {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      clearTimeout(timer3);
       setPublishing(false);
     }
   };
@@ -371,6 +395,46 @@ export function PublishModal({
             </div>
           </div>
         </div>
+
+        {/* Real-time Multi-Stage Publishing Progress */}
+        {publishing && (
+          <div className="mb-4 p-4 rounded-2xl bg-gradient-to-r from-brand-50 to-indigo-50/70 border border-brand-200/80 shadow-xs animate-in fade-in">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-brand-900">
+                <Loader2 className="w-4 h-4 text-brand-600 animate-spin" />
+                <span>Publishing to Instagram (Step {publishStep} of 4)</span>
+              </div>
+              <span className="text-[11px] font-semibold text-brand-600">
+                {publishStep === 1 && '25%'}
+                {publishStep === 2 && '50%'}
+                {publishStep === 3 && '75%'}
+                {publishStep >= 4 && '95%'}
+              </span>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="w-full h-2 bg-brand-100/80 rounded-full overflow-hidden mb-2">
+              <div
+                className="h-full bg-gradient-to-r from-brand-600 via-rose-500 to-indigo-600 transition-all duration-700 ease-out rounded-full"
+                style={{
+                  width:
+                    publishStep === 1
+                      ? '25%'
+                      : publishStep === 2
+                      ? '50%'
+                      : publishStep === 3
+                      ? '75%'
+                      : '95%',
+                }}
+              />
+            </div>
+
+            <p className="text-xs text-zinc-800 font-semibold">{publishStepMessage}</p>
+            <p className="text-[11px] text-zinc-500 mt-1">
+              Meta Graph API asynchronously crawls the image from Render, transcodes it across global CDN edge nodes, and publishes. This standard process takes ~15–20 seconds.
+            </p>
+          </div>
+        )}
 
         {errorMessage && (
           <div className="mb-4 flex items-start gap-2.5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium">
