@@ -186,10 +186,54 @@ class GrowthStore {
       try {
         const supabase = await createServerSupabaseClient();
         const { data, error } = await supabase.from('published_media').select('*').order('published_at', { ascending: false });
-        if (!error && data) return data as PublishedMedia[];
+        if (!error && data && data.length > 0) return data as PublishedMedia[];
       } catch {}
     }
-    return this.readMockData().publishedMedia;
+    const state = this.readMockData();
+    const list = state.publishedMedia || [];
+
+    // Auto-sync published confessions from mockStore into publishedMedia
+    if (typeof window === 'undefined') {
+      try {
+        const { mockStore } = require('./mockStore');
+        const confessions = mockStore.getConfessions();
+        const publishedConfessions = confessions.filter((c: any) => c.status === 'PUBLISHED' && c.instagram_media_id);
+        const existingMediaIds = new Set(list.map((m: any) => m.platform_media_id));
+        let changed = false;
+
+        for (const c of publishedConfessions) {
+          if (!existingMediaIds.has(c.instagram_media_id)) {
+            const newMedia: PublishedMedia = {
+              id: `pm-${c.id}`,
+              content_id: c.id,
+              platform: 'INSTAGRAM',
+              platform_media_id: c.instagram_media_id,
+              platform_permalink: c.instagram_permalink || '',
+              media_type: 'IMAGE',
+              format_type: 'IMAGE',
+              published_at: c.published_at || new Date().toISOString(),
+              scheduled_at: c.scheduled_at,
+              account_id: mockStore.getInstagramConfig().account_id || '17841437796028856',
+              status: 'ACTIVE',
+              template_id: c.template_id,
+              data_source: 'HISTORICAL_API',
+              created_at: c.created_at || new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            };
+            list.push(newMedia);
+            existingMediaIds.add(c.instagram_media_id);
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          state.publishedMedia = list;
+          this.saveMockData(state);
+        }
+      } catch {}
+    }
+
+    return list;
   }
 
   public async getPublishedMediaById(id: string): Promise<PublishedMedia | null> {
@@ -241,6 +285,10 @@ class GrowthStore {
       return all.filter((s) => s.published_media_id === publishedMediaId);
     }
     return all;
+  }
+
+  public async getSnapshotsForMedia(publishedMediaId: string): Promise<MediaPerformanceSnapshot[]> {
+    return this.getSnapshots(publishedMediaId);
   }
 
   public async getSnapshot(publishedMediaId: string, ageBucket: AgeBucket): Promise<MediaPerformanceSnapshot | null> {

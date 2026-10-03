@@ -151,10 +151,40 @@ export class GrowthMetricsService {
     const avgEngagementRate =
       totalReach > 0 ? Math.round((totalInteractions / totalReach) * 10000) / 100 : 0;
 
+    const postsWithSnapshots = latestSnapshotByMedia.size;
+    const totalPublished = mediaList.length;
+
+    let dataStatus: 'NO_DATA' | 'INSUFFICIENT_DATA' | 'DATA_AVAILABLE' = 'NO_DATA';
+    let dataAvailability: 'NO_PUBLISHED_POSTS' | 'NO_SNAPSHOTS' | 'PARTIAL' | 'COMPLETE' = 'NO_PUBLISHED_POSTS';
+    let statusMessage = 'No published posts found.';
+
+    if (totalPublished === 0) {
+      dataStatus = 'NO_DATA';
+      dataAvailability = 'NO_PUBLISHED_POSTS';
+      statusMessage = 'No published posts found.';
+    } else if (postsWithSnapshots === 0) {
+      dataStatus = 'NO_DATA';
+      dataAvailability = 'NO_SNAPSHOTS';
+      statusMessage = `Published posts exist (${totalPublished}), but no analytics snapshots collected yet.`;
+    } else if (postsWithSnapshots < 5) {
+      dataStatus = 'INSUFFICIENT_DATA';
+      dataAvailability = postsWithSnapshots < totalPublished ? 'PARTIAL' : 'COMPLETE';
+      statusMessage = `Limited analytics collected (${postsWithSnapshots}/${totalPublished} posts tracked, min 5 required for statistical baseline).`;
+    } else {
+      dataStatus = 'DATA_AVAILABLE';
+      dataAvailability = postsWithSnapshots < totalPublished ? 'PARTIAL' : 'COMPLETE';
+      statusMessage = `Analytics available across ${postsWithSnapshots}/${totalPublished} published posts.`;
+    }
+
     return {
-      total_published: mediaList.length,
+      total_published: totalPublished,
       posts_last_7_days: posts7d,
       posts_last_30_days: posts30d,
+      posts_with_snapshots: postsWithSnapshots,
+      total_snapshots: snapshots.length,
+      data_status: dataStatus,
+      data_availability: dataAvailability,
+      status_message: statusMessage,
       mean_reach: this.calculateMean(reachVals),
       median_reach: this.calculateMedian(reachVals),
       mean_views: this.calculateMean(viewVals),

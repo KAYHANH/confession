@@ -21,6 +21,8 @@ import {
   ShieldCheck,
   ChevronRight,
   Filter,
+  Activity,
+  X,
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useToast } from '@/components/ui/ToastContext';
@@ -144,6 +146,28 @@ export default function GrowthIntelligencePage() {
     fetchDiagnostics();
   }, [selectedPostId]);
 
+  const [testingAnalytics, setTestingAnalytics] = useState(false);
+  const [analyticsTestResult, setAnalyticsTestResult] = useState<any | null>(null);
+
+  const handleTestAnalytics = async () => {
+    setTestingAnalytics(true);
+    setAnalyticsTestResult(null);
+    try {
+      const res = await fetch('/api/growth/analytics/test');
+      const data = await res.json();
+      setAnalyticsTestResult(data);
+      if (data.success) {
+        success(`Instagram Insights verified! Connected to @${data.account || '_hpsconfession_'} with active Insights.`);
+      } else {
+        error(data.error || 'Instagram analytics check failed');
+      }
+    } catch (err: any) {
+      error(err?.message || 'Failed to verify analytics connection');
+    } finally {
+      setTestingAnalytics(false);
+    }
+  };
+
   const handleBackfill = async () => {
     try {
       const res = await fetch('/api/growth/posts?backfill=true');
@@ -243,6 +267,16 @@ export default function GrowthIntelligencePage() {
 
           <div className="flex items-center gap-2.5 flex-wrap">
             <button
+              onClick={handleTestAnalytics}
+              disabled={testingAnalytics}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl hover:bg-emerald-100 shadow-sm transition-all"
+              title="Validate Instagram Insights permission on live media item"
+            >
+              <Activity className="w-3.5 h-3.5 text-emerald-600" />
+              {testingAnalytics ? 'Testing Insights...' : 'Test Analytics'}
+            </button>
+
+            <button
               onClick={handleBackfill}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-zinc-700 bg-white border border-zinc-200 rounded-xl hover:bg-zinc-50 shadow-sm transition-all"
               title="Import historical posts from internal logs into Growth Intelligence"
@@ -261,13 +295,58 @@ export default function GrowthIntelligencePage() {
 
             <button
               onClick={() => setIsReelModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-rose-500 to-indigo-600 rounded-xl hover:opacity-95 shadow-sm transition-all"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-gradient-to-r from-rose-500 to-indigo-600 rounded-xl hover:opacity-95 shadow-sm transition-all"
             >
               <Video className="w-3.5 h-3.5" />
               Render Reel Variant
             </button>
           </div>
         </div>
+
+        {/* Analytics Test Result Banner */}
+        {analyticsTestResult && (
+          <div className={`p-4 rounded-2xl border flex items-start justify-between gap-3 ${
+            analyticsTestResult.success
+              ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950'
+              : 'bg-rose-50/80 border-rose-200 text-rose-950'
+          }`}>
+            <div className="flex items-start gap-3 text-xs">
+              {analyticsTestResult.success ? (
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              )}
+              <div className="space-y-1">
+                <div className="font-bold flex items-center gap-2">
+                  <span>Instagram Analytics Diagnostics:</span>
+                  <span className={`px-2 py-0.5 rounded text-[11px] font-mono ${
+                    analyticsTestResult.success ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                  }`}>
+                    Connected: {analyticsTestResult.connected} | Insights: {analyticsTestResult.insights}
+                  </span>
+                </div>
+                {analyticsTestResult.success ? (
+                  <div className="text-emerald-800 space-y-0.5">
+                    <p>Verified on media ID: <code className="font-mono bg-emerald-100/60 px-1 rounded">{analyticsTestResult.media}</code> for account <code className="font-mono bg-emerald-100/60 px-1 rounded">@{analyticsTestResult.account}</code></p>
+                    <p className="font-semibold text-emerald-900">
+                      Live metrics: {analyticsTestResult.views !== null ? `${analyticsTestResult.views} views` : ''} · {analyticsTestResult.reach !== null ? `${analyticsTestResult.reach} reach` : ''} · {analyticsTestResult.shares !== null ? `${analyticsTestResult.shares} shares` : ''} · {analyticsTestResult.likes !== null ? `${analyticsTestResult.likes} likes` : ''} · {analyticsTestResult.saves !== null ? `${analyticsTestResult.saves} saves` : ''}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-rose-800 font-medium">
+                    {analyticsTestResult.error || 'Instagram Insights permission is missing.'}
+                  </p>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => setAnalyticsTestResult(null)}
+              className="p-1 rounded-lg hover:bg-zinc-200/50 text-zinc-500"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         {/* Feature Flags Notice Banner */}
         {(!flags.analyticsCollection || !flags.growthIntelligence) && (
@@ -368,14 +447,18 @@ export default function GrowthIntelligencePage() {
                 </span>
                 <div className="flex items-baseline gap-2">
                   <span className="text-2xl font-bold text-zinc-900">
-                    {overview?.median_reach?.toLocaleString() ?? 0}
+                    {(overview?.posts_with_snapshots ?? 0) > 0 ? (overview?.median_reach?.toLocaleString() ?? 0) : '—'}
                   </span>
-                  <span className="text-xs text-zinc-500">
-                    (Mean: {overview?.mean_reach?.toLocaleString() ?? 0})
-                  </span>
+                  {(overview?.posts_with_snapshots ?? 0) > 0 && (
+                    <span className="text-xs text-zinc-500">
+                      (Mean: {overview?.mean_reach?.toLocaleString() ?? 0})
+                    </span>
+                  )}
                 </div>
                 <p className="text-[11px] text-zinc-600 mt-2">
-                  Accounts reached per post (median guards against viral distortion).
+                  {(overview?.posts_with_snapshots ?? 0) > 0
+                    ? 'Accounts reached per post (median guards against viral distortion).'
+                    : 'No analytics snapshots collected yet.'}
                 </p>
               </div>
 
@@ -385,14 +468,18 @@ export default function GrowthIntelligencePage() {
                 </span>
                 <div className="flex items-baseline gap-2">
                   <span className="text-2xl font-bold text-zinc-900">
-                    {overview?.median_views?.toLocaleString() ?? 0}
+                    {(overview?.posts_with_snapshots ?? 0) > 0 ? (overview?.median_views?.toLocaleString() ?? 0) : '—'}
                   </span>
-                  <span className="text-xs text-zinc-500">
-                    (Mean: {overview?.mean_views?.toLocaleString() ?? 0})
-                  </span>
+                  {(overview?.posts_with_snapshots ?? 0) > 0 && (
+                    <span className="text-xs text-zinc-500">
+                      (Mean: {overview?.mean_views?.toLocaleString() ?? 0})
+                    </span>
+                  )}
                 </div>
                 <p className="text-[11px] text-zinc-600 mt-2">
-                  Total impressions across feed and discover surfaces.
+                  {(overview?.posts_with_snapshots ?? 0) > 0
+                    ? 'Total impressions across feed and discover surfaces.'
+                    : 'Awaiting scheduled analytics polling.'}
                 </p>
               </div>
 
@@ -401,22 +488,42 @@ export default function GrowthIntelligencePage() {
                   Avg Engagement Rate
                 </span>
                 <div className="text-2xl font-bold text-emerald-600">
-                  {overview?.average_engagement_rate ?? 0}%
+                  {(overview?.posts_with_snapshots ?? 0) > 0 ? `${overview?.average_engagement_rate ?? 0}%` : '—'}
                 </div>
                 <p className="text-[11px] text-zinc-600 mt-2">
-                  (Shares + Saves + Comments) ÷ Reach across observed sample.
+                  {(overview?.posts_with_snapshots ?? 0) > 0
+                    ? '(Shares + Saves + Comments) ÷ Reach across observed sample.'
+                    : 'Requires active observation snapshots.'}
                 </p>
               </div>
 
               <div className="p-5 rounded-2xl bg-white border border-zinc-200 shadow-sm">
-                <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider block mb-1">
-                  Posts Tracked
-                </span>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider block">
+                    Posts Tracked
+                  </span>
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                    (overview?.posts_with_snapshots ?? 0) > 0
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                  }`}>
+                    {overview?.data_availability === 'COMPLETE'
+                      ? 'COMPLETE'
+                      : overview?.data_availability === 'PARTIAL'
+                      ? 'PARTIAL'
+                      : (overview?.total_published ?? 0) > 0
+                      ? 'AWAITING SNAPSHOTS'
+                      : 'NO DATA'}
+                  </span>
+                </div>
                 <div className="text-2xl font-bold text-indigo-600">
-                  {overview?.total_published ?? 0}
+                  {overview?.posts_with_snapshots ?? 0}
+                  <span className="text-sm font-normal text-zinc-400 ml-1.5">
+                    / {overview?.total_published ?? 0} published
+                  </span>
                 </div>
                 <p className="text-[11px] text-zinc-600 mt-2">
-                  {overview?.posts_last_30_days ?? 0} published in last 30 days.
+                  {overview?.status_message || `${overview?.posts_last_30_days ?? 0} published in last 30 days.`}
                 </p>
               </div>
             </div>

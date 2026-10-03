@@ -18,6 +18,7 @@ import {
   BarChart3,
   FlaskConical,
   Zap,
+  Activity,
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -43,6 +44,8 @@ function SettingsContent() {
 
   const [testingInstagram, setTestingInstagram] = useState(false);
   const [instagramTestMessage, setInstagramTestMessage] = useState<{ success: boolean; text: string } | null>(null);
+  const [testingAnalytics, setTestingAnalytics] = useState(false);
+  const [analyticsTestMessage, setAnalyticsTestMessage] = useState<{ success: boolean; text: string } | null>(null);
 
   const { success, error, info } = useToast();
   const [runningAutoPublish, setRunningAutoPublish] = useState(false);
@@ -238,6 +241,32 @@ function SettingsContent() {
       error('Failed to connect to Meta Graph API');
     } finally {
       setTestingInstagram(false);
+    }
+  };
+
+  const handleTestAnalyticsConnection = async () => {
+    setTestingAnalytics(true);
+    setAnalyticsTestMessage(null);
+    try {
+      const res = await fetch('/api/growth/analytics/test');
+      const data = await res.json();
+      if (data.success) {
+        setAnalyticsTestMessage({
+          success: true,
+          text: `Analytics Insights verified! Account @${data.account || '_hpsconfession_'} has active instagram_business_manage_insights permission.`,
+        });
+        success('Instagram Analytics Insights verified!');
+      } else {
+        const msg = data.error || 'Instagram analytics check failed';
+        setAnalyticsTestMessage({ success: false, text: msg });
+        error(msg);
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to verify analytics connection';
+      setAnalyticsTestMessage({ success: false, text: msg });
+      error(msg);
+    } finally {
+      setTestingAnalytics(false);
     }
   };
 
@@ -566,6 +595,25 @@ function SettingsContent() {
                     Instagram User access token generated through Instagram Login.
                   </p>
                 </div>
+
+                {/* Scopes Guidance Box */}
+                <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200/80 space-y-2 text-xs">
+                  <div className="font-semibold text-zinc-900 flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-brand-600" />
+                    <span>Required Instagram Login Scopes</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-600">
+                    For automated posting and Growth Intelligence Insights, the token must be granted these permissions via Instagram Login:
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 font-mono text-[11px]">
+                    <span className="px-2 py-0.5 rounded bg-white border border-zinc-200 text-zinc-700">instagram_business_basic</span>
+                    <span className="px-2 py-0.5 rounded bg-white border border-zinc-200 text-zinc-700">instagram_business_content_publish</span>
+                    <span className="px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 font-semibold">instagram_business_manage_insights</span>
+                  </div>
+                  <p className="text-[10px] text-zinc-600">
+                    Note: Do not use Facebook Login scopes (<code>instagram_basic</code>). Use official Instagram Login scopes.
+                  </p>
+                </div>
               </div>
 
               {instagramTestMessage && (
@@ -581,14 +629,38 @@ function SettingsContent() {
                 </div>
               )}
 
-              <div className="pt-4 border-t border-zinc-100 flex items-center justify-between">
-                <button
-                  onClick={handleTestInstagramConnection}
-                  disabled={testingInstagram}
-                  className="px-4 py-2 rounded-xl border border-zinc-200 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 cursor-pointer"
+              {analyticsTestMessage && (
+                <div
+                  className={`p-3 rounded-xl border text-xs font-medium flex items-center gap-2 ${
+                    analyticsTestMessage.success
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : 'bg-rose-50 text-rose-800 border-rose-200'
+                  }`}
                 >
-                  {testingInstagram ? 'Testing...' : 'Test Connection'}
-                </button>
+                  <Activity className="w-4 h-4" />
+                  <span>{analyticsTestMessage.text}</span>
+                </div>
+              )}
+
+              <div className="pt-4 border-t border-zinc-100 flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleTestInstagramConnection}
+                    disabled={testingInstagram}
+                    className="px-4 py-2 rounded-xl border border-zinc-200 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 cursor-pointer"
+                  >
+                    {testingInstagram ? 'Testing API...' : 'Test Connection'}
+                  </button>
+
+                  <button
+                    onClick={handleTestAnalyticsConnection}
+                    disabled={testingAnalytics}
+                    className="px-4 py-2 rounded-xl border border-emerald-200 bg-emerald-50 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Activity className="w-3.5 h-3.5" />
+                    {testingAnalytics ? 'Testing Insights...' : 'Test Analytics Insights'}
+                  </button>
+                </div>
 
                 <button
                   onClick={handleConnectInstagram}

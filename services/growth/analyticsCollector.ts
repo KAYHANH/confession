@@ -83,6 +83,51 @@ export class AnalyticsCollector {
     }
   }
 
+  /**
+   * Identifies all published media that are currently due for snapshot collection across observation milestones.
+   */
+  public async findPublishedMediaRequiringSnapshot(): Promise<
+    {
+      media: PublishedMedia;
+      milestone: { bucket: AgeBucket; targetMinutes: number; minAgeMinutes: number };
+      actualAgeMinutes: number;
+    }[]
+  > {
+    const mediaList = await growthStore.getPublishedMedia();
+    const activeMedia = mediaList.filter((m) => m.status === 'ACTIVE' && m.platform_media_id);
+    const nowMs = Date.now();
+    const dueItems: {
+      media: PublishedMedia;
+      milestone: { bucket: AgeBucket; targetMinutes: number; minAgeMinutes: number };
+      actualAgeMinutes: number;
+    }[] = [];
+
+    for (const media of activeMedia) {
+      const pubMs = new Date(media.published_at).getTime();
+      const ageMinutes = Math.floor((nowMs - pubMs) / (60 * 1000));
+
+      // Skip posts older than 8 days to respect observation window
+      if (ageMinutes > 11520 || ageMinutes < 0) continue;
+
+      // Check milestones
+      for (const milestone of OBSERVATION_MILESTONES) {
+        if (ageMinutes >= milestone.minAgeMinutes) {
+          // Check if snapshot already collected
+          const existing = await growthStore.getSnapshot(media.id, milestone.bucket);
+          if (!existing) {
+            dueItems.push({
+              media,
+              milestone,
+              actualAgeMinutes: ageMinutes,
+            });
+          }
+        }
+      }
+    }
+
+    return dueItems;
+  }
+
   public async collectSnapshotCycle(): Promise<{ checked: number; snapshotsCollected: number }> {
     return this.runCollectionCycle();
   }
@@ -106,28 +151,17 @@ export class AnalyticsCollector {
     let snapshotsCollected = 0;
 
     try {
+      const dueItems = await this.findPublishedMediaRequiringSnapshot();
       const mediaList = await growthStore.getPublishedMedia();
-      const activeMedia = mediaList.filter((m) => m.status === 'ACTIVE' && m.platform_media_id);
-      const nowMs = Date.now();
 
-      for (const media of activeMedia) {
-        const pubMs = new Date(media.published_at).getTime();
-        const ageMinutes = Math.floor((nowMs - pubMs) / (60 * 1000));
-
-        // Skip posts older than 8 days to respect observation window
-        if (ageMinutes > 11520) continue;
-
-        // Check milestones
-        for (const milestone of OBSERVATION_MILESTONES) {
-          if (ageMinutes >= milestone.minAgeMinutes) {
-            // Check if snapshot already collected
-            const existing = await growthStore.getSnapshot(media.id, milestone.bucket);
-            if (!existing) {
-              const success = await this.collectSnapshotForMedia(media, milestone.bucket, milestone.targetMinutes, ageMinutes);
-              if (success) snapshotsCollected++;
-            }
-          }
-        }
+      for (const item of dueItems) {
+        const success = await this.collectSnapshotForMedia(
+          item.media,
+          item.milestone.bucket,
+          item.milestone.targetMinutes,
+          item.actualAgeMinutes
+        );
+        if (success) snapshotsCollected++;
       }
 
       if (snapshotsCollected > 0) {
@@ -142,7 +176,7 @@ export class AnalyticsCollector {
         });
       }
 
-      return { checked: activeMedia.length, snapshotsCollected };
+      return { checked: mediaList.length, snapshotsCollected };
     } catch (err: any) {
       console.error('[AnalyticsCollector] Cycle failure:', err?.message || err);
       return { checked: 0, snapshotsCollected };
@@ -201,13 +235,59 @@ export class AnalyticsCollector {
   }
 
   /**
+   * Syncs real published media from the connected Instagram account into published_media.
+   */
+  public async syncInstagramAccountMedia(): Promise<number> {
+    try {
+      const { instagramService } = await import('@/services/instagramService');
+      const recentMedia = await instagramService.getRecentMedia(50);
+      let addedCount = 0;
+
+      for (const m of recentMedia) {
+        const existing = await growthStore.getPublishedMediaById(m.id);
+        if (!existing) {
+          const formatType: MediaFormatType =
+            m.media_type === 'VIDEO' ? 'REEL' : m.media_type === 'CAROUSEL_ALBUM' ? 'CAROUSEL' : 'IMAGE';
+
+          const record: PublishedMedia = {
+            id: `pm-ig-${m.id}`,
+            content_id: `ig-${m.id}`,
+            platform: 'INSTAGRAM',
+            platform_media_id: m.id,
+            platform_permalink: m.permalink || '',
+            media_type: m.media_type === 'VIDEO' ? 'VIDEO' : m.media_type === 'CAROUSEL_ALBUM' ? 'CAROUSEL_ALBUM' : 'IMAGE',
+            format_type: formatType,
+            published_at: m.timestamp || new Date().toISOString(),
+            account_id: mockStore.getInstagramConfig().account_id || '17841437796028856',
+            status: 'ACTIVE',
+            data_source: 'HISTORICAL_API',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+
+          await growthStore.addPublishedMedia(record);
+          addedCount++;
+        }
+      }
+
+      return addedCount;
+    } catch (e: any) {
+      console.warn('[AnalyticsCollector] syncInstagramAccountMedia notice:', e?.message || e);
+      return 0;
+    }
+  }
+
+  /**
    * Backfill existing published posts into published_media.
    * Respects Phase 35: marks data_source = 'HISTORICAL_API' and never fabricates historical time-series data.
    */
   public async backfillPublishedPosts(): Promise<number> {
     const publishedPosts = mockStore.getPublishedPosts();
+    const confessions = mockStore.getConfessions();
+    const publishedConfessions = confessions.filter((c) => c.status === 'PUBLISHED' && c.instagram_media_id);
     let backfilledCount = 0;
 
+    // 1. Backfill from publishedPosts log
     for (const post of publishedPosts) {
       const existing = await growthStore.getPublishedMediaById(post.instagram_media_id);
       if (!existing && post.instagram_media_id) {
@@ -220,7 +300,7 @@ export class AnalyticsCollector {
           media_type: 'IMAGE',
           format_type: 'IMAGE',
           published_at: post.published_at,
-          account_id: mockStore.getInstagramConfig().account_id || 'default_account',
+          account_id: mockStore.getInstagramConfig().account_id || '17841437796028856',
           status: 'ACTIVE',
           data_source: 'HISTORICAL_API',
           created_at: new Date().toISOString(),
@@ -231,6 +311,41 @@ export class AnalyticsCollector {
         backfilledCount++;
       }
     }
+
+    // 2. Backfill from published confessions
+    for (const conf of publishedConfessions) {
+      if (conf.instagram_media_id) {
+        const existing = await growthStore.getPublishedMediaById(conf.instagram_media_id);
+        if (!existing) {
+          const mediaRecord: PublishedMedia = {
+            id: `pm-${conf.id}`,
+            content_id: conf.id,
+            platform: 'INSTAGRAM',
+            platform_media_id: conf.instagram_media_id,
+            platform_permalink: conf.instagram_permalink || '',
+            media_type: 'IMAGE',
+            format_type: 'IMAGE',
+            published_at: conf.published_at || new Date().toISOString(),
+            scheduled_at: conf.scheduled_at,
+            account_id: mockStore.getInstagramConfig().account_id || '17841437796028856',
+            status: 'ACTIVE',
+            template_id: conf.template_id,
+            data_source: 'HISTORICAL_API',
+            created_at: conf.created_at || new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+
+          await growthStore.addPublishedMedia(mediaRecord);
+          backfilledCount++;
+        }
+      }
+    }
+
+    // 3. Try syncing from live Instagram account if available
+    try {
+      const igAdded = await this.syncInstagramAccountMedia();
+      backfilledCount += igAdded;
+    } catch {}
 
     return backfilledCount;
   }

@@ -364,6 +364,11 @@ export interface AccountGrowthOverview {
   total_published: number;
   posts_last_7_days: number;
   posts_last_30_days: number;
+  posts_with_snapshots?: number;
+  total_snapshots?: number;
+  data_status?: 'NO_DATA' | 'INSUFFICIENT_DATA' | 'DATA_AVAILABLE';
+  data_availability?: 'NO_PUBLISHED_POSTS' | 'NO_SNAPSHOTS' | 'PARTIAL' | 'COMPLETE';
+  status_message?: string;
   mean_reach: number;
   median_reach: number;
   mean_views: number;

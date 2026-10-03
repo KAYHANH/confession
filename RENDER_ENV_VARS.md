@@ -36,10 +36,27 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
 SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 ```
 
+### Growth Intelligence & Analytics
+```
+ENABLE_GROWTH_INTELLIGENCE=true
+ENABLE_ANALYTICS_COLLECTION=true
+INSTAGRAM_API_VERSION=v21.0
+```
+
+### Instagram Login Scopes (Permissions required on Meta App)
+The Meta App and user access token require the following Instagram Login scopes:
+- `instagram_business_basic` (account profile and media info)
+- `instagram_business_content_publish` (posting single cards & carousels)
+- `instagram_business_manage_insights` (insights & performance analytics)
+
 ### Cron Security
 ```
 CRON_SECRET=<generate with: openssl rand -hex 32>
 ```
+Endpoints:
+- `POST /api/cron/auto-publish` (publishing schedule runner)
+- `POST /api/cron/sync` (Google Sheets sync runner)
+- `POST /api/cron/instagram-analytics` (Growth Intelligence performance snapshot collector, recommended */15 * * * *)
 
 ## Generate Secrets (run locally)
 ```bash

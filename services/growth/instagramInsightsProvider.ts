@@ -123,8 +123,8 @@ export class InstagramInsightsProvider {
 
     const candidateMetrics =
       formatType === 'REEL'
-        ? ['reach', 'plays', 'saved', 'shares', 'likes', 'comments']
-        : ['reach', 'impressions', 'saved', 'shares', 'likes', 'comments'];
+        ? ['reach', 'views', 'plays', 'saved', 'shares', 'likes', 'comments']
+        : ['reach', 'views', 'saved', 'shares', 'likes', 'comments'];
 
     for (const item of data) {
       const name = item.name;
@@ -133,7 +133,10 @@ export class InstagramInsightsProvider {
       if (typeof val === 'number') {
         raw_metric_status[name] = val === 0 ? 'ZERO' : 'AVAILABLE';
         if (name === 'reach') reach = val;
-        if (name === 'impressions') views = val;
+        if (name === 'views' || name === 'impressions') {
+          views = val;
+          raw_metric_status['views'] = val === 0 ? 'ZERO' : 'AVAILABLE';
+        }
         if (name === 'saved') saves = val;
         if (name === 'shares') shares = val;
         if (name === 'likes') likes = val;
@@ -207,11 +210,10 @@ export class InstagramInsightsProvider {
       collectionStatus: 'SUCCESS',
     };
 
-    // If mock mode is explicitly enabled or in test environment without real tokens
+    // If mock mode is explicitly enabled or token is missing
     if (
       process.env.MOCK_EXTERNAL_APIS === 'true' ||
-      !token ||
-      process.env.NODE_ENV === 'test'
+      !token
     ) {
       return this.generateSimulatedInsights(platformMediaId, formatType, apiVersion);
     }
@@ -237,10 +239,11 @@ export class InstagramInsightsProvider {
 
       // 2. Determine metric set based on media format
       // Note: Meta Graph API v21.0 supports specific metrics per media_type.
+      // 'views' replaces deprecated 'impressions' for feed media.
       const candidateMetrics =
         formatType === 'REEL'
-          ? ['reach', 'plays', 'total_interactions', 'saved', 'shares', 'clips_replays_count']
-          : ['reach', 'impressions', 'saved', 'shares', 'total_interactions'];
+          ? ['views', 'plays', 'reach', 'saved', 'shares', 'total_interactions', 'clips_replays_count']
+          : ['views', 'reach', 'saved', 'shares', 'total_interactions'];
 
       // Query Insights endpoint
       const metricsParam = candidateMetrics.join(',');
@@ -259,7 +262,7 @@ export class InstagramInsightsProvider {
           if (typeof val === 'number') {
             result.rawMetricStatus[name] = val === 0 ? 'ZERO' : 'AVAILABLE';
             if (name === 'reach') result.reach = val;
-            if (name === 'impressions') result.views = val;
+            if (name === 'views' || name === 'impressions') result.views = val;
             if (name === 'saved') result.saves = val;
             if (name === 'shares') result.shares = val;
             if (name === 'plays') result.plays = val;
@@ -270,9 +273,48 @@ export class InstagramInsightsProvider {
           }
         }
       } else {
-        // Individual metric collection error (e.g. permission or unready insights)
-        result.collectionStatus = 'PARTIAL';
-        result.errorMessage = insightsData.error?.message || 'Insights endpoint returned no data';
+        const metaError = insightsData.error;
+        const errCode = metaError?.code;
+        const errMsg = metaError?.message || 'Insights endpoint returned no data';
+
+        // Check for permission or token issues
+        if (
+          errCode === 10 ||
+          errCode === 190 ||
+          errCode === 200 ||
+          errMsg.toLowerCase().includes('permission') ||
+          errMsg.toLowerCase().includes('manage_insights')
+        ) {
+          result.collectionStatus = 'FAILED';
+          result.errorMessage =
+            'Instagram analytics permission is not available for this token. Reconnect the Instagram account and grant instagram_business_manage_insights.';
+        } else {
+          result.collectionStatus = 'PARTIAL';
+          result.errorMessage = errMsg;
+        }
+
+        // Try essential fallback metrics (reach, saved, shares) if candidate metric failed due to unsupported metric
+        if (insightsResp.status === 400 && errMsg.includes('does not support')) {
+          try {
+            const fallbackUrl = `${INSTAGRAM_API_BASE_URL}/${apiVersion}/${platformMediaId}/insights?metric=reach,saved,shares`;
+            const fbResp = await fetch(fallbackUrl, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            const fbData = await fbResp.json().catch(() => ({}));
+            if (fbResp.ok && Array.isArray(fbData.data)) {
+              for (const item of fbData.data) {
+                const val = item.values?.[0]?.value ?? item.total_value?.value;
+                if (typeof val === 'number') {
+                  result.rawMetricStatus[item.name] = val === 0 ? 'ZERO' : 'AVAILABLE';
+                  if (item.name === 'reach') result.reach = val;
+                  if (item.name === 'saved') result.saves = val;
+                  if (item.name === 'shares') result.shares = val;
+                }
+              }
+            }
+          } catch {}
+        }
+
         for (const m of candidateMetrics) {
           if (result.rawMetricStatus[m] === undefined) {
             result.rawMetricStatus[m] = 'UNAVAILABLE';
@@ -287,6 +329,144 @@ export class InstagramInsightsProvider {
         ...result,
         collectionStatus: 'PARTIAL',
         errorMessage: err?.message || 'Network error querying Instagram Insights',
+      };
+    }
+  }
+
+  /**
+   * Safe server-side verification of Instagram Insights permission on a real or sample media item.
+   * NEVER exposes access tokens, client secrets, or authorization headers.
+   */
+  public async testAnalyticsPermission(targetMediaId?: string): Promise<{
+    connected: boolean;
+    available: boolean;
+    accountId?: string;
+    mediaId?: string;
+    sampleMetrics?: {
+      views: number | null;
+      reach: number | null;
+      likes: number | null;
+      comments: number | null;
+      shares: number | null;
+      saves: number | null;
+    };
+    errorCode?: string;
+    errorMessage?: string;
+  }> {
+    const serverConfig = getInstagramServerConfig();
+    const token = serverConfig.accessToken;
+    const accountId = serverConfig.accountId;
+
+    if (!token) {
+      return {
+        connected: false,
+        available: false,
+        errorCode: 'MISSING_ACCESS_TOKEN',
+        errorMessage: 'Instagram access token is not configured on the server.',
+      };
+    }
+
+    if (!accountId) {
+      return {
+        connected: false,
+        available: false,
+        errorCode: 'MISSING_ACCOUNT_ID',
+        errorMessage: 'Instagram account ID is not configured on the server.',
+      };
+    }
+
+    // When mock mode is explicitly requested
+    if (process.env.MOCK_EXTERNAL_APIS === 'true') {
+      return {
+        connected: true,
+        available: true,
+        accountId,
+        mediaId: targetMediaId || 'test-media-12345',
+        sampleMetrics: {
+          views: 1234,
+          reach: 987,
+          likes: 42,
+          comments: 8,
+          shares: 15,
+          saves: 12,
+        },
+      };
+    }
+
+    try {
+      const apiVersion = this.getApiVersion();
+      let resolvedMediaId = targetMediaId;
+
+      // If no mediaId provided, fetch the most recent media item from the account
+      if (!resolvedMediaId) {
+        const mediaListUrl = `${INSTAGRAM_API_BASE_URL}/${apiVersion}/${accountId}/media?fields=id,media_type&limit=1`;
+        const listResp = await fetch(mediaListUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const listData = await listResp.json().catch(() => ({}));
+
+        if (listResp.ok && Array.isArray(listData.data) && listData.data.length > 0) {
+          resolvedMediaId = listData.data[0].id;
+        } else if (!listResp.ok) {
+          const errCode = listData.error?.code;
+          const errMsg = listData.error?.message || 'Failed to query Instagram media';
+          return {
+            connected: false,
+            available: false,
+            accountId,
+            errorCode: errCode ? `META_ERROR_${errCode}` : 'MEDIA_QUERY_FAILED',
+            errorMessage: errMsg,
+          };
+        }
+      }
+
+      if (!resolvedMediaId) {
+        return {
+          connected: true,
+          available: false,
+          accountId,
+          errorCode: 'NO_PUBLISHED_MEDIA',
+          errorMessage: 'No published media items found on this account to test Insights against.',
+        };
+      }
+
+      // Query Insights for the media item
+      const insights = await this.getMediaInsights(resolvedMediaId, 'IMAGE');
+
+      if (insights.collectionStatus === 'FAILED' && insights.errorMessage?.includes('permission')) {
+        return {
+          connected: true,
+          available: false,
+          accountId,
+          mediaId: resolvedMediaId,
+          errorCode: 'MISSING_INSIGHTS_PERMISSION',
+          errorMessage:
+            'Instagram analytics permission is not available for this token. Reconnect the Instagram account and grant instagram_business_manage_insights.',
+        };
+      }
+
+      return {
+        connected: true,
+        available: insights.collectionStatus === 'SUCCESS' || insights.reach !== null || insights.views !== null,
+        accountId,
+        mediaId: resolvedMediaId,
+        sampleMetrics: {
+          views: insights.views,
+          reach: insights.reach,
+          likes: insights.likes,
+          comments: insights.comments,
+          shares: insights.shares,
+          saves: insights.saves,
+        },
+        errorMessage: insights.collectionStatus === 'FAILED' ? insights.errorMessage : undefined,
+      };
+    } catch (err: any) {
+      return {
+        connected: false,
+        available: false,
+        accountId,
+        errorCode: 'NETWORK_ERROR',
+        errorMessage: err?.message || 'Network error verifying Instagram analytics connection',
       };
     }
   }
