@@ -232,12 +232,12 @@ ConfessionFlow is fully configured for zero-downtime 24/7 operation on [Render](
 
 ### 24/7 Always-On Guarantee (No Sleep on Free Tier):
 Render free web services normally spin down after 15 minutes of inactivity. ConfessionFlow includes two layers to stay awake 24/7:
-1. **Built-in Self-Ping Engine**: `services/backgroundRunner.ts` automatically pings `https://confession-5ha2.onrender.com/api/health` every 9 minutes to reset Render's inactivity counter.
-2. **External Free Pinger (Recommended Fail-Safe)**:
+1. **Built-in Self-Ping Engine**: `services/backgroundRunner.ts` automatically pings `https://confession-4nbc.onrender.com/api/health` every 9 minutes to reset Render's inactivity counter.
+2. **External Free Pinger (MANDATORY on Free Tier)**:
    - Go to [Cron-Job.org](https://cron-job.org) or [UptimeRobot](https://uptimerobot.com) (100% free).
-   - Create a monitor for: `https://confession-5ha2.onrender.com/api/health`
-   - Set interval: **Every 10 minutes** (or 5 minutes).
-   - This guarantees your service never sleeps, keeping your automated sheet ingestion and scheduled post publisher running around the clock!
+   - Create an HTTP(S) monitor for: `https://confession-4nbc.onrender.com/api/health`
+   - Set interval: **Every 5 or 10 minutes**.
+   - This external ping guarantees Render never freezes your container, keeping your automated sheet ingestion, scheduling engine, and Instagram publisher running 24/7 around the clock!
 
 ---
 

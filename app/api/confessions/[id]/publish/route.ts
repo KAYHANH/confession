@@ -22,6 +22,7 @@ export async function POST(
       cardMode: body.cardMode,
       customCaption: body.customCaption,
       templateId: body.templateId,
+      videoUrl: body.videoUrl,
     });
     return NextResponse.json(published);
   } catch (error: any) {

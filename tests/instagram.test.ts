@@ -360,4 +360,97 @@ describe('InstagramService & Instagram Login Integration Tests', () => {
       process.env.RENDER_EXTERNAL_URL = origRenderUrl;
     }
   });
+
+  // 13. Publish Reel video test
+  it('Test 13: should successfully create REELS container, poll status, and publish Reel video', async () => {
+    const origId = process.env.INSTAGRAM_ACCOUNT_ID;
+    const origToken = process.env.INSTAGRAM_ACCESS_TOKEN;
+    const origRenderUrl = process.env.RENDER_EXTERNAL_URL;
+
+    process.env.INSTAGRAM_ACCOUNT_ID = '17841437796028856';
+    process.env.INSTAGRAM_ACCESS_TOKEN = 'IGAA_valid_test_token';
+    process.env.RENDER_EXTERNAL_URL = 'https://confession-4nbc.onrender.com';
+
+    let capturedPayload: any = null;
+    global.fetch = vi.fn().mockImplementation(async (url: string, opts: any) => {
+      if (url.includes('/media') && !url.includes('media_publish')) {
+        capturedPayload = JSON.parse(opts.body);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: 'reel_container_111' }),
+        };
+      }
+      if (url.includes('/reel_container_111?fields=status_code')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ status_code: 'FINISHED' }),
+        };
+      }
+      if (url.includes('/media_publish')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: 'live_reel_222' }),
+        };
+      }
+      if (url.includes('/live_reel_222?fields=permalink')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ permalink: 'https://www.instagram.com/reel/live_reel_222/' }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    try {
+      const result = await instagramService.publishReel(
+        mockConfession,
+        'https://confession-4nbc.onrender.com/generated/reels/sample-reel.mp4',
+        'Check out this secret!'
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.mediaId).toBe('live_reel_222');
+      expect(result.permalink).toBe('https://www.instagram.com/reel/live_reel_222/');
+      expect(capturedPayload.media_type).toBe('REELS');
+      expect(capturedPayload.video_url).toBe('https://confession-4nbc.onrender.com/generated/reels/sample-reel.mp4');
+      expect(capturedPayload.share_to_feed).toBe(true);
+    } finally {
+      process.env.INSTAGRAM_ACCOUNT_ID = origId;
+      process.env.INSTAGRAM_ACCESS_TOKEN = origToken;
+      process.env.RENDER_EXTERNAL_URL = origRenderUrl;
+    }
+  });
+
+  // 14. publishReel error handling
+  it('Test 14: should return error if credentials are missing in publishReel', async () => {
+    const origId = process.env.INSTAGRAM_ACCOUNT_ID;
+    const origToken = process.env.INSTAGRAM_ACCESS_TOKEN;
+    delete process.env.INSTAGRAM_ACCOUNT_ID;
+    delete process.env.INSTAGRAM_ACCESS_TOKEN;
+
+    const storeSpy = vi.spyOn(mockStore, 'getInstagramConfig').mockReturnValue({
+      account_id: '',
+      username: '',
+      access_token: '',
+      is_connected: false,
+    });
+
+    try {
+      const result = await instagramService.publishReel(
+        mockConfession,
+        'https://confession-4nbc.onrender.com/video.mp4',
+        'Caption'
+      );
+      expect(result.success).toBe(false);
+      expect(result.errorCode).toBe('MISSING_ACCESS_TOKEN');
+    } finally {
+      storeSpy.mockRestore();
+      process.env.INSTAGRAM_ACCOUNT_ID = origId;
+      process.env.INSTAGRAM_ACCESS_TOKEN = origToken;
+    }
+  });
 });

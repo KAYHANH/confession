@@ -253,11 +253,11 @@ export class InstagramService {
       const rawEnvBase =
         process.env.RENDER_EXTERNAL_URL ||
         process.env.NEXT_PUBLIC_APP_URL ||
-        'https://confession-5ha2.onrender.com';
+        'https://confession-4nbc.onrender.com';
 
       // Clean protocol: handle http://, https://, or any repeated prefixes (e.g. https://https://)
       const cleanHost = rawEnvBase.replace(/^(https?:\/\/)+/i, '').replace(/\/+$/, '');
-      const publicBaseUrl = cleanHost ? `https://${cleanHost}` : 'https://confession-5ha2.onrender.com';
+      const publicBaseUrl = cleanHost ? `https://${cleanHost}` : 'https://confession-4nbc.onrender.com';
 
       const isLocal = publicBaseUrl.includes('localhost') || publicBaseUrl.includes('127.0.0.1');
 
@@ -283,10 +283,11 @@ export class InstagramService {
    */
   public async pollContainerStatus(
     creationId: string,
-    accessToken: string
+    accessToken: string,
+    maxAttempts: number = 15,
+    delayMs: number = 1000
   ): Promise<{ ready: boolean; error?: string }> {
     let attempts = 0;
-    const maxAttempts = 15;
 
     while (attempts < maxAttempts) {
       attempts++;
@@ -305,8 +306,8 @@ export class InstagramService {
         };
       }
 
-      // Wait 1s between checks
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Wait delayMs between checks
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
 
     return {
@@ -661,6 +662,156 @@ export class InstagramService {
 
       // Step 6: Fetch permalink
       let permalink = `https://www.instagram.com/p/${publishedMediaId}/`;
+      try {
+        const permalinkUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${publishedMediaId}?fields=permalink`;
+        const permalinkResp = await fetch(permalinkUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const permalinkData = await permalinkResp.json().catch(() => ({}));
+        if (permalinkData.permalink) {
+          permalink = permalinkData.permalink;
+        }
+      } catch {}
+
+      return {
+        success: true,
+        mediaId: publishedMediaId,
+        permalink,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        errorCode: 'API_UNAVAILABLE',
+        error: `Instagram API request failed: ${err?.message || err}`,
+      };
+    }
+  }
+
+  /**
+   * Publish an Instagram Reel (video) to Instagram Professional account using official Content Publishing API
+   * POST /{account-id}/media?media_type=REELS&video_url={url}&caption={caption}
+   */
+  public async publishReel(
+    confession: Confession,
+    videoUrl: string,
+    captionText: string
+  ): Promise<InstagramPublishResult> {
+    if (confession.status === 'PUBLISHED' || confession.instagram_media_id) {
+      return {
+        success: false,
+        errorCode: 'DUPLICATE_PUBLICATION',
+        error: `Confession ${confession.id} is already published (Media ID: ${confession.instagram_media_id}). Duplicate publication blocked.`,
+      };
+    }
+
+    const serverConfig = getInstagramServerConfig();
+    const storeConfig = mockStore.getInstagramConfig();
+
+    const accountId = serverConfig.accountId || storeConfig.account_id || undefined;
+    const accessToken = serverConfig.accessToken || storeConfig.access_token || undefined;
+
+    if (!accessToken) {
+      return {
+        success: false,
+        errorCode: 'MISSING_ACCESS_TOKEN',
+        error: 'Instagram credentials are not configured.',
+      };
+    }
+
+    if (!accountId) {
+      return {
+        success: false,
+        errorCode: 'MISSING_ACCOUNT_ID',
+        error: 'Instagram credentials are not configured.',
+      };
+    }
+
+    // Resolve relative video URL to absolute public URL reachable by Meta
+    const resolvedVideoUrl = await this.resolvePublicImageUrl(videoUrl);
+
+    if (!resolvedVideoUrl.startsWith('http://') && !resolvedVideoUrl.startsWith('https://')) {
+      return {
+        success: false,
+        errorCode: 'INVALID_VIDEO_URL',
+        error: `Video URL is not a valid web URL (${resolvedVideoUrl}). Make sure NEXT_PUBLIC_APP_URL is set in your environment.`,
+      };
+    }
+
+    if (resolvedVideoUrl.includes('localhost') || resolvedVideoUrl.includes('127.0.0.1')) {
+      return {
+        success: false,
+        errorCode: 'LOCAL_VIDEO_URL',
+        error: `Instagram cannot fetch videos from local machine (${resolvedVideoUrl}). Deploy your app to a public URL (like Render) or configure public video hosting.`,
+      };
+    }
+
+    try {
+      // Step 1: Create media container with media_type=REELS
+      const mediaEndpoint = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media`;
+      const containerResp = await fetch(mediaEndpoint, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          media_type: 'REELS',
+          video_url: resolvedVideoUrl,
+          caption: captionText,
+          share_to_feed: true,
+        }),
+      });
+
+      const containerData = await containerResp.json().catch(() => ({}));
+
+      if (!containerResp.ok || containerData.error || !containerData.id) {
+        let errorMsg = containerData.error?.message || 'Instagram API request failed.';
+        if (containerData.error?.code === 9004 || errorMsg.includes('photo or video can be accepted')) {
+          errorMsg = `Meta cannot download or process the video from ${resolvedVideoUrl}. Ensure the URL is publicly reachable, an MP4 container, and has valid video codecs (H.264/AAC).`;
+        }
+        return {
+          success: false,
+          errorCode: 'CONTAINER_CREATION_FAILED',
+          error: `Failed to create Instagram Reel container: ${errorMsg}`,
+        };
+      }
+
+      const creationId = containerData.id;
+
+      // Step 2: Poll container status until FINISHED (videos can take 10-45s)
+      const pollResult = await this.pollContainerStatus(creationId, accessToken, 30, 1500);
+      if (!pollResult.ready) {
+        return {
+          success: false,
+          errorCode: pollResult.error?.includes('Timed out') ? 'CONTAINER_TIMEOUT' : 'CONTAINER_PROCESSING_FAILED',
+          error: pollResult.error || 'Failed to process Reel video container',
+        };
+      }
+
+      // Step 3: Publish container
+      const publishUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media_publish`;
+      const publishResp = await fetch(publishUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          creation_id: creationId,
+        }),
+      });
+
+      const publishData = await publishResp.json().catch(() => ({}));
+      if (!publishResp.ok || publishData.error) {
+        return {
+          success: false,
+          errorCode: 'PUBLISH_FAILED',
+          error: `Failed to publish Instagram Reel: ${publishData.error?.message || 'Publishing error'}`,
+        };
+      }
+
+      const publishedMediaId = publishData.id;
+      let permalink = `https://www.instagram.com/reel/${publishedMediaId}/`;
       try {
         const permalinkUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${publishedMediaId}?fields=permalink`;
         const permalinkResp = await fetch(permalinkUrl, {

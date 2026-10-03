@@ -23,7 +23,7 @@ export async function GET() {
       environment: process.env.NODE_ENV || 'production',
       confessions_loaded: confessions.length,
       sheet_configured: Boolean(sheetConfig.spreadsheet_id),
-      render_url: process.env.RENDER_EXTERNAL_URL || 'https://confession-5ha2.onrender.com',
+      render_url: process.env.RENDER_EXTERNAL_URL || 'https://confession-4nbc.onrender.com',
     },
     {
       status: 200,

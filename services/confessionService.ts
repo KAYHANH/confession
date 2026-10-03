@@ -393,9 +393,10 @@ export class ConfessionService {
   public async publishConfession(
     id: string,
     options?: {
-      cardMode?: 'fit' | 'hook' | 'carousel' | 'auto';
+      cardMode?: 'fit' | 'hook' | 'carousel' | 'auto' | 'reel';
       customCaption?: string;
       templateId?: string;
+      videoUrl?: string;
     }
   ): Promise<Confession> {
     // 1. Lock check to prevent double-click race condition
@@ -479,7 +480,23 @@ export class ConfessionService {
       let generatedPublicUrls: string[] = [];
       let fullCaption = '';
 
-      if (effectiveMode === 'fit') {
+      if (requestedMode === 'reel') {
+        const videoUrl = options?.videoUrl;
+        if (!videoUrl) {
+          throw new Error('A valid public video URL is required to publish an Instagram Reel.');
+        }
+        fullCaption = (options?.customCaption && options.customCaption.trim()) ||
+          buildInstagramCaption({
+            confessionNumber: confession.google_sheet_row || 1,
+            hashtags: confession.hashtags || [],
+            mode: 'fit',
+          });
+
+        await this.updateConfession(id, {
+          template_id: template.id,
+          generated_image_url: videoUrl,
+        });
+      } else if (effectiveMode === 'fit') {
         // Enforce fit requirement: check if text can safely fit on single card
         if (!canFitOnSingleCard(sourceText, template)) {
           throw new Error('This confession does not safely fit on one card without clipping. Please use Carousel format.');
@@ -601,9 +618,11 @@ export class ConfessionService {
         });
       }
 
-      // 5. Call Instagram Service (single post or carousel based on generatedPublicUrls)
+      // 5. Call Instagram Service (reel, carousel, or single post)
       let publishResult;
-      if (generatedPublicUrls.length > 1) {
+      if (requestedMode === 'reel') {
+        publishResult = await instagramService.publishReel(confession, options?.videoUrl!, fullCaption);
+      } else if (generatedPublicUrls.length > 1) {
         publishResult = await instagramService.publishCarousel(confession, generatedPublicUrls, fullCaption);
       } else {
         publishResult = await instagramService.publishPost(confession, generatedPublicUrls[0], fullCaption);

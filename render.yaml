@@ -17,9 +17,9 @@ services:
       - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
         value: "1"
       - key: NEXT_PUBLIC_APP_URL
-        value: https://confession-5ha2.onrender.com
+        value: https://confession-4nbc.onrender.com
       - key: RENDER_EXTERNAL_URL
-        value: https://confession-5ha2.onrender.com
+        value: https://confession-4nbc.onrender.com
       - key: MOCK_EXTERNAL_APIS
         value: "false"
 

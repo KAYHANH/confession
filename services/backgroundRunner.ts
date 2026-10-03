@@ -33,7 +33,7 @@ export function startBackgroundRunner() {
     return (
       process.env.RENDER_EXTERNAL_URL ||
       process.env.NEXT_PUBLIC_APP_URL ||
-      'https://confession-5ha2.onrender.com'
+      'https://confession-4nbc.onrender.com'
     ).replace(/\/$/, '');
   };
 
