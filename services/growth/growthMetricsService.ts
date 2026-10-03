@@ -23,6 +23,38 @@ import {
 import { growthStore } from '@/lib/growthStore';
 import { mockStore } from '@/lib/mockStore';
 
+// Account timezone — IST (UTC+5:30). All time-slot analysis MUST use this
+// so that "peak hour 3" means 3 AM IST, not 3 AM UTC (which is 8:30 AM IST).
+const ACCOUNT_TIMEZONE = 'Asia/Kolkata';
+
+/**
+ * Extract the hour-of-day (0–23) in the account timezone from an ISO timestamp.
+ */
+function getHourInAccountTz(isoString: string): number {
+  const date = new Date(isoString);
+  const hourStr = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    hour12: false,
+    timeZone: ACCOUNT_TIMEZONE,
+  }).format(date);
+  // '24' is returned for midnight by some engines; normalise to 0
+  const h = parseInt(hourStr, 10);
+  return h === 24 ? 0 : h;
+}
+
+/**
+ * Extract the day-of-week (0 = Sunday … 6 = Saturday) in the account timezone.
+ */
+function getDayInAccountTz(isoString: string): number {
+  const date = new Date(isoString);
+  const dayStr = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    timeZone: ACCOUNT_TIMEZONE,
+  }).format(date);
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return map[dayStr] ?? date.getDay();
+}
+
 export class GrowthMetricsService {
   /**
    * Helper: Calculate median of numeric array
@@ -356,9 +388,11 @@ export class GrowthMetricsService {
     }
 
     for (const m of mediaList) {
-      const d = new Date(m.published_at);
-      const day = d.getDay();
-      const hour = d.getHours();
+      // Use IST-aware helpers so that a post published at 9:00 AM IST
+      // is bucketed into hour=9, not hour=3 (UTC). This was the root cause
+      // of the Growth Advisor showing "3:30 AM" instead of "9:00 AM".
+      const day = getDayInAccountTz(m.published_at);
+      const hour = getHourInAccountTz(m.published_at);
       const snap = latestSnapMap.get(m.id);
 
       if (snap) {

@@ -171,7 +171,7 @@ export interface SystemSettings {
   random_gap_enabled?: boolean; // When true, intervals vary organically between min and max gap (e.g. 45m to 95m / 1.5h)
   min_gap_minutes?: number; // Minimum organic gap in minutes (e.g. 45 min)
   max_gap_minutes?: number; // Maximum organic gap in minutes (e.g. 95 min / 1.5 hours)
-  current_random_gap_minutes?: number; // Currently rolled dynamic gap for the next post (e.g. 49, 53, 70, 90)
+  current_random_gap_minutes?: number | null; // Currently rolled dynamic gap. null = roll fresh from min/max on next cycle
   anti_bot_jitter_minutes?: number; // Anti-Bot Natural Jitter max dynamic variance (e.g. +0 to +30 min, default 30)
   current_jitter_minutes?: number; // Current dynamic variance applied to the upcoming post interval
   enable_profanity_filter: boolean;

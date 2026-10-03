@@ -818,9 +818,17 @@ export default function ConfessionsPage() {
                               <span className="text-[11px] text-blue-500 font-semibold animate-pulse">⏳ Uploading…</span>
                             ) : qIdx >= 0 ? (
                               <div className="text-[11px]">
-                                <div className="text-indigo-600 font-semibold">{formatETA(computeETA(qIdx))}</div>
+                                <div className="text-indigo-600 font-semibold">
+                                   {c.scheduled_at ? formatETA(new Date(c.scheduled_at)) : formatETA(computeETA(qIdx))}
+                                 </div>
                                 <div className="text-zinc-400">
-                                  Queue #{qIdx + 1} · {cadenceInfo ? `${cadenceInfo.mode === 'growth_optimized' ? 'Growth' : 'Adaptive'} · ${publishSettings.interval}m gap` : `${publishSettings.interval}m interval`}
+                                  {(() => {
+                                    const actualGap = c.scheduling_gap_minutes;
+                                    const modeLabel = cadenceInfo ? (cadenceInfo.mode === 'growth_optimized' ? 'Growth' : 'Adaptive') : 'Adaptive';
+                                    if (actualGap) return `Queue #${qIdx + 1} · ${modeLabel} · ${actualGap}m gap`;
+                                    if (cadenceInfo) return `Queue #${qIdx + 1} · ${modeLabel} · ${cadenceInfo.gapMin}–${cadenceInfo.gapMax}m`;
+                                    return `Queue #${qIdx + 1} · ${publishSettings.interval}m interval`;
+                                  })()}
                                 </div>
                               </div>
                             ) : <span className="text-zinc-300 text-[11px]">—</span>

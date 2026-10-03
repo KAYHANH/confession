@@ -136,7 +136,7 @@ const DEFAULT_SETTINGS: SystemSettings = {
   random_gap_enabled: process.env.RANDOM_GAP_ENABLED !== 'false',
   min_gap_minutes: parseInt(process.env.QUEUE_RANDOM_GAP_MIN_MINUTES || process.env.MIN_GAP_MINUTES || '30', 10),
   max_gap_minutes: parseInt(process.env.QUEUE_RANDOM_GAP_MAX_MINUTES || process.env.MAX_GAP_MINUTES || '75', 10),
-  current_random_gap_minutes: 60,
+  current_random_gap_minutes: null, // null = roll fresh gap from min/max range on first cycle (never hardcode 60)
   anti_bot_jitter_minutes: 30,
   current_jitter_minutes: Math.floor(Math.random() * 31),
   enable_profanity_filter: true,
@@ -150,10 +150,10 @@ const DEFAULT_SETTINGS: SystemSettings = {
     '#relationshipconfessions',
     '#campuslife',
   ],
-  enable_growth_intelligence: false,
-  enable_analytics_collection: false,
+  enable_growth_intelligence: true,  // ON by default — powers adaptive scheduling
+  enable_analytics_collection: true, // ON by default — needed for Growth Intelligence data
   enable_reel_engine: false,
-  enable_growth_recommendations: false,
+  enable_growth_recommendations: true,
   enable_auto_optimization: false,
   enable_experiments: false,
   scheduling_strategy_mode: (process.env.QUEUE_SCHEDULING_MODE as any) || 'AUTO',

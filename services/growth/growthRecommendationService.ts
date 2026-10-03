@@ -42,12 +42,14 @@ export class GrowthRecommendationService {
     }
 
     // 2. Best Performing Time Window
-    // Sort time slots by median reach
+    // Slots are now stored in IST hour values (fixed in growthMetricsService).
+    // Format the top peak hour as a clean 12-hour IST display string.
     const sortedSlots = [...timeSlots].sort((a, b) => b.median_reach - a.median_reach);
     const topSlot = sortedSlots[0] || { hour_of_day: 19, median_reach: 0 };
-    const formattedHour = topSlot.hour_of_day % 12 || 12;
-    const ampm = topSlot.hour_of_day >= 12 ? 'PM' : 'AM';
-    const recommendedTime = `${formattedHour}:30 ${ampm}`;
+    const istHour = topSlot.hour_of_day; // already in IST — no UTC offset needed
+    const displayHour = istHour % 12 === 0 ? 12 : istHour % 12;
+    const ampm = istHour >= 12 ? 'PM' : 'AM';
+    const recommendedTime = `${displayHour}:00 ${ampm} IST`;
 
     // 3. Hook Style
     const sortedHooks = [...hooks].sort((a, b) => b.median_reach - a.median_reach);
