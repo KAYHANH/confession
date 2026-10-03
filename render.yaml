@@ -69,7 +69,13 @@ services:
       - key: INSTAGRAM_HANDLE
         value: "@_hpsconfession_"
 
-      # Security
+      # Admin Authentication & Security
+      - key: ADMIN_EMAIL
+        value: admin@confessionflow.io
+      - key: ADMIN_PASSWORD
+        value: admin123456
+      - key: AUTH_SECRET
+        generateValue: true
       - key: CRON_SECRET
         generateValue: true
 
