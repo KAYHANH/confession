@@ -120,8 +120,34 @@ export class SchedulingService {
   public async syncGoogleSheet(): Promise<{ imported: number; processed: number }> {
     const config = mockStore.getGoogleSheetConfig();
     const rows = await googleSheetsService.fetchRows(config);
-    const existing = mockStore.getConfessions();
-    const deletedRowNumbers = mockStore.getDeletedRowNumbers();
+
+    // Load existing confessions from the real store (Supabase or mockStore).
+    // We must fetch ALL to detect DELETED ones and avoid re-importing them.
+    let existing: Confession[];
+    const useSupabase = process.env.MOCK_EXTERNAL_APIS !== 'true' &&
+      !!process.env.NEXT_PUBLIC_SUPABASE_URL &&
+      !process.env.NEXT_PUBLIC_SUPABASE_URL.includes('placeholder');
+
+    if (useSupabase) {
+      // Fetch all (no status filter) so we see DELETED (REJECTED+marker) rows too
+      const allPages = await confessionService.getConfessions({ limit: 1000 });
+      existing = allPages.confessions;
+      // Also fetch deleted specifically (uses the __DELETED__ marker query)
+      const deletedPage = await confessionService.getConfessions({ status: 'DELETED', limit: 1000 });
+      existing = [...existing, ...deletedPage.confessions.filter(d => !existing.find(e => e.id === d.id))];
+    } else {
+      existing = mockStore.getConfessions();
+    }
+
+    // Build deleted row number set from the fetched confessions (works for both Supabase and mockStore)
+    const deletedFromDb = new Set(
+      existing.filter(c => c.status === 'DELETED').map(c => c.google_sheet_row).filter(Boolean)
+    );
+    // Also include legacy deletedRowNumbers from mockStore (for non-Supabase mode)
+    const deletedRowNumbers = useSupabase ? deletedFromDb : new Set([
+      ...mockStore.getDeletedRowNumbers(),
+      ...deletedFromDb,
+    ]);
 
     const existingRowSet = new Set(
       existing.map((c) => c.google_sheet_row)
@@ -156,17 +182,24 @@ export class SchedulingService {
 
         if (isAlreadyPublished) {
           if (existingConf && existingConf.status !== 'PUBLISHED') {
-            mockStore.updateConfession(existingConf.id, {
-              status: 'PUBLISHED',
+            const updatePayload = {
+              status: 'PUBLISHED' as ConfessionStatus,
               published_at: row.processedAt || existingConf.published_at || new Date().toISOString(),
               instagram_media_id: row.postId || existingConf.instagram_media_id || 'sheet-imported-published',
-            });
+            };
+            if (useSupabase) {
+              confessionService.updateConfession(existingConf.id, updatePayload).catch(() => {});
+            } else {
+              mockStore.updateConfession(existingConf.id, updatePayload);
+            }
           }
         } else if (isRejected) {
           if (existingConf && existingConf.status !== 'REJECTED') {
-            mockStore.updateConfession(existingConf.id, {
-              status: 'REJECTED',
-            });
+            if (useSupabase) {
+              confessionService.updateConfession(existingConf.id, { status: 'REJECTED' }).catch(() => {});
+            } else {
+              mockStore.updateConfession(existingConf.id, { status: 'REJECTED' });
+            }
           }
         }
         continue;
@@ -240,7 +273,16 @@ export class SchedulingService {
     }
 
     if (newConfessions.length > 0) {
-      mockStore.addConfessions(newConfessions);
+      if (useSupabase) {
+        // Write new rows to Supabase instead of the local file store
+        for (const confession of newConfessions) {
+          await confessionService.createConfession(confession as any).catch((err: any) => {
+            console.warn('[SchedulingService] Failed to insert confession to Supabase:', err?.message);
+          });
+        }
+      } else {
+        mockStore.addConfessions(newConfessions);
+      }
     }
 
     // Update sheet connection sync state

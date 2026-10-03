@@ -145,7 +145,18 @@ export class ConfessionService {
     const supabase = createServerSupabaseClient();
     let query = supabase.from('confessions').select('*', { count: 'exact' });
 
-    if (status) query = query.eq('status', status);
+    // Handle soft-delete workaround: DELETED rows are stored as REJECTED + __DELETED__ marker
+    if (status === 'DELETED') {
+      // Query for the __DELETED__ marker in error_message (our schema-free workaround)
+      query = query.eq('status', 'REJECTED').like('error_message', '__DELETED__%');
+    } else if (status) {
+      // Normal status filter — but also exclude soft-deleted REJECTED rows from non-DELETED tabs
+      if (status === 'REJECTED') {
+        query = query.eq('status', 'REJECTED').not('error_message', 'like', '__DELETED__%');
+      } else {
+        query = query.eq('status', status);
+      }
+    }
     if (moderationStatus) query = query.eq('moderation_status', moderationStatus);
     if (templateId) query = query.eq('template_id', templateId);
     if (search) query = query.ilike('cleaned_text', `%${search}%`);
@@ -300,6 +311,51 @@ export class ConfessionService {
     }
 
     return success;
+  }
+
+  /**
+   * Create a new confession record (used by Google Sheet sync when Supabase is active)
+   */
+  public async createConfession(confession: Omit<Confession, 'id' | 'created_at' | 'updated_at'>): Promise<Confession | null> {
+    if (!this.useSupabase()) {
+      // mockStore path — addConfessions handles this
+      return null;
+    }
+    const supabase = createServerSupabaseClient();
+    // Strip any columns not in the original Supabase schema
+    const safeRow: any = {
+      google_sheet_id: confession.google_sheet_id,
+      google_sheet_name: confession.google_sheet_name,
+      google_sheet_row: confession.google_sheet_row,
+      name: confession.name,
+      original_text: confession.original_text,
+      cleaned_text: confession.cleaned_text,
+      display_name: confession.display_name,
+      is_anonymous: confession.is_anonymous,
+      status: confession.status,
+      moderation_status: confession.moderation_status,
+      moderation_reason: confession.moderation_reason,
+      ai_processed: confession.ai_processed ?? false,
+      template_id: confession.template_id ?? null,
+      caption: confession.caption ?? null,
+      hashtags: confession.hashtags ?? [],
+      scheduled_at: confession.scheduled_at ?? null,
+      published_at: confession.published_at ?? null,
+      instagram_media_id: confession.instagram_media_id ?? null,
+      instagram_permalink: confession.instagram_permalink ?? null,
+      retry_count: confession.retry_count ?? 0,
+      error_message: confession.error_message ?? null,
+    };
+    const { data, error } = await supabase
+      .from('confessions')
+      .insert(safeRow)
+      .select()
+      .single();
+    if (error) {
+      console.error('[ConfessionService] createConfession failed:', error.message);
+      return null;
+    }
+    return this.decodeSupabaseRow(data) as Confession;
   }
 
   /**
