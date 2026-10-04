@@ -130,10 +130,10 @@ const DEFAULT_SETTINGS: SystemSettings = {
   auto_publish: process.env.AUTO_PUBLISH_ENABLED !== 'false',
   publishing_mode: process.env.AUTO_PUBLISH_ENABLED === 'false' ? 'MANUAL_APPROVAL' : 'AUTO_PUBLISH',
   default_publishing_time: '19:30',
-  max_daily_posts: parseInt(process.env.MAX_DAILY_POSTS || '8', 10),
+  max_daily_posts: parseInt(process.env.MAX_DAILY_POSTS || '24', 10),
   auto_publish_interval_minutes: parseInt(process.env.AUTO_PUBLISH_INTERVAL_MINUTES || '60', 10),
-  auto_publish_start_hour: parseInt(process.env.AUTO_PUBLISH_START_HOUR || '9', 10),
-  auto_publish_end_hour: parseInt(process.env.AUTO_PUBLISH_END_HOUR || '22', 10),
+  auto_publish_start_hour: parseInt(process.env.AUTO_PUBLISH_START_HOUR || '0', 10),
+  auto_publish_end_hour: parseInt(process.env.AUTO_PUBLISH_END_HOUR || '24', 10),
   random_gap_enabled: process.env.RANDOM_GAP_ENABLED !== 'false',
   min_gap_minutes: parseInt(process.env.QUEUE_RANDOM_GAP_MIN_MINUTES || process.env.MIN_GAP_MINUTES || '30', 10),
   max_gap_minutes: parseInt(process.env.QUEUE_RANDOM_GAP_MAX_MINUTES || process.env.MAX_GAP_MINUTES || '75', 10),
@@ -222,11 +222,25 @@ class MockStore {
           if (!parsed.settings.default_template_id || parsed.settings.default_template_id === '77777777-7777-7777-7777-777777777777') {
             parsed.settings.default_template_id = '44444444-4444-4444-4444-444444444444';
           }
+          // Auto-upgrade legacy daytime-only settings (9 to 22) to true 24/7 round-the-clock publishing (0 to 24)
+          if (parsed.settings.auto_publish_start_hour === 9 && parsed.settings.auto_publish_end_hour === 22) {
+            parsed.settings.auto_publish_start_hour = 0;
+            parsed.settings.auto_publish_end_hour = 24;
+          }
+          if (parsed.settings.max_daily_posts === 8) {
+            parsed.settings.max_daily_posts = 24;
+          }
         }
         if (parsed.confessions) {
           parsed.confessions.forEach((c: any) => {
             if (c.template_id === '77777777-7777-7777-7777-777777777777') {
               c.template_id = '44444444-4444-4444-4444-444444444444';
+            }
+            // Auto-heal confessions that were trapped in static SCHEDULED state back to APPROVED
+            // so they are immediately available in the active 24/7 FIFO queue
+            if (c.status === 'SCHEDULED' && !c.published_at && !c.instagram_media_id) {
+              c.status = 'APPROVED';
+              c.scheduled_at = null;
             }
           });
         }

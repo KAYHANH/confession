@@ -1038,46 +1038,66 @@ function SettingsContent() {
                       type="number"
                       min={1}
                       max={50}
-                      value={generalSettings.max_daily_posts ?? 8}
-                      onChange={(e) => updateSettingField('max_daily_posts', parseInt(e.target.value || '8', 10))}
+                      value={generalSettings.max_daily_posts ?? 24}
+                      onChange={(e) => updateSettingField('max_daily_posts', parseInt(e.target.value || '24', 10))}
                       className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
                     />
                     <span className="text-[10px] text-zinc-500 mt-1 block">
-                      Safe limit: 8 posts/day avoids spam blocking from Meta Graph API.
+                      Meta Graph API limit: 50 posts/day. 24–30 posts/day is optimal for 24/7 continuous posting.
                     </span>
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-zinc-700 mb-1.5">
-                      Active Hours Window (Local)
-                    </label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block font-semibold text-zinc-700">
+                        Active Hours Window (Local)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const updated = {
+                            ...generalSettings,
+                            auto_publish_start_hour: 0,
+                            auto_publish_end_hour: 24,
+                            max_daily_posts: 24,
+                          };
+                          setGeneralSettings(updated);
+                          handleSaveGeneral(updated, true);
+                        }}
+                        className="text-[10px] text-purple-600 font-bold hover:underline cursor-pointer"
+                      >
+                        ⚡ Set 24/7 All Day & Night
+                      </button>
+                    </div>
                     <div className="flex items-center gap-2">
                       <select
-                        value={generalSettings.auto_publish_start_hour ?? 9}
+                        value={generalSettings.auto_publish_start_hour ?? 0}
                         onChange={(e) => updateSettingField('auto_publish_start_hour', parseInt(e.target.value, 10))}
                         className="w-1/2 px-2.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
                       >
                         {Array.from({ length: 24 }).map((_, h) => (
                           <option key={h} value={h}>
-                            {String(h).padStart(2, '0')}:00 {h === 9 ? '(9 AM - Recommended)' : ''}
+                            {String(h).padStart(2, '0')}:00 {h === 0 ? '(00:00 - 24/7)' : h === 9 ? '(9 AM)' : ''}
                           </option>
                         ))}
                       </select>
                       <span className="text-zinc-500">to</span>
                       <select
-                        value={generalSettings.auto_publish_end_hour ?? 22}
+                        value={generalSettings.auto_publish_end_hour ?? 24}
                         onChange={(e) => updateSettingField('auto_publish_end_hour', parseInt(e.target.value, 10))}
                         className="w-1/2 px-2.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
                       >
-                        {Array.from({ length: 24 }).map((_, h) => (
+                        {Array.from({ length: 25 }).map((_, h) => (
                           <option key={h} value={h}>
-                            {String(h).padStart(2, '0')}:00 {h === 22 ? '(10 PM - Overnight Rest)' : ''}
+                            {String(h).padStart(2, '0')}:00 {h === 24 ? '(24:00 - 24/7 Round Clock)' : h === 22 ? '(10 PM - Rest)' : ''}
                           </option>
                         ))}
                       </select>
                     </div>
                     <span className="text-[10px] text-zinc-500 mt-1 block">
-                      Mimics human daytime schedule. Rests the account overnight (10 PM - 9 AM).
+                      {(generalSettings.auto_publish_start_hour ?? 0) === 0 && (generalSettings.auto_publish_end_hour ?? 24) >= 24
+                        ? '🟢 24/7 Continuous Publishing Active (Posts round the clock without nightly pause).'
+                        : 'Custom window active. Account rests outside these hours.'}
                     </span>
                   </div>
                 </div>

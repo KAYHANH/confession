@@ -53,20 +53,27 @@ export class SchedulingService {
 
     const settings = mockStore.getSettings();
 
-    // Respect safe human daytime hours (9:00 AM to 10:00 PM) for scheduled posts
+    // Respect safe human daytime hours for scheduled posts (unless 24/7 mode is active)
     try {
-      const formatter = new Intl.DateTimeFormat('en-US', {
-        timeZone: settings.timezone || 'Asia/Kolkata',
-        hour: 'numeric',
-        hour12: false,
-      });
-      const currentHour = parseInt(formatter.format(new Date()), 10);
-      const startHour = settings.auto_publish_start_hour ?? 9;
-      const endHour = settings.auto_publish_end_hour ?? 22;
+      const startHour = settings.auto_publish_start_hour ?? 0;
+      const endHour = settings.auto_publish_end_hour ?? 24;
+      const is24_7 = (startHour === 0 && endHour >= 24) || (startHour === endHour) || (startHour === 0 && endHour === 0);
 
-      if (currentHour < startHour || currentHour >= endHour) {
-        console.log(`[SchedulingService] Outside active human hours (${currentHour}:00, safe daytime window is ${startHour}:00 - ${endHour}:00). Resting account overnight.`);
-        return { published: [], errors: [] };
+      if (!is24_7) {
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: settings.timezone || 'Asia/Kolkata',
+          hour: 'numeric',
+          hour12: false,
+        });
+        const currentHour = parseInt(formatter.format(new Date()), 10);
+        const isWithinWindow = startHour < endHour
+          ? (currentHour >= startHour && currentHour < endHour)
+          : (currentHour >= startHour || currentHour < endHour);
+
+        if (!isWithinWindow) {
+          console.log(`[SchedulingService] Outside active human hours (${currentHour}:00, safe daytime window is ${startHour}:00 - ${endHour}:00). Resting account overnight.`);
+          return { published: [], errors: [] };
+        }
       }
     } catch {}
 
@@ -103,6 +110,9 @@ export class SchedulingService {
         try {
           await confessionService.publishConfession(post.id);
           published.push(post.id);
+          this.lastPublishedAtMs = Date.now();
+          // Space out due posts organically instead of blasting them all simultaneously
+          break;
         } catch (err: any) {
           errors.push({ id: post.id, error: err?.message || 'Failed' });
         }
@@ -367,9 +377,9 @@ export class SchedulingService {
 
     try {
       const stats = await confessionService.getDashboardStats();
-      const maxDaily = settings.max_daily_posts || 8;
+      const maxDaily = settings.max_daily_posts || 24;
 
-      // 3. Daily volume guard (max 8 daily posts default)
+      // 3. Daily volume guard
       if (stats.publishedToday >= maxDaily && !force) {
         console.warn(`[AutoPublisher] Daily post limit reached (${stats.publishedToday}/${maxDaily}). Resting account until tomorrow.`);
         return {
@@ -379,27 +389,32 @@ export class SchedulingService {
         };
       }
 
-      // 4. Active hours window guard (unless forced manually via button)
-      // Mimic human daytime schedule: 9:00 AM (09:00) to 10:00 PM (22:00)
-      // Avoids posting between 10:00 PM and 9:00 AM (resting account overnight)
+      // 4. Active hours window guard (unless forced manually via button or in 24/7 mode)
       if (!force) {
         try {
-          const formatter = new Intl.DateTimeFormat('en-US', {
-            timeZone: settings.timezone || 'Asia/Kolkata',
-            hour: 'numeric',
-            hour12: false,
-          });
-          const currentHour = parseInt(formatter.format(new Date()), 10);
-          const startHour = settings.auto_publish_start_hour ?? 9;
-          const endHour = settings.auto_publish_end_hour ?? 22;
+          const startHour = settings.auto_publish_start_hour ?? 0;
+          const endHour = settings.auto_publish_end_hour ?? 24;
+          const is24_7 = (startHour === 0 && endHour >= 24) || (startHour === endHour) || (startHour === 0 && endHour === 0);
 
-          if (currentHour < startHour || currentHour >= endHour) {
-            console.log(`[AutoPublisher] Outside active human hours (${currentHour}:00, safe daytime window is ${startHour}:00 - ${endHour}:00). Resting account.`);
-            return {
-              ran: false,
-              status: 'OUTSIDE_HOURS',
-              reason: `Outside active human hours (${currentHour}:00 in ${settings.timezone || 'Asia/Kolkata'}). Safe daytime window is ${startHour}:00 - ${endHour}:00. Overnight account rest active.`,
-            };
+          if (!is24_7) {
+            const formatter = new Intl.DateTimeFormat('en-US', {
+              timeZone: settings.timezone || 'Asia/Kolkata',
+              hour: 'numeric',
+              hour12: false,
+            });
+            const currentHour = parseInt(formatter.format(new Date()), 10);
+            const isWithinWindow = startHour < endHour
+              ? (currentHour >= startHour && currentHour < endHour)
+              : (currentHour >= startHour || currentHour < endHour);
+
+            if (!isWithinWindow) {
+              console.log(`[AutoPublisher] Outside active human hours (${currentHour}:00, window is ${startHour}:00 - ${endHour}:00). Resting account.`);
+              return {
+                ran: false,
+                status: 'OUTSIDE_HOURS',
+                reason: `Outside active human hours (${currentHour}:00 in ${settings.timezone || 'Asia/Kolkata'}). Safe daytime window is ${startHour}:00 - ${endHour}:00. Overnight account rest active.`,
+              };
+            }
           }
         } catch {
           // If timezone formatting fails, proceed safely
@@ -547,7 +562,7 @@ export class SchedulingService {
           ? ['LOW', 'MEDIUM']
           : ['LOW'];
 
-      // Prioritize APPROVED posts, then READY_FOR_REVIEW safe posts
+      // Prioritize APPROVED, READY_FOR_REVIEW, and unposted SCHEDULED confessions in FIFO row order
       const eligibleCandidates = freshConfessions
         .filter(
           (c) =>
@@ -555,15 +570,13 @@ export class SchedulingService {
             c.status !== 'REJECTED' &&
             c.status !== 'DELETED' &&
             c.status !== 'PUBLISHING' &&
-            (c.status === 'APPROVED' || c.status === 'READY_FOR_REVIEW') &&
+            (c.status === 'APPROVED' || c.status === 'READY_FOR_REVIEW' || c.status === 'SCHEDULED') &&
             allowedRisks.includes(c.moderation_status) &&
             !c.instagram_media_id &&
             !c.published_at
         )
         .sort((a, b) => {
-          // APPROVED first, then lowest row number
-          if (a.status === 'APPROVED' && b.status !== 'APPROVED') return -1;
-          if (b.status === 'APPROVED' && a.status !== 'APPROVED') return 1;
+          // Strict FIFO sequence by Google Sheet row number (#035, #036, #037...)
           return (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
         });
 
@@ -775,16 +788,15 @@ export class SchedulingService {
     _preferredWindows?: PreferredPostingWindow[]
   ): Date {
     const tz = settings.timezone || 'Asia/Kolkata';
-    const startHour = settings.auto_publish_start_hour ?? 9;
-    const endHour = settings.auto_publish_end_hour ?? 22;
+    const startHour = settings.auto_publish_start_hour ?? 0;
+    const endHour = settings.auto_publish_end_hour ?? 24;
+
+    const is24_7 = (startHour === 0 && endHour >= 24) || (startHour === endHour) || (startHour === 0 && endHour === 0);
+    if (is24_7) {
+      return targetDate;
+    }
 
     let candidate = new Date(targetDate.getTime());
-    const nowMs = Date.now();
-
-    // Ensure candidate is at least 1 minute in the future
-    if (candidate.getTime() <= nowMs) {
-      candidate = new Date(nowMs + 60 * 1000);
-    }
 
     for (let step = 0; step < 48; step++) {
       let hour: number;
@@ -840,7 +852,7 @@ export class SchedulingService {
   }): Promise<ScheduleGenerationResult> {
     const settings = mockStore.getSettings();
     const tz = settings.timezone || 'Asia/Kolkata';
-    const maxDaily = settings.max_daily_posts || 8;
+    const maxDaily = settings.max_daily_posts || 24;
     const forceRecalculate = options?.forceRecalculate ?? false;
     const preserveExisting = options?.preserveExistingFuture ?? true;
 
@@ -1014,7 +1026,7 @@ export class SchedulingService {
     const nowMs = now.getTime();
     const settings = mockStore.getSettings();
     const tz = settings.timezone || 'Asia/Kolkata';
-    const maxDaily = settings.max_daily_posts || 8;
+    const maxDaily = settings.max_daily_posts || 24;
 
     const { cadenceAnalyzer } = await import('@/services/growth/cadenceAnalyzer');
     const rec = await cadenceAnalyzer.getCadenceRecommendation();
@@ -1175,12 +1187,12 @@ export class SchedulingService {
       futureScheduled: futureScheduled.length,
       staleScheduled: staleScheduled.length,
       postsScheduledToday,
-      maxDailyPosts: settings.max_daily_posts || 8,
+      maxDailyPosts: settings.max_daily_posts || 24,
       earliestScheduledAt: sortedFuture[0]?.scheduled_at || null,
       latestScheduledAt: sortedFuture[sortedFuture.length - 1]?.scheduled_at || null,
       activeHours: {
-        startHour: settings.auto_publish_start_hour ?? 9,
-        endHour: settings.auto_publish_end_hour ?? 22,
+        startHour: settings.auto_publish_start_hour ?? 0,
+        endHour: settings.auto_publish_end_hour ?? 24,
         timezone: tz,
       },
       recommendation,

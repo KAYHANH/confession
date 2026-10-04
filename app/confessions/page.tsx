@@ -213,26 +213,29 @@ export default function ConfessionsPage() {
 
   const computeETA = (queueIndex: number): Date => {
     const { startHour, endHour } = publishSettings;
+    const is24_7 = (startHour === 0 && endHour >= 24) || (startHour === endHour) || (startHour === 0 && endHour === 0);
     let slotTime = new Date(Date.now() + 5 * 60 * 1000);
     for (let i = 0; i <= queueIndex; i++) {
       const stepGapMs = getOrganicGap(i) * 60 * 1000;
       slotTime = new Date(slotTime.getTime() + stepGapMs);
 
-      let safety = 0;
-      while (safety < 48) {
-        safety++;
-        const hour = parseInt(
-          new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(slotTime), 10
-        );
-        if (hour >= startHour && hour < endHour) {
-          break;
-        }
-        if (hour >= endHour) {
-          const advanceHours = 24 - hour + startHour;
-          slotTime = new Date(slotTime.getTime() + advanceHours * 60 * 60 * 1000);
-        } else if (hour < startHour) {
-          const advanceHours = startHour - hour;
-          slotTime = new Date(slotTime.getTime() + advanceHours * 60 * 60 * 1000);
+      if (!is24_7) {
+        let safety = 0;
+        while (safety < 48) {
+          safety++;
+          const hour = parseInt(
+            new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(slotTime), 10
+          );
+          if (hour >= startHour && hour < endHour) {
+            break;
+          }
+          if (hour >= endHour) {
+            const advanceHours = 24 - hour + startHour;
+            slotTime = new Date(slotTime.getTime() + advanceHours * 60 * 60 * 1000);
+          } else if (hour < startHour) {
+            const advanceHours = startHour - hour;
+            slotTime = new Date(slotTime.getTime() + advanceHours * 60 * 60 * 1000);
+          }
         }
       }
     }

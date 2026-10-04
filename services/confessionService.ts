@@ -1145,6 +1145,7 @@ export class ConfessionService {
       try {
         const updateFields: Partial<Confession> = {
           status: nextStatus,
+          scheduled_at: null,
           error_message: null,
           retry_count: 0,
           generated_image_url: null,
