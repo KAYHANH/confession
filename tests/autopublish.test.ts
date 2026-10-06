@@ -553,4 +553,90 @@ describe('24/7 Autonomous Auto-Publish Engine', () => {
     expect(newGap).toBeGreaterThanOrEqual(45);
     expect(newGap).toBeLessThanOrEqual(95);
   });
+
+  it('Test 9: should strictly NOT publish due scheduled posts when auto_publish is disabled or MANUAL_APPROVAL', async () => {
+    vi.spyOn(mockStore, 'getSettings').mockReturnValue({
+      brand_name: 'Test',
+      instagram_handle: '@test',
+      logo_url: '/logo.png',
+      default_template_id: 'tpl-1',
+      timezone: 'Asia/Kolkata',
+      auto_publish: false,
+      publishing_mode: 'MANUAL_APPROVAL',
+      default_publishing_time: '19:30',
+      max_daily_posts: 10,
+      enable_profanity_filter: true,
+      enable_pii_detection: true,
+      require_approval: true,
+      risk_threshold: 'LOW',
+      default_hashtags: ['#test'],
+    });
+
+    const publishSpy = vi.spyOn(confessionService, 'publishConfession').mockResolvedValue({} as any);
+
+    const pastDate = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    vi.spyOn(confessionService, 'getConfessions').mockResolvedValue({
+      confessions: [
+        {
+          id: 'conf-scheduled-due',
+          google_sheet_id: 'sheet_1',
+          google_sheet_name: 'Confessions',
+          google_sheet_row: 50,
+          name: 'Scheduled Person',
+          original_text: 'Should never upload while auto-publish is off',
+          cleaned_text: 'Should never upload while auto-publish is off',
+          display_name: 'Scheduled Person',
+          is_anonymous: true,
+          status: 'SCHEDULED',
+          moderation_status: 'LOW',
+          moderation_reason: null,
+          ai_processed: true,
+          template_id: 'tpl-1',
+          generated_image_url: null,
+          generated_image_path: null,
+          caption: '',
+          hashtags: [],
+          scheduled_at: pastDate,
+          published_at: null,
+          instagram_media_id: null,
+          instagram_permalink: null,
+          retry_count: 0,
+          error_message: null,
+          created_at: pastDate,
+          updated_at: pastDate,
+        },
+      ],
+      total: 1,
+      page: 1,
+      limit: 50,
+      totalPages: 1,
+    });
+
+    // 1. Calling processDuePosts() without force must halt immediately
+    const dueRes = await schedulingService.processDuePosts();
+    expect(dueRes.published).toEqual([]);
+    expect(publishSpy).not.toHaveBeenCalled();
+
+    // 2. Calling processAutoPublishCycle() without force must also skip immediately
+    const cycleRes = await schedulingService.processAutoPublishCycle();
+    expect(cycleRes.ran).toBe(false);
+    expect(cycleRes.status).toBe('SKIPPED');
+    expect(publishSpy).not.toHaveBeenCalled();
+
+    // 3. Calling processDuePosts(true) with explicit manual force must allow publishing
+    vi.spyOn(confessionService, 'getDashboardStats').mockResolvedValue({
+      total: 1,
+      pendingReview: 0,
+      approved: 0,
+      scheduled: 1,
+      published: 0,
+      rejected: 0,
+      failed: 0,
+      publishedToday: 0,
+      maxDailyPosts: 10,
+    });
+    const forcedRes = await schedulingService.processDuePosts(true);
+    expect(forcedRes.published).toEqual(['conf-scheduled-due']);
+    expect(publishSpy).toHaveBeenCalledWith('conf-scheduled-due');
+  });
 });

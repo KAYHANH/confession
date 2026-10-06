@@ -120,6 +120,12 @@ export interface MediaPerformanceSnapshot {
   api_version: string;
   collection_status: SnapshotCollectionStatus;
   unsupported_metrics: string[];
+  views_delta?: number | null;
+  reach_delta?: number | null;
+  share_delta?: number | null;
+  save_delta?: number | null;
+  comment_delta?: number | null;
+  views_velocity_per_hour?: number | null;
   created_at: string;
 }
 
@@ -438,6 +444,23 @@ export interface SchedulerRecommendation {
   };
   experimentId?: string;
   experimentFactor?: string;
+  recommendedDailyPosts?: number;
+  peakHoursSummary?: {
+    bestHour: number;
+    secondBestHour: number;
+    worstHour: number;
+    bestWeekday: number;
+    worstWeekday: number;
+  };
+  postingStrategySummary?: {
+    recommendedPostsPerDay: number;
+    averageGapMinutes: number;
+    bestWindow: string;
+    bestCategory: string;
+    bestFormat: string;
+    reason: string;
+  };
+  contentCategoryInsights?: Record<string, { medianReach: number; recommendedGapMinutes: number }>;
   generated_at: string;
   version: string;
 }
@@ -454,5 +477,340 @@ export interface StaleQueueRepairResult {
   }[];
   strategy: CadenceStrategyType;
   reason: string;
+}
+
+// -------------------------------------------------------------
+// Account-Level Learning & Post Performance Domain Models
+// -------------------------------------------------------------
+
+export type StandardCategoryType =
+  | 'relationship'
+  | 'crush'
+  | 'love'
+  | 'friendship'
+  | 'school'
+  | 'college'
+  | 'teacher'
+  | 'funny'
+  | 'emotional'
+  | 'advice'
+  | 'question'
+  | 'drama'
+  | 'controversial'
+  | 'other';
+
+export interface PostPerformanceRecord {
+  post_id: string; // Internal confession ID
+  instagram_media_id: string;
+  content_id: string;
+  published_at: string;
+  format: MediaFormatType;
+  media_type: string;
+  confession_category: string;
+  confession_subcategory?: string;
+  hook_type: HookType;
+  content_length: number;
+  word_count: number;
+  character_count: number;
+  day_of_week: number; // 0 (Sun) - 6 (Sat)
+  publish_hour: number; // 0 - 23
+  publish_minute: number; // 0 - 59
+  previous_post_gap_minutes: number;
+  posts_in_previous_1h: number;
+  posts_in_previous_3h: number;
+  posts_in_previous_6h: number;
+  posts_in_previous_24h: number;
+
+  // Time to first observed views
+  first_observed_views_at: string | null;
+  minutes_until_first_observed_view: number | null;
+
+  // Peak growth window
+  peak_growth_window: string | null; // e.g. "30–60m"
+  peak_growth_start_age: number | null;
+  peak_growth_end_age: number | null;
+  peak_growth_velocity: number | null; // views/hour
+  peak_clock_window: string | null; // e.g. "8:45–9:15 PM"
+
+  // Milestone views
+  views_1h: number | null;
+  views_3h: number | null;
+  views_6h: number | null;
+  views_12h: number | null;
+  views_24h: number | null;
+  views_48h: number | null;
+  views_72h: number | null;
+  views_7d: number | null;
+
+  // Final observed metrics
+  final_observed_views: number | null;
+  final_observed_reach: number | null;
+  final_observed_shares: number | null;
+  final_observed_saves: number | null;
+  final_observed_comments: number | null;
+  final_observed_profile_visits: number | null;
+  final_observed_follows: number | null;
+
+  // Performance Index & Benchmark
+  performance_index: number | null;
+  percentile: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CategoryDetailedGrowthStats {
+  category: string;
+  post_count: number;
+  median_views: number;
+  mean_views: number;
+  median_reach: number;
+  mean_reach: number;
+  median_shares: number;
+  median_saves: number;
+  median_comments: number;
+  median_profile_visits: number;
+  median_follows: number;
+  median_time_to_first_observed_view: number;
+  median_peak_growth_velocity: number;
+  median_24h_views: number;
+  median_48h_views: number;
+}
+
+export interface FormatDetailedStats {
+  format_type: MediaFormatType;
+  sample_size: number;
+  median_views: number;
+  mean_views: number;
+  median_reach: number;
+  share_rate: number;
+  save_rate: number;
+  comment_rate: number;
+  follow_rate: number;
+  median_24h_views: number;
+  median_peak_velocity: number;
+  median_time_to_first_observed_view: number;
+  support_state: StatisticalSupportState;
+}
+
+export interface TimeWindowDetailedStats {
+  bucket_label: string; // e.g. "19:00 - 20:00" or "Fri 19:30 - 20:00"
+  hour_of_day: number;
+  day_of_week: number;
+  window_type: '60m' | '30m' | 'day_of_week';
+  sample_size: number;
+  median_views: number;
+  median_reach: number;
+  median_shares: number;
+  median_24h_views: number;
+  median_peak_velocity: number;
+}
+
+export interface PostGapDetailedStats {
+  gap_bucket: '0–30m' | '30–60m' | '60–90m' | '90–120m' | '120–180m' | '180m+';
+  sample_size: number;
+  median_views: number;
+  median_reach: number;
+  median_shares: number;
+  median_saves: number;
+  median_24h_views: number;
+  median_peak_velocity: number;
+  observational_finding: string;
+}
+
+export interface PostDensityStats {
+  window_hours: 1 | 3 | 6 | 24;
+  density_bucket: '1 post' | '2 posts' | '3 posts' | '4+ posts';
+  sample_size: number;
+  median_reach: number;
+  median_views: number;
+  median_shares: number;
+}
+
+export interface CombinationStats {
+  key: string; // e.g. "Relationship + 20:00"
+  category: string;
+  time_window: string;
+  format?: MediaFormatType;
+  sample_size: number;
+  median_reach: number;
+  median_views: number;
+  confidence: ConfidenceLevel;
+}
+
+export interface RecencyTrendItem {
+  name: string;
+  type: 'category' | 'format' | 'time_window';
+  direction: 'RISING' | 'DECLINING' | 'STABLE';
+  change_percentage: number;
+  recent_sample: number;
+  historical_sample: number;
+  observed_summary: string;
+}
+
+export interface RecencyTrends {
+  period_comparison: 'last_30_days_vs_historical';
+  rising_categories: RecencyTrendItem[];
+  declining_categories: RecencyTrendItem[];
+  rising_formats: RecencyTrendItem[];
+  declining_formats: RecencyTrendItem[];
+  rising_time_windows: RecencyTrendItem[];
+  declining_time_windows: RecencyTrendItem[];
+}
+
+export interface PercentileDistribution {
+  p25: number;
+  p50: number; // Median
+  p75: number;
+  p90: number;
+}
+
+export interface AccountLearningSummary {
+  total_posts_analyzed: number;
+  median_views: number;
+  mean_views: number;
+  views_distribution: PercentileDistribution;
+  median_reach: number;
+  mean_reach: number;
+  reach_distribution: PercentileDistribution;
+  median_shares: number;
+  median_saves: number;
+  median_comments: number;
+  median_profile_visits: number;
+  median_follows: number;
+  median_24h_views: number;
+  median_48h_views: number;
+  median_peak_velocity: number;
+  median_time_to_first_observed_view: number;
+  best_performing_category: string;
+  best_performing_format: MediaFormatType;
+  best_observed_window: string; // Account publishing clock window
+  best_observed_post_growth_window: string; // Post performance elapsed window (e.g. 30–60m)
+  best_observed_cadence: string;
+  evidence_count: number;
+  confidence: ConfidenceLevel;
+  disclaimer: string;
+}
+
+// -------------------------------------------------------------
+// Groq AI Structured Recommendation & Decision Pipeline
+// -------------------------------------------------------------
+
+export interface GroqSchedulingRecommendation {
+  strategy: string;
+  recommended_format: MediaFormatType;
+  recommended_category_preference?: string;
+  recommended_publish_window: {
+    start: string; // "19:30"
+    end: string;   // "21:00"
+  };
+  recommended_gap_minutes: {
+    min: number;
+    max: number;
+  };
+  recommended_posts_per_3h: number;
+  recommended_daily_posts?: number;
+  recommended_next_publish_at: string;
+  wait_before_publishing_minutes: number;
+  confidence: ConfidenceLevel;
+  evidence_count: number;
+  reason: string;
+  alternative: {
+    format: MediaFormatType;
+    window: string;
+  };
+  exploration: {
+    enabled: boolean;
+    percentage: number;
+  };
+}
+
+export type RecommendationOutcomeType =
+  | 'OUTPERFORMED_EXPECTATION'
+  | 'MET_EXPECTATION'
+  | 'UNDERPERFORMED_EXPECTATION'
+  | 'PENDING';
+
+export interface RecommendationRecord {
+  id: string;
+  content_id?: string;
+  confession_row?: number;
+  recommended_at: string;
+  recommended_time: string;
+  actual_publish_time?: string | null;
+  recommended_gap: number;
+  actual_gap?: number | null;
+  recommended_format: MediaFormatType;
+  actual_format?: MediaFormatType | null;
+  expected_performance_percentile?: number | null;
+  actual_performance_percentile?: number | null;
+  recommendation_accuracy?: number | null;
+  recommendation_outcome?: RecommendationOutcomeType;
+  groq_recommendation: GroqSchedulingRecommendation;
+  validation_status: 'VALIDATED' | 'ADJUSTED_FOR_SAFETY' | 'FALLBACK_BASELINE';
+  applied_schedule_timestamp: string;
+  status: 'PENDING' | 'ACCEPTED' | 'OVERRIDDEN' | 'MANUAL';
+  notes?: string;
+}
+
+// -------------------------------------------------------------
+// Posting Frequency & Saturation Analysis (Authority Model)
+// -------------------------------------------------------------
+
+export interface FrequencySaturationBucket {
+  posts_per_day: number;
+  sample_days: number;
+  sample_posts: number;
+  median_reach_per_post: number;
+  mean_reach_per_post: number;
+  median_total_daily_reach: number;
+  median_views_per_post: number;
+  median_shares_per_post: number;
+  median_saves_per_post: number;
+  median_engagement_rate: number;
+  degradation_percent_vs_peak: number;
+}
+
+export interface FrequencySaturationAnalysis {
+  buckets: FrequencySaturationBucket[];
+  optimal_posts_per_day: number;
+  saturation_knee_point: number | null;
+  degradation_detected: boolean;
+  confidence: number; // 0.00 to 1.00
+  sample_size: number;
+  days_of_data: number;
+  summary: string;
+}
+
+export type AuthoritySource =
+  | 'GROWTH_INTELLIGENCE'
+  | 'SETTINGS_FALLBACK'
+  | 'SETTINGS_HARD_LIMIT'
+  | 'ADMIN_OVERRIDE';
+
+export interface DailyGrowthPlan {
+  date: string; // "YYYY-MM-DD"
+  recommended_posts: number;
+  effective_daily_posts: number;
+  min_allowed_posts: number;
+  max_allowed_posts: number;
+  target_fallback_posts: number;
+  confidence: number; // 0.00 to 1.00
+  sample_size: number;
+  days_of_data: number;
+  is_fallback: boolean;
+  authority_source: AuthoritySource;
+  preferred_windows: Array<{ start: string; end: string; label?: string }>;
+  recommended_spacing: {
+    min_minutes: number;
+    max_minutes: number;
+  };
+  preferred_categories: string[];
+  preferred_formats: MediaFormatType[];
+  reason: string;
+  saturation_detected: boolean;
+  saturation_knee_posts_per_day?: number;
+  degradation_observed?: boolean;
+  rolling_horizon_hours: number;
+  generated_at: string;
 }
 

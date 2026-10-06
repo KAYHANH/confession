@@ -1,4 +1,5 @@
 import { schedulingService } from './schedulingService';
+import { confessionService } from './confessionService';
 import { mockStore } from '@/lib/mockStore';
 import { logInstagramStartupDiagnostics } from '@/lib/config';
 
@@ -72,6 +73,17 @@ export function startBackgroundRunner() {
   const PUBLISH_INTERVAL = 60 * 1000; // 1 minute
   publishTimer = setInterval(async () => {
     try {
+      // Periodically heal any confessions stuck in PUBLISHING (>2m) back to APPROVED
+      try {
+        await confessionService.autoHealStuckConfessions();
+      } catch {}
+
+      const settings = mockStore.getSettings();
+      const envDisabled = process.env.AUTO_PUBLISH_ENABLED === 'false';
+      const isAutoPublishActive = !envDisabled && settings.auto_publish === true && settings.publishing_mode === 'AUTO_PUBLISH';
+      if (!isAutoPublishActive) {
+        return;
+      }
       const cycleResult = await schedulingService.processAutoPublishCycle();
       if (cycleResult.ran && cycleResult.status === 'SUCCESS') {
         console.log(`[BackgroundRunner] Auto-publish cycle succeeded: ${cycleResult.reason}`);

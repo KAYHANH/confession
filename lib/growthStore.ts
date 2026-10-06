@@ -18,6 +18,8 @@ import {
   GrowthRecommendation,
   RecommendationFeedback,
   AgeBucket,
+  PostPerformanceRecord,
+  RecommendationRecord,
 } from '@/types/growth';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 
@@ -33,6 +35,8 @@ export interface GrowthStoreData {
   assignments: ExperimentAssignment[];
   recommendations: GrowthRecommendation[];
   feedback: RecommendationFeedback[];
+  postPerformanceRecords: PostPerformanceRecord[];
+  recommendationRecords: RecommendationRecord[];
 }
 
 const DEFAULT_METRIC_DEFINITIONS: MetricDefinition[] = [
@@ -144,6 +148,8 @@ class GrowthStore {
             assignments: parsed.growth.assignments || [],
             recommendations: parsed.growth.recommendations || [],
             feedback: parsed.growth.feedback || [],
+            postPerformanceRecords: parsed.growth.postPerformanceRecords || [],
+            recommendationRecords: parsed.growth.recommendationRecords || [],
           };
         }
       }
@@ -161,6 +167,8 @@ class GrowthStore {
       assignments: [],
       recommendations: [],
       feedback: [],
+      postPerformanceRecords: [],
+      recommendationRecords: [],
     };
   }
 
@@ -532,6 +540,129 @@ class GrowthStore {
     }
     this.saveMockData(state);
     return feedback;
+  }
+
+  // -------------------------------------------------------------
+  // Post Performance Records Methods
+  // -------------------------------------------------------------
+  public async getPostPerformanceRecords(): Promise<PostPerformanceRecord[]> {
+    if (this.useSupabase()) {
+      try {
+        const supabase = await createServerSupabaseClient();
+        const { data, error } = await supabase
+          .from('post_performance_records')
+          .select('*')
+          .order('published_at', { ascending: false });
+        if (!error && data) return data as PostPerformanceRecord[];
+      } catch {}
+    }
+    const state = this.readMockData();
+    return state.postPerformanceRecords || [];
+  }
+
+  public async getPostPerformanceRecordByPostId(postId: string): Promise<PostPerformanceRecord | null> {
+    const records = await this.getPostPerformanceRecords();
+    return records.find((r) => r.post_id === postId || r.content_id === postId || r.instagram_media_id === postId) || null;
+  }
+
+  public async savePostPerformanceRecord(record: PostPerformanceRecord): Promise<PostPerformanceRecord> {
+    if (this.useSupabase()) {
+      try {
+        const supabase = await createServerSupabaseClient();
+        const { data, error } = await supabase
+          .from('post_performance_records')
+          .upsert(record)
+          .select()
+          .single();
+        if (!error && data) return data as PostPerformanceRecord;
+      } catch {}
+    }
+    const state = this.readMockData();
+    if (!state.postPerformanceRecords) state.postPerformanceRecords = [];
+    const idx = state.postPerformanceRecords.findIndex((r) => r.post_id === record.post_id);
+    if (idx >= 0) {
+      state.postPerformanceRecords[idx] = {
+        ...state.postPerformanceRecords[idx],
+        ...record,
+        updated_at: new Date().toISOString(),
+      };
+    } else {
+      state.postPerformanceRecords.unshift(record);
+    }
+    this.saveMockData(state);
+    return record;
+  }
+
+  // -------------------------------------------------------------
+  // Recommendation Records Methods
+  // -------------------------------------------------------------
+  public async getRecommendationRecords(): Promise<RecommendationRecord[]> {
+    if (this.useSupabase()) {
+      try {
+        const supabase = await createServerSupabaseClient();
+        const { data, error } = await supabase
+          .from('growth_recommendation_records')
+          .select('*')
+          .order('recommended_at', { ascending: false });
+        if (!error && data) return data as RecommendationRecord[];
+      } catch {}
+    }
+    const state = this.readMockData();
+    return state.recommendationRecords || [];
+  }
+
+  public async saveRecommendationRecord(record: RecommendationRecord): Promise<RecommendationRecord> {
+    if (this.useSupabase()) {
+      try {
+        const supabase = await createServerSupabaseClient();
+        const { data, error } = await supabase
+          .from('growth_recommendation_records')
+          .upsert(record)
+          .select()
+          .single();
+        if (!error && data) return data as RecommendationRecord;
+      } catch {}
+    }
+    const state = this.readMockData();
+    if (!state.recommendationRecords) state.recommendationRecords = [];
+    const idx = state.recommendationRecords.findIndex((r) => r.id === record.id);
+    if (idx >= 0) {
+      state.recommendationRecords[idx] = record;
+    } else {
+      state.recommendationRecords.unshift(record);
+    }
+    this.saveMockData(state);
+    return record;
+  }
+
+  public async updateRecommendationRecord(
+    id: string,
+    updates: Partial<RecommendationRecord>
+  ): Promise<RecommendationRecord | null> {
+    if (this.useSupabase()) {
+      try {
+        const supabase = await createServerSupabaseClient();
+        const { data, error } = await supabase
+          .from('growth_recommendation_records')
+          .update(updates)
+          .eq('id', id)
+          .select()
+          .single();
+        if (!error && data) return data as RecommendationRecord;
+      } catch {}
+    }
+    const state = this.readMockData();
+    if (!state.recommendationRecords) state.recommendationRecords = [];
+    const idx = state.recommendationRecords.findIndex((r) => r.id === id);
+    if (idx >= 0) {
+      state.recommendationRecords[idx] = {
+        ...state.recommendationRecords[idx],
+        ...updates,
+      };
+      this.saveMockData(state);
+      return state.recommendationRecords[idx];
+    }
+    return null;
   }
 }
 

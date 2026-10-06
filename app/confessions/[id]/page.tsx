@@ -22,7 +22,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
-import { Confession, Template } from '@/types';
+import { Confession, Template, SystemSettings } from '@/types';
 import { PostCardPreview } from '@/components/confessions/PostCardPreview';
 import { PublishModal } from '@/components/confessions/PublishModal';
 import { ScheduleModal } from '@/components/confessions/ScheduleModal';
@@ -53,6 +53,7 @@ export default function ConfessionEditorPage({
 
   const [confession, setConfession] = useState<Confession | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [processingAI, setProcessingAI] = useState(false);
@@ -74,17 +75,20 @@ export default function ConfessionEditorPage({
     if (!confessionId) return;
     try {
       setLoading(true);
-      const [confRes, tplRes] = await Promise.all([
+      const [confRes, tplRes, setRes] = await Promise.all([
         fetch(`/api/confessions/${confessionId}`),
         fetch('/api/templates'),
+        fetch('/api/settings'),
       ]);
 
       if (!confRes.ok) throw new Error('Confession not found');
       const confData = await confRes.json();
       const tplData = await tplRes.json();
+      const setData = await setRes.json().catch(() => null);
 
       setConfession(confData);
       setTemplates(tplData || []);
+      if (setData) setSettings(setData);
 
       // Init form fields
       setCleanedText(confData.cleaned_text || confData.original_text || '');
@@ -105,6 +109,14 @@ export default function ConfessionEditorPage({
       loadData();
     }
   }, [confessionId, loadData]);
+
+  useEffect(() => {
+    const handleRefresh = () => {
+      loadData();
+    };
+    window.addEventListener('confessionflow:refresh', handleRefresh);
+    return () => window.removeEventListener('confessionflow:refresh', handleRefresh);
+  }, [loadData]);
 
   const handleSave = async () => {
     if (!confessionId) return;
@@ -202,6 +214,8 @@ export default function ConfessionEditorPage({
         isAnonymous,
         confessionNumber: confession.google_sheet_row,
         template: activeTemplate,
+        brandName: settings?.brand_name,
+        instagramHandle: settings?.instagram_handle,
       });
       success('Post card downloaded successfully as 1080x1080 PNG!');
     } catch (err: any) {
@@ -222,6 +236,8 @@ export default function ConfessionEditorPage({
         isAnonymous,
         confessionNumber: confession.google_sheet_row,
         template: activeTemplate,
+        brandName: settings?.brand_name,
+        instagramHandle: settings?.instagram_handle,
       });
       success(`All ${count} slides downloaded successfully!`);
     } catch (err: any) {
@@ -563,6 +579,8 @@ export default function ConfessionEditorPage({
                 isAnonymous={isAnonymous}
                 confessionNumber={confession.google_sheet_row}
                 template={activeTemplate}
+                brandName={settings?.brand_name}
+                instagramHandle={settings?.instagram_handle}
                 scale={0.34}
               />
             </div>

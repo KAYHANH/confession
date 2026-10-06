@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
-import { Confession, Template } from '@/types';
+import { Confession, Template, SystemSettings } from '@/types';
 import { PostCardPreview } from '@/components/confessions/PostCardPreview';
 import { useToast } from '@/components/ui/ToastContext';
 import { downloadCardAsPng } from '@/lib/downloadCard';
@@ -23,6 +23,7 @@ import { SmartContentPreparation } from '@/components/growth/SmartContentPrepara
 export default function ReviewQueuePage() {
   const [confessions, setConfessions] = useState<Confession[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [processing, setProcessing] = useState(false);
@@ -32,14 +33,20 @@ export default function ReviewQueuePage() {
   const loadReviewQueue = useCallback(async () => {
     setLoading(true);
     try {
-      const [confRes, tplRes] = await Promise.all([
+      const [confRes, tplRes, setRes] = await Promise.all([
         fetch('/api/confessions?status=READY_FOR_REVIEW&sortBy=newest&limit=50'),
         fetch('/api/templates'),
+        fetch('/api/settings'),
       ]);
 
-      const [confData, tplData] = await Promise.all([confRes.json(), tplRes.json()]);
+      const [confData, tplData, setData] = await Promise.all([
+        confRes.json(),
+        tplRes.json(),
+        setRes.json().catch(() => null),
+      ]);
       setConfessions(confData.confessions || []);
       setTemplates(tplData || []);
+      if (setData) setSettings(setData);
     } catch (err: any) {
       error('Failed to load review queue');
     } finally {
@@ -49,6 +56,11 @@ export default function ReviewQueuePage() {
 
   useEffect(() => {
     loadReviewQueue();
+    const handleRefresh = () => {
+      loadReviewQueue();
+    };
+    window.addEventListener('confessionflow:refresh', handleRefresh);
+    return () => window.removeEventListener('confessionflow:refresh', handleRefresh);
   }, [loadReviewQueue]);
 
   const handleApprove = async (id: string) => {
@@ -246,18 +258,59 @@ export default function ReviewQueuePage() {
                       </div>
                     </div>
 
-                    <span
-                      className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                        c.moderation_status === 'HIGH'
-                          ? 'bg-rose-50 text-rose-800 border-rose-200'
-                          : c.moderation_status === 'MEDIUM'
-                          ? 'bg-amber-50 text-amber-800 border-amber-200'
-                          : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                      }`}
-                    >
-                      {c.moderation_status} RISK
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                      {c.quality_score !== undefined && c.quality_score !== null && (
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            c.quality_status === 'GOOD'
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              : c.quality_status === 'NEEDS_REVIEW'
+                              ? 'bg-amber-50 text-amber-800 border-amber-200'
+                              : 'bg-rose-50 text-rose-800 border-rose-200'
+                          }`}
+                        >
+                          Quality: {c.quality_score}/100
+                        </span>
+                      )}
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                          c.moderation_status === 'HIGH'
+                            ? 'bg-rose-50 text-rose-800 border-rose-200'
+                            : c.moderation_status === 'MEDIUM'
+                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                            : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                        }`}
+                      >
+                        {c.moderation_status} RISK
+                      </span>
+                    </div>
                   </div>
+
+                  {/* Quality Details */}
+                  {c.quality_status && (
+                    <div className="flex flex-wrap items-center gap-2 mb-3">
+                      <span className="text-[11px] font-semibold text-zinc-500">
+                        Intent: <span className="text-zinc-800 font-bold uppercase">{c.quality_intent || 'UNKNOWN'}</span>
+                      </span>
+                      {c.quality_category && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-700 font-medium border border-zinc-200">
+                          {c.quality_category}
+                        </span>
+                      )}
+                      {c.quality_confidence && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-medium border border-blue-200">
+                          Confidence: {c.quality_confidence}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {c.quality_reason && (
+                    <div className="text-[11px] bg-amber-50/70 border border-amber-200/60 text-amber-900 rounded-lg p-2.5 mb-3">
+                      <span className="font-semibold">Quality Assessment: </span>
+                      {c.quality_reason}
+                    </div>
+                  )}
 
                   {/* Visual Card + Preview snippet */}
                   <div className="flex items-center justify-center p-3 bg-zinc-50 rounded-xl border border-zinc-100 mb-4">
@@ -267,6 +320,8 @@ export default function ReviewQueuePage() {
                       isAnonymous={c.is_anonymous}
                       confessionNumber={c.google_sheet_row}
                       template={template}
+                      brandName={settings?.brand_name}
+                      instagramHandle={settings?.instagram_handle}
                       scale={0.25}
                     />
                   </div>

@@ -1,4 +1,4 @@
-import { Confession, ConfessionStatus, DashboardStats } from '@/types';
+import { Confession, ConfessionStatus, DashboardStats, SystemSettings } from '@/types';
 import { mockStore } from '@/lib/mockStore';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { aiService } from './aiService';
@@ -14,6 +14,8 @@ import {
   validatePublicationPayload,
   verifyContentPreservation,
 } from '@/lib/paginationEngine';
+import { confessionQualityService } from './quality/confessionQualityService';
+import { validatePublishEligibility } from './quality/publishEligibilityService';
 
 // Valid status transitions map
 export const ALLOWED_TRANSITIONS: Record<ConfessionStatus, ConfessionStatus[]> = {
@@ -77,18 +79,60 @@ export class ConfessionService {
   }
 
   /**
+   * Auto-heals any confessions stuck in PUBLISHING (>2 minutes) back to APPROVED.
+   */
+  public async autoHealStuckConfessions(): Promise<number> {
+    let healed = 0;
+    const nowMs = Date.now();
+    for (const c of mockStore.getConfessions()) {
+      if (c.status === 'PUBLISHING') {
+        const updatedMs = new Date(c.updated_at || c.created_at || 0).getTime();
+        if (nowMs - updatedMs > 2 * 60 * 1000) {
+          console.log(`[ConfessionService] Auto-healing confession #${c.google_sheet_row || c.id} stuck in PUBLISHING back to APPROVED.`);
+          mockStore.updateConfession(c.id, {
+            status: 'APPROVED',
+            error_message: null,
+          });
+          healed++;
+        }
+      }
+    }
+    if (this.useSupabase()) {
+      try {
+        const supabase = createServerSupabaseClient();
+        const twoMinsAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+        const { data } = await supabase
+          .from('confessions')
+          .update({ status: 'APPROVED', error_message: null, updated_at: new Date().toISOString() })
+          .eq('status', 'PUBLISHING')
+          .lt('updated_at', twoMinsAgo)
+          .select('id');
+        if (data) healed += data.length;
+      } catch {}
+    }
+    return healed;
+  }
+
+  /**
    * Get all confessions with filtering, search, and pagination
    */
   public async getConfessions(options: {
     status?: ConfessionStatus;
     moderationStatus?: string;
+    qualityStatus?: string;
     search?: string;
     templateId?: string;
     sortBy?: 'newest' | 'oldest' | 'scheduled' | 'recently_published';
     page?: number;
     limit?: number;
   } = {}): Promise<{ confessions: Confession[]; total: number; page: number; totalPages: number }> {
-    const { status, moderationStatus, search, templateId, sortBy = 'newest', page = 1, limit = 50 } = options;
+    const { status, moderationStatus, qualityStatus, search, templateId, sortBy = 'newest', page = 1, limit = 50 } = options;
+
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        await this.autoHealStuckConfessions();
+      } catch {}
+    }
 
     // Real Supabase query if configured
     if (this.useSupabase()) {
@@ -140,6 +184,9 @@ export class ConfessionService {
     }
     if (moderationStatus) {
       list = list.filter((c) => c.moderation_status === moderationStatus);
+    }
+    if (qualityStatus) {
+      list = list.filter((c) => c.quality_status === qualityStatus);
     }
     if (templateId) {
       list = list.filter((c) => c.template_id === templateId);
@@ -226,6 +273,33 @@ export class ConfessionService {
     const cleanId = String(id || '').trim();
     const existing = await this.getConfessionById(cleanId);
     if (!existing) throw new Error(`Confession not found: ${id}`);
+
+    // Re-evaluate quality gate on material text changes (Step 17)
+    if (
+      (updates.cleaned_text && updates.cleaned_text !== existing.cleaned_text) ||
+      (updates.original_text && updates.original_text !== existing.original_text)
+    ) {
+      try {
+        const newText = updates.cleaned_text || updates.original_text || existing.cleaned_text || existing.original_text;
+        const qRes = await confessionQualityService.evaluateConfession(newText, {
+          confessionId: existing.id,
+        });
+        updates.quality_status = qRes.qualityStatus;
+        updates.quality_score = qRes.qualityScore;
+        updates.quality_decision = qRes.decision;
+        updates.quality_intent = qRes.intent;
+        updates.quality_reason = qRes.reason;
+        updates.quality_category = qRes.category;
+        updates.quality_confidence = qRes.confidence;
+        updates.quality_model_version = qRes.modelVersion;
+        updates.quality_prompt_version = qRes.promptVersion;
+        updates.quality_rules_version = qRes.rulesVersion;
+        updates.quality_analyzed_at = qRes.analyzedAt;
+        updates.quality_override = null; // Invalidate previous override on edit
+      } catch (qErr) {
+        console.warn('[ConfessionService] Failed to re-evaluate quality on update:', qErr);
+      }
+    }
 
     if (updates.status && updates.status !== existing.status) {
       if (!this.isValidTransition(existing.status, updates.status)) {
@@ -612,16 +686,34 @@ export class ConfessionService {
     const confession = await this.getConfessionById(id);
     if (!confession) throw new Error('Confession not found');
 
-    const updated = await this.updateConfession(id, {
+    const isQualityOverride = confession.quality_status === 'LOW_VALUE';
+    const updates: Partial<Confession> = {
       status: 'APPROVED',
       error_message: null,
-    });
+    };
+
+    if (isQualityOverride) {
+      updates.quality_override = true;
+      updates.quality_override_by = 'admin';
+      updates.quality_override_at = new Date().toISOString();
+      updates.quality_override_reason = 'Approved by admin override';
+      if (confession.quality_decision === 'REJECT') {
+        updates.quality_false_positive = true;
+      }
+    }
+
+    const updated = await this.updateConfession(id, updates);
 
     mockStore.addLog({
-      action: 'APPROVED',
+      action: isQualityOverride ? 'QUALITY_OVERRIDE' : 'APPROVED',
       entity_type: 'confession',
       entity_id: id,
-      metadata: { previousStatus: confession.status },
+      metadata: {
+        previousStatus: confession.status,
+        previousQualityScore: confession.quality_score,
+        previousQualityDecision: confession.quality_decision,
+        overrideAction: 'APPROVE',
+      },
     });
 
     return updated;
@@ -631,10 +723,17 @@ export class ConfessionService {
    * Reject confession with a clear reason
    */
   public async rejectConfession(id: string, reason: string = 'Rejected by Admin'): Promise<Confession> {
-    const updated = await this.updateConfession(id, {
+    const confession = await this.getConfessionById(id);
+    const updates: Partial<Confession> = {
       status: 'REJECTED',
       moderation_reason: reason,
-    });
+    };
+
+    if (confession && confession.quality_decision === 'APPROVE') {
+      updates.quality_false_negative = true;
+    }
+
+    const updated = await this.updateConfession(id, updates);
 
     // Update status in Google Sheet as well
     const sheetConfig = mockStore.getGoogleSheetConfig();
@@ -734,6 +833,13 @@ export class ConfessionService {
 
     if (confession.status === 'REJECTED') {
       throw new Error('Cannot publish a rejected confession. Please approve it first.');
+    }
+
+    // 2a. Validate publish eligibility through Quality Gate and Safety Guards (Step 16 & 31)
+    const settings = mockStore.getSettings();
+    const eligibility = validatePublishEligibility(confession, settings);
+    if (!eligibility.isEligible) {
+      throw new Error(`Publishing blocked: ${eligibility.reason}`);
     }
 
     // 2b. Groq AI semantic duplicate check against published posts
@@ -1040,11 +1146,18 @@ export class ConfessionService {
         import('@/services/growth/analyticsCollector')
           .then(({ analyticsCollector }) => {
             if (publishResult.mediaId && publishResult.permalink) {
+              const detectedFormat: any =
+                options?.cardMode === 'reel'
+                  ? 'REEL'
+                  : options?.cardMode === 'carousel'
+                  ? 'CAROUSEL'
+                  : 'IMAGE';
+
               analyticsCollector
                 .registerPublishedMedia(
                   updated,
                   { mediaId: publishResult.mediaId, permalink: publishResult.permalink },
-                  'IMAGE'
+                  detectedFormat
                 )
                 .catch((err) => {
                   console.warn('[ConfessionService] Non-blocking analytics registration notice:', err?.message || err);
@@ -1124,7 +1237,7 @@ export class ConfessionService {
     let skippedPublished = 0;
 
     const nextStatus: ConfessionStatus =
-      settings.auto_publish || settings.publishing_mode === 'AUTO_PUBLISH'
+      settings.auto_publish === true && settings.publishing_mode === 'AUTO_PUBLISH'
         ? 'APPROVED'
         : 'READY_FOR_REVIEW';
 
@@ -1200,38 +1313,253 @@ export class ConfessionService {
   }
 
   /**
+   * Synchronize all updated settings to existing unpublished confessions.
+   * Handles:
+   * - Default template assignment & invalidation of stale generated card images
+   * - Brand name & Instagram handle updates (invalidates pre-rendered card images)
+   * - Default hashtags and automatic caption generation
+   * - PII & profanity moderation re-evaluation
+   * - Content quality gate threshold adjustments
+   * - Queue schedule recalculation when cadence, gaps, or operating hours change
+   */
+  public async syncSettingsToConfessions(updates: Partial<SystemSettings>): Promise<{
+    updatedCount: number;
+    scheduleRecalculated: boolean;
+  }> {
+    const currentSettings = mockStore.getSettings();
+
+    const hasTemplateUpdate = !!updates.default_template_id;
+    const hasBrandingUpdate = !!(updates.brand_name || updates.instagram_handle);
+    const hasHashtagUpdate = Array.isArray(updates.default_hashtags);
+    const hasPiiUpdate = updates.enable_pii_detection !== undefined;
+    const hasProfanityUpdate = updates.enable_profanity_filter !== undefined || updates.risk_threshold !== undefined;
+    const hasQualityUpdate =
+      updates.min_quality_score !== undefined ||
+      updates.auto_reject_low_value !== undefined ||
+      updates.enable_quality_gate !== undefined;
+
+    const enablePii = updates.enable_pii_detection !== undefined
+      ? Boolean(updates.enable_pii_detection)
+      : (currentSettings.enable_pii_detection !== false);
+
+    const minQualityScore = updates.min_quality_score ?? currentSettings.min_quality_score ?? 55;
+    const autoRejectLowValue = updates.auto_reject_low_value ?? currentSettings.auto_reject_low_value ?? false;
+    const qualityGateEnabled = updates.enable_quality_gate ?? currentSettings.enable_quality_gate ?? true;
+
+    const modifiedConfessions: Confession[] = [];
+
+    const updatedCount = mockStore.batchUpdateConfessions((c) => {
+      // 1. Never touch already PUBLISHED confessions
+      if (c.status === 'PUBLISHED' || c.published_at || c.instagram_media_id) {
+        return null;
+      }
+
+      let changed = false;
+      const cUpdates: Partial<Confession> = {};
+
+      // 1. Template update
+      if (hasTemplateUpdate && updates.default_template_id) {
+        if (c.template_id !== updates.default_template_id) {
+          cUpdates.template_id = updates.default_template_id;
+          cUpdates.generated_image_url = null;
+          cUpdates.generated_image_path = null;
+          changed = true;
+        }
+      }
+
+      // 2. Branding update (brand name or instagram handle changed -> pre-rendered image is invalid)
+      if (hasBrandingUpdate) {
+        if (c.generated_image_url || c.generated_image_path) {
+          cUpdates.generated_image_url = null;
+          cUpdates.generated_image_path = null;
+          changed = true;
+        }
+      }
+
+      // 3. Hashtags & Captions update
+      if (hasHashtagUpdate && updates.default_hashtags) {
+        cUpdates.hashtags = [...updates.default_hashtags];
+        const newCaption = buildInstagramCaption({
+          confessionNumber: c.google_sheet_row || 1,
+          hashtags: updates.default_hashtags,
+          mode: 'auto',
+        });
+        cUpdates.caption = newCaption;
+        changed = true;
+      }
+
+      // 4. Moderation / PII update
+      if (hasPiiUpdate || hasProfanityUpdate) {
+        const mod = moderationService.analyzeContent(c.original_text, enablePii);
+        let newCleanedText = c.cleaned_text || c.original_text;
+
+        if (!enablePii) {
+          newCleanedText = c.original_text;
+        } else if (mod.piiDetected.length > 0) {
+          newCleanedText = moderationService.maskSensitiveInformation(c.original_text, mod.piiDetected);
+        }
+
+        if (
+          newCleanedText !== c.cleaned_text ||
+          mod.risk !== c.moderation_status ||
+          (mod.reasons.length > 0 ? mod.reasons.join('; ') : 'Passed safety validation.') !== c.moderation_reason
+        ) {
+          cUpdates.cleaned_text = newCleanedText;
+          cUpdates.moderation_status = mod.risk;
+          cUpdates.moderation_reason = mod.reasons.length > 0 ? mod.reasons.join('; ') : 'Passed safety validation.';
+          cUpdates.generated_image_url = null;
+          cUpdates.generated_image_path = null;
+          changed = true;
+        }
+      }
+
+      // 5. Quality gate update
+      if (hasQualityUpdate && c.quality_score !== null && c.quality_score !== undefined) {
+        if (!qualityGateEnabled) {
+          if (c.quality_status !== 'GOOD' || c.quality_decision !== 'APPROVE') {
+            cUpdates.quality_status = 'GOOD';
+            cUpdates.quality_decision = 'APPROVE';
+            if (c.status === 'REJECTED' && c.quality_category === 'LOW_INFORMATION') {
+              cUpdates.status = 'READY_FOR_REVIEW';
+            }
+            changed = true;
+          }
+        } else {
+          let newQualityStatus: any = c.quality_status;
+          let newDecision: any = c.quality_decision;
+
+          if (c.quality_score >= 80) {
+            newQualityStatus = 'GOOD';
+            newDecision = 'APPROVE';
+          } else if (c.quality_score >= minQualityScore) {
+            newQualityStatus = 'NEEDS_REVIEW';
+            newDecision = 'REVIEW';
+          } else {
+            newQualityStatus = 'LOW_VALUE';
+            newDecision = 'REJECT';
+            if (autoRejectLowValue && c.status !== 'REJECTED') {
+              cUpdates.status = 'REJECTED';
+            }
+          }
+
+          if (newQualityStatus !== c.quality_status || newDecision !== c.quality_decision) {
+            cUpdates.quality_status = newQualityStatus;
+            cUpdates.quality_decision = newDecision;
+            changed = true;
+          }
+        }
+      }
+
+      if (changed) {
+        modifiedConfessions.push({ ...c, ...cUpdates });
+        return cUpdates;
+      }
+      return null;
+    });
+
+    // Sync to Supabase if configured
+    if (this.useSupabase() && modifiedConfessions.length > 0) {
+      try {
+        const supabase = createServerSupabaseClient();
+        for (const c of modifiedConfessions) {
+          const safeUpdates: any = {
+            template_id: c.template_id,
+            generated_image_url: c.generated_image_url,
+            generated_image_path: c.generated_image_path,
+            hashtags: c.hashtags,
+            caption: c.caption,
+            cleaned_text: c.cleaned_text,
+            moderation_status: c.moderation_status,
+            moderation_reason: c.moderation_reason,
+            quality_status: c.quality_status,
+            quality_decision: c.quality_decision,
+            updated_at: new Date().toISOString(),
+          };
+          if (c.status !== 'DELETED') {
+            safeUpdates.status = c.status;
+          }
+          await supabase.from('confessions').update(safeUpdates).eq('id', c.id);
+        }
+      } catch (sbErr) {
+        console.warn('[ConfessionService] Supabase syncSettings error:', sbErr);
+      }
+    }
+
+    // 6. Recalculate schedule if scheduling or operating hours parameters changed
+    let scheduleRecalculated = false;
+    const schedulingKeys: (keyof SystemSettings)[] = [
+      'max_daily_posts',
+      'min_daily_posts',
+      'target_daily_posts',
+      'auto_publish_start_hour',
+      'auto_publish_end_hour',
+      'auto_publish_interval_minutes',
+      'min_gap_minutes',
+      'max_gap_minutes',
+      'scheduling_strategy_mode',
+      'random_gap_enabled',
+      'timezone',
+      'scheduling_mode',
+    ];
+
+    const hasSchedulingChanges = schedulingKeys.some((k) => updates[k] !== undefined);
+    if (hasSchedulingChanges) {
+      try {
+        const { schedulingService } = await import('@/services/schedulingService');
+        await schedulingService.generateFutureSchedule({ forceRecalculate: true });
+        scheduleRecalculated = true;
+      } catch (schedErr) {
+        console.warn('[ConfessionService] Failed to recalculate queue schedule after settings update:', schedErr);
+      }
+    }
+
+    return { updatedCount, scheduleRecalculated };
+  }
+
+  /**
+   * Invalidate cached image URLs and local paths for all unpublished confessions using a template
+   */
+  public async invalidateImagesForTemplate(templateId: string): Promise<number> {
+    const updatedCount = mockStore.batchUpdateConfessions((c) => {
+      if (c.status === 'PUBLISHED' || c.published_at || c.instagram_media_id) {
+        return null;
+      }
+      if (c.template_id === templateId) {
+        return {
+          generated_image_url: null,
+          generated_image_path: null,
+        };
+      }
+      return null;
+    });
+
+    if (this.useSupabase() && updatedCount > 0) {
+      try {
+        const supabase = createServerSupabaseClient();
+        await supabase
+          .from('confessions')
+          .update({
+            generated_image_url: null,
+            generated_image_path: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('template_id', templateId)
+          .neq('status', 'PUBLISHED');
+      } catch (sbErr) {
+        console.warn('[ConfessionService] Supabase invalidateImages error:', sbErr);
+      }
+    }
+
+    return updatedCount;
+  }
+
+  /**
    * Synchronize PII masking state for existing unpublished confessions.
    * If enablePii is false, unmasks social handles/PII and re-evaluates moderation risk.
    */
   public async syncPiiSettings(enablePii: boolean): Promise<number> {
-    const all = mockStore.getConfessions();
-    let updatedCount = 0;
-
-    for (const c of all) {
-      if (c.status === 'PUBLISHED') continue;
-
-      if (!enablePii) {
-        // Re-analyze original text without PII masking
-        const mod = moderationService.analyzeContent(c.original_text, false);
-        const hasMaskedPattern = (c.cleaned_text || '').includes('@****') || (c.cleaned_text || '').includes('****');
-        const hadPiiReason = (c.moderation_reason || '').includes('Private social handle') || (c.moderation_reason || '').includes('Phone number');
-
-        if (hasMaskedPattern || hadPiiReason) {
-          const newCleanedText = hasMaskedPattern ? c.original_text : c.cleaned_text;
-          const newReason = mod.reasons.length > 0 ? mod.reasons.join('; ') : 'Passed safety validation.';
-          mockStore.updateConfession(c.id, {
-            cleaned_text: newCleanedText,
-            moderation_status: mod.risk,
-            moderation_reason: newReason,
-            generated_image_url: null,
-            generated_image_path: null,
-            caption: (c.caption || '').replace(/@\*{4}/g, (c.original_text.match(/@[a-zA-Z0-9_.]+/)?.[0] || '@****')),
-          });
-          updatedCount++;
-        }
-      }
-    }
-    return updatedCount;
+    const res = await this.syncSettingsToConfessions({ enable_pii_detection: enablePii });
+    return res.updatedCount;
   }
 
   /**

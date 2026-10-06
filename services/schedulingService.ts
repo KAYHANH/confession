@@ -13,6 +13,8 @@ import {
   SchedulerRecommendation,
   StaleQueueRepairResult,
 } from '@/types/growth';
+import { confessionQualityService } from './quality/confessionQualityService';
+import { validatePublishEligibility } from './quality/publishEligibilityService';
 
 export interface AutoPublishCycleResult {
   ran: boolean;
@@ -42,46 +44,88 @@ export class SchedulingService {
     this.lastPublishedAtMs = 0;
   }
 
+  public async autoHealConfessions(): Promise<void> {
+    try {
+      await confessionService.autoHealStuckConfessions();
+      const allConfessions = mockStore.getConfessions();
+      for (const c of allConfessions) {
+        if (
+          (c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION') &&
+          c.error_message &&
+          (
+            c.error_message.includes('https://https://') ||
+            c.error_message.includes('cannot download the card image') ||
+            c.error_message.includes('credentials are not configured') ||
+            c.error_message.includes('Instagram credentials') ||
+            c.error_message.includes('MISSING_ACCESS_TOKEN') ||
+            c.error_message.includes('MISSING_ACCOUNT_ID')
+          )
+        ) {
+          console.log(`[AutoPublisher] Auto-healing confession #${c.google_sheet_row} (Error: "${c.error_message}") back to APPROVED.`);
+          await confessionService.updateConfession(c.id, {
+            status: 'APPROVED',
+            error_message: null,
+            retry_count: 0,
+            generated_image_url: null,
+          });
+        }
+      }
+    } catch (healErr) {
+      console.warn('[SchedulingService] autoHealConfessions error:', healErr);
+    }
+  }
+
   /**
    * Run scheduled posts publisher check (called by /api/cron/publish-scheduled)
    */
-  public async processDuePosts(): Promise<{ published: string[]; errors: { id: string; error: string }[] }> {
+  public async processDuePosts(force: boolean = false): Promise<{ published: string[]; errors: { id: string; error: string }[] }> {
     if (this.isProcessingCron) {
       console.log('[SchedulingService] Cron run already in progress, skipping concurrent trigger');
       return { published: [], errors: [] };
     }
 
     const settings = mockStore.getSettings();
+    const envDisabled = process.env.AUTO_PUBLISH_ENABLED === 'false';
+    const isAutoPublishActive = !envDisabled && settings.auto_publish === true && settings.publishing_mode === 'AUTO_PUBLISH';
 
-    // Respect safe human daytime hours for scheduled posts (unless 24/7 mode is active)
-    try {
-      const startHour = settings.auto_publish_start_hour ?? 0;
-      const endHour = settings.auto_publish_end_hour ?? 24;
-      const is24_7 = (startHour === 0 && endHour >= 24) || (startHour === endHour) || (startHour === 0 && endHour === 0);
+    // Strictly halt scheduled automated publishing if user paused/turned off auto-publish (unless force override)
+    if (!isAutoPublishActive && !force) {
+      console.log('[SchedulingService] Auto-publish is paused (auto_publish is false or publishing_mode is not AUTO_PUBLISH). Skipping scheduled post processing.');
+      return { published: [], errors: [] };
+    }
 
-      if (!is24_7) {
-        const formatter = new Intl.DateTimeFormat('en-US', {
-          timeZone: settings.timezone || 'Asia/Kolkata',
-          hour: 'numeric',
-          hour12: false,
-        });
-        const currentHour = parseInt(formatter.format(new Date()), 10);
-        const isWithinWindow = startHour < endHour
-          ? (currentHour >= startHour && currentHour < endHour)
-          : (currentHour >= startHour || currentHour < endHour);
+    // Respect safe human daytime hours for scheduled posts (unless 24/7 mode is active or force)
+    if (!force) {
+      try {
+        const startHour = settings.auto_publish_start_hour ?? 0;
+        const endHour = settings.auto_publish_end_hour ?? 24;
+        const is24_7 = (startHour === 0 && endHour >= 24) || (startHour === endHour) || (startHour === 0 && endHour === 0);
 
-        if (!isWithinWindow) {
-          console.log(`[SchedulingService] Outside active human hours (${currentHour}:00, safe daytime window is ${startHour}:00 - ${endHour}:00). Resting account overnight.`);
-          return { published: [], errors: [] };
+        if (!is24_7) {
+          const formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: settings.timezone || 'Asia/Kolkata',
+            hour: 'numeric',
+            hour12: false,
+          });
+          const currentHour = parseInt(formatter.format(new Date()), 10);
+          const isWithinWindow = startHour < endHour
+            ? (currentHour >= startHour && currentHour < endHour)
+            : (currentHour >= startHour || currentHour < endHour);
+
+          if (!isWithinWindow) {
+            console.log(`[SchedulingService] Outside active human hours (${currentHour}:00, safe daytime window is ${startHour}:00 - ${endHour}:00). Resting account overnight.`);
+            return { published: [], errors: [] };
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
 
     this.isProcessingCron = true;
     const published: string[] = [];
     const errors: { id: string; error: string }[] = [];
 
     try {
+      await this.autoHealConfessions();
       const now = new Date();
       const allConfessions = (await confessionService.getConfessions({ status: 'SCHEDULED', limit: 50 })).confessions;
 
@@ -241,13 +285,33 @@ export class SchedulingService {
 
       const displayName = isAnon ? 'Anonymous' : (row.name || 'Anonymous');
 
-      const initialStatus: ConfessionStatus = isAlreadyPublished
+      // 2. Confession Quality Gate Evaluation
+      const qualityResult = await confessionQualityService.evaluateConfession(cleanedText, {
+        existingPool: existing.map((c) => ({
+          id: c.id,
+          row: c.google_sheet_row,
+          text: c.cleaned_text || c.original_text,
+        })),
+        confessionId: newId,
+      });
+
+      let initialStatus: ConfessionStatus = isAlreadyPublished
         ? 'PUBLISHED'
         : isRejected
         ? 'REJECTED'
         : isScheduled
         ? 'SCHEDULED'
         : 'READY_FOR_REVIEW';
+
+      // Auto-reject low-value noise so it NEVER enters the publishing queue
+      if (
+        !isAlreadyPublished &&
+        !isScheduled &&
+        currentSettings.auto_reject_low_value !== false &&
+        qualityResult.qualityStatus === 'LOW_VALUE'
+      ) {
+        initialStatus = 'REJECTED';
+      }
 
       const newConfession: Confession = {
         id: newId,
@@ -280,9 +344,31 @@ export class SchedulingService {
         instagram_permalink: isAlreadyPublished ? (row.instagramUrl || null) : null,
         retry_count: 0,
         error_message: null,
+        // Quality Gate metadata
+        quality_status: qualityResult.qualityStatus,
+        quality_score: qualityResult.qualityScore,
+        quality_decision: qualityResult.decision,
+        quality_intent: qualityResult.intent,
+        quality_reason: qualityResult.reason,
+        quality_category: qualityResult.category,
+        quality_confidence: qualityResult.confidence,
+        quality_model_version: qualityResult.modelVersion,
+        quality_prompt_version: qualityResult.promptVersion,
+        quality_rules_version: qualityResult.rulesVersion,
+        quality_analyzed_at: qualityResult.analyzedAt,
         created_at: new Date(now.getTime() - (rows.length - row.rowNumber) * 1000).toISOString(),
         updated_at: new Date().toISOString(),
       };
+
+      // If auto-rejected due to low value, sync status back to Google Sheets without deleting the row
+      if (initialStatus === 'REJECTED' && qualityResult.qualityStatus === 'LOW_VALUE') {
+        googleSheetsService
+          .updateRowStatus(config, row.rowNumber, {
+            status: 'REJECTED',
+            error: `Low-value content: ${qualityResult.reason}`,
+          })
+          .catch(() => {});
+      }
 
       newConfessions.push(newConfession);
       existingRowSet.add(row.rowNumber);
@@ -341,9 +427,25 @@ export class SchedulingService {
       return { ran: false, status: 'SKIPPED', reason: 'A publishing cycle is already in progress' };
     }
 
-    // 1. Check if any explicitly SCHEDULED posts are due right now
+    const settings = mockStore.getSettings();
+    const envDisabled = process.env.AUTO_PUBLISH_ENABLED === 'false';
+    const isAutoPublishActive = !envDisabled && settings.auto_publish === true && settings.publishing_mode === 'AUTO_PUBLISH';
+
+    // 1. If auto_publish is not enabled and not forced, strictly halt all automated publishing
+    if (!isAutoPublishActive && !force) {
+      if (settings.publishing_mode === 'AUTO_APPROVAL') {
+        await this.autoApproveEligibleConfessions();
+      }
+      return {
+        ran: false,
+        status: 'SKIPPED',
+        reason: 'Auto-publish is not active (set publishing mode to Full Auto-Publish or toggle Auto-Publish ON)',
+      };
+    }
+
+    // 2. Check if any explicitly SCHEDULED posts are due right now
     try {
-      const scheduledRes = await this.processDuePosts();
+      const scheduledRes = await this.processDuePosts(force);
       if (scheduledRes.published.length > 0) {
         return {
           ran: true,
@@ -356,36 +458,36 @@ export class SchedulingService {
       console.error('[AutoPublisher] Error processing due scheduled posts:', err?.message || err);
     }
 
-    const settings = mockStore.getSettings();
-    const isAutoPublishActive = settings.auto_publish === true || settings.publishing_mode === 'AUTO_PUBLISH';
-
-    // 2. If auto_publish is not enabled, check if AUTO_APPROVAL mode is active to pre-approve low-risk posts
-    if (!isAutoPublishActive && !force) {
-      if (settings.publishing_mode === 'AUTO_APPROVAL') {
-        await this.autoApproveEligibleConfessions();
-      }
-      return {
-        ran: false,
-        status: 'SKIPPED',
-        reason: 'Auto-publish is not active (set publishing mode to Full Auto-Publish or toggle Auto-Publish ON)',
-      };
-    }
-
     this.isProcessingCron = true;
+
+    // 0. Auto-heal any stuck confessions before running cycle
+    await this.autoHealConfessions();
 
     let candidate: Confession | undefined;
 
     try {
       const stats = await confessionService.getDashboardStats();
-      const maxDaily = settings.max_daily_posts || 24;
 
-      // 3. Daily volume guard
-      if (stats.publishedToday >= maxDaily && !force) {
-        console.warn(`[AutoPublisher] Daily post limit reached (${stats.publishedToday}/${maxDaily}). Resting account until tomorrow.`);
+      // 3. Daily volume guard (Enforces Daily Growth Plan & settings hard limits)
+      let dailyPlan: any = null;
+      try {
+        const { cadenceAnalyzer } = await import('@/services/growth/cadenceAnalyzer');
+        dailyPlan = await cadenceAnalyzer.generateDailyGrowthPlan();
+      } catch (dpErr: any) {
+        console.warn('[AutoPublisher] Failed to query daily growth plan:', dpErr?.message || dpErr);
+      }
+
+      const maxDaily = settings.max_daily_posts || 24;
+      const effectiveDailyCap = dailyPlan ? dailyPlan.effective_daily_posts : maxDaily;
+
+      if ((stats.publishedToday >= effectiveDailyCap || stats.publishedToday >= maxDaily) && !force) {
+        const cap = stats.publishedToday >= maxDaily ? maxDaily : effectiveDailyCap;
+        const authorityLabel = dailyPlan ? `Authority: ${dailyPlan.authority_source}` : `Cap: ${cap}`;
+        console.warn(`[AutoPublisher] Daily post limit reached (${stats.publishedToday}/${cap}, ${authorityLabel}). Resting account until tomorrow.`);
         return {
           ran: false,
           status: 'DAILY_LIMIT_REACHED',
-          reason: `Daily post cap reached (${stats.publishedToday}/${maxDaily}). Account is resting until tomorrow to avoid Meta spam detection.`,
+          reason: `Daily post cap reached (${stats.publishedToday}/${cap}). Account is resting until next daily window (${authorityLabel}).`,
         };
       }
 
@@ -421,6 +523,24 @@ export class SchedulingService {
         }
       }
 
+      // 4b. Post Saturation & Velocity Observation Guard (unless forced)
+      if (!force) {
+        try {
+          const { postSaturationService } = await import('@/services/growth/postSaturationService');
+          const satEval = await postSaturationService.evaluateSaturation();
+          if (satEval.hasRecentPost && satEval.shouldDelayNextPost && satEval.isAccelerating) {
+            console.log(`[AutoPublisher] Post saturation hold active (${satEval.reason}). Next check in ${satEval.recommendedWaitMinutes}m.`);
+            return {
+              ran: false,
+              status: 'RATE_LIMITED',
+              reason: `Post spacing cooldown active (saturation hold: ${satEval.reason})`,
+            };
+          }
+        } catch (satErr: any) {
+          console.warn('[AutoPublisher] Post saturation evaluation error, proceeding:', satErr?.message || satErr);
+        }
+      }
+
       // 5. Cadence Strategy & Post Spacing Guard (Growth Intelligence as primary input)
       let cadenceRec: SchedulerRecommendation | null = null;
       try {
@@ -431,6 +551,9 @@ export class SchedulingService {
       }
 
       const isRandomGap = settings.random_gap_enabled !== false;
+      const minGap = Math.max(25, settings.min_gap_minutes ?? 30);
+      const maxGap = Math.max(minGap + 5, settings.max_gap_minutes ?? 75);
+
       let effectiveIntervalMinutes: number;
       let jitter = 0;
       let baseInterval = 60;
@@ -447,27 +570,22 @@ export class SchedulingService {
         jitter = storedJitter;
         this.currentJitterMinutes = jitter;
         effectiveIntervalMinutes = baseInterval + jitter;
-      } else if (cadenceRec && cadenceRec.mode === 'growth_optimized') {
-        // MODE 2: GROWTH OPTIMIZED — Uses Growth Intelligence recommended cadence range
-        const recMin = cadenceRec.recommendedGapRangeMinutes.min;
-        const recMax = cadenceRec.recommendedGapRangeMinutes.max;
-        let rolledGap = settings.current_random_gap_minutes;
-        if (!rolledGap || rolledGap < recMin || rolledGap > recMax) {
-          rolledGap = Math.floor(Math.random() * (recMax - recMin + 1)) + recMin;
-          mockStore.updateSettings({ current_random_gap_minutes: rolledGap });
-        }
-        effectiveIntervalMinutes = rolledGap;
-        console.log(`[AutoPublisher] Growth-Optimized cadence active (${effectiveIntervalMinutes}m gap, Strategy: ${cadenceRec.strategy}, Confidence: ${cadenceRec.confidence}, Evidence: N=${cadenceRec.evidenceCount}).`);
       } else if (cadenceRec && cadenceRec.mode === 'manual') {
         // MODE 4: MANUAL OVERRIDE
         effectiveIntervalMinutes = cadenceRec.recommendedGapRangeMinutes.min;
       } else {
-        // MODE 1: BASELINE EXPLORATION — Safe baseline range when data is insufficient or fallback
-        const minGap = Math.max(25, settings.min_gap_minutes ?? 30);
-        const maxGap = Math.max(minGap + 5, settings.max_gap_minutes ?? 75);
+        // RANDOM GAP (Growth Optimized or Baseline)
         let rolledGap = settings.current_random_gap_minutes;
         if (!rolledGap || rolledGap < minGap || rolledGap > maxGap) {
-          rolledGap = Math.floor(Math.random() * (maxGap - minGap + 1)) + minGap;
+          if (cadenceRec && cadenceRec.mode === 'growth_optimized') {
+            const recMin = Math.max(minGap, cadenceRec.recommendedGapRangeMinutes.min);
+            const recMax = Math.min(maxGap, cadenceRec.recommendedGapRangeMinutes.max);
+            const effMin = Math.min(recMin, recMax);
+            rolledGap = Math.floor(Math.random() * (recMax - effMin + 1)) + effMin;
+            console.log(`[AutoPublisher] Growth-Optimized cadence active (${rolledGap}m gap, Strategy: ${cadenceRec.strategy}, Confidence: ${cadenceRec.confidence}, Evidence: N=${cadenceRec.evidenceCount}).`);
+          } else {
+            rolledGap = Math.floor(Math.random() * (maxGap - minGap + 1)) + minGap;
+          }
           mockStore.updateSettings({ current_random_gap_minutes: rolledGap });
         }
         effectiveIntervalMinutes = rolledGap;
@@ -518,41 +636,7 @@ export class SchedulingService {
         }
       }
 
-      // 6. Auto-heal any confessions stuck in PUBLISHING (>3m) or failed due to double-https image bug
-      const nowMs = Date.now();
-      for (const c of allConfessions) {
-        if (c.status === 'PUBLISHING') {
-          const updatedMs = new Date(c.updated_at || c.created_at || 0).getTime();
-          if (nowMs - updatedMs > 3 * 60 * 1000) {
-            console.log(`[AutoPublisher] Auto-healing confession #${c.google_sheet_row} stuck in PUBLISHING back to APPROVED.`);
-            await confessionService.updateConfession(c.id, {
-              status: 'APPROVED',
-              error_message: null,
-            });
-          }
-        } else if (
-          (c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION') &&
-          c.error_message &&
-          (
-            c.error_message.includes('https://https://') ||
-            c.error_message.includes('cannot download the card image') ||
-            c.error_message.includes('credentials are not configured') ||
-            c.error_message.includes('Instagram credentials') ||
-            c.error_message.includes('MISSING_ACCESS_TOKEN') ||
-            c.error_message.includes('MISSING_ACCOUNT_ID')
-          )
-        ) {
-          console.log(`[AutoPublisher] Auto-healing confession #${c.google_sheet_row} (Error: "${c.error_message}") back to APPROVED.`);
-          await confessionService.updateConfession(c.id, {
-            status: 'APPROVED',
-            error_message: null,
-            retry_count: 0,
-            generated_image_url: null,
-          });
-        }
-      }
-
-      // Re-fetch fresh confessions after healing
+      // 6. Re-fetch fresh confessions after initial healing
       const freshConfessions = mockStore.getConfessions();
 
       const allowedRisks: ModerationRisk[] =
@@ -573,16 +657,15 @@ export class SchedulingService {
             (c.status === 'APPROVED' || c.status === 'READY_FOR_REVIEW' || c.status === 'SCHEDULED') &&
             allowedRisks.includes(c.moderation_status) &&
             !c.instagram_media_id &&
-            !c.published_at
+            !c.published_at &&
+            validatePublishEligibility(c, settings).isEligible
         )
         .sort((a, b) => {
           // Strict FIFO sequence by Google Sheet row number (#035, #036, #037...)
           return (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
         });
 
-      candidate = eligibleCandidates[0];
-
-      if (!candidate) {
+      if (eligibleCandidates.length === 0) {
         console.log('[AutoPublisher] No eligible safe confessions found to auto-publish.');
         return {
           ran: false,
@@ -591,9 +674,23 @@ export class SchedulingService {
         };
       }
 
-      const selectedCandidate = candidate;
+      // Rank candidates using ContentScoringService (predicted performance score + aging fairness)
+      let selectedCandidate = eligibleCandidates[0];
+      try {
+        const { contentScoringService } = await import('@/services/growth/contentScoringService');
+        const minThreshold = settings.content_quality_threshold ?? 55;
+        const rankedCandidates = await contentScoringService.rankCandidates(eligibleCandidates, minThreshold);
+        if (rankedCandidates.length > 0) {
+          selectedCandidate = rankedCandidates[0].confession;
+          selectedCandidate.predicted_performance_score = rankedCandidates[0].predictedPerformanceScore;
+        }
+      } catch (scoreErr: any) {
+        console.warn('[AutoPublisher] Content scoring ranking warning:', scoreErr?.message || scoreErr);
+      }
 
-      console.log(`[AutoPublisher] Selected confession #${selectedCandidate.google_sheet_row} (ID: ${selectedCandidate.id}) for auto-publishing.`);
+      candidate = selectedCandidate;
+
+      console.log(`[AutoPublisher] Selected confession #${selectedCandidate.google_sheet_row} (ID: ${selectedCandidate.id}${selectedCandidate.predicted_performance_score ? `, Score: ${selectedCandidate.predicted_performance_score}` : ''}) for auto-publishing.`);
 
       // Lock candidate immediately to prevent concurrent re-selection
       await confessionService.updateConfession(selectedCandidate.id, { status: 'PUBLISHING' });
@@ -666,24 +763,23 @@ export class SchedulingService {
       this.lastPublishedAtMs = Date.now();
       // Rotate gap for next post according to active strategy
       let nextGap = effectiveIntervalMinutes;
-      if (cadenceRec && cadenceRec.mode === 'growth_optimized') {
-        const recMin = cadenceRec.recommendedGapRangeMinutes.min;
-        const recMax = cadenceRec.recommendedGapRangeMinutes.max;
-        nextGap = Math.floor(Math.random() * (recMax - recMin + 1)) + recMin;
-        mockStore.updateSettings({ current_random_gap_minutes: nextGap });
-        console.log(`[AutoPublisher] Rolled next Growth-Optimized gap: ${nextGap}m (range: ${recMin}m–${recMax}m, Strategy: ${cadenceRec.strategy}).`);
-      } else if (isRandomGap) {
-        const minGap = Math.max(25, settings.min_gap_minutes ?? 30);
-        const maxGap = Math.max(minGap + 5, settings.max_gap_minutes ?? 75);
-        nextGap = Math.floor(Math.random() * (maxGap - minGap + 1)) + minGap;
-        mockStore.updateSettings({ current_random_gap_minutes: nextGap });
-        console.log(`[AutoPublisher] Rolled next organic random gap: ${nextGap}m (range: ${minGap}m–${maxGap}m).`);
-      } else {
+      if (!isRandomGap) {
         const nextMaxJitter = settings.anti_bot_jitter_minutes !== undefined ? settings.anti_bot_jitter_minutes : 30;
         const nextJitter = nextMaxJitter > 0 ? Math.floor(Math.random() * (nextMaxJitter + 1)) : 0;
         this.currentJitterMinutes = nextJitter;
         nextGap = baseInterval + nextJitter;
         mockStore.updateSettings({ current_jitter_minutes: nextJitter });
+      } else if (cadenceRec && cadenceRec.mode === 'growth_optimized') {
+        const recMin = Math.max(minGap, cadenceRec.recommendedGapRangeMinutes.min);
+        const recMax = Math.min(maxGap, cadenceRec.recommendedGapRangeMinutes.max);
+        const effMin = Math.min(recMin, recMax);
+        nextGap = Math.floor(Math.random() * (recMax - effMin + 1)) + effMin;
+        mockStore.updateSettings({ current_random_gap_minutes: nextGap });
+        console.log(`[AutoPublisher] Rolled next Growth-Optimized gap: ${nextGap}m (range: ${recMin}m–${recMax}m, Strategy: ${cadenceRec.strategy}).`);
+      } else {
+        nextGap = Math.floor(Math.random() * (maxGap - minGap + 1)) + minGap;
+        mockStore.updateSettings({ current_random_gap_minutes: nextGap });
+        console.log(`[AutoPublisher] Rolled next organic random gap: ${nextGap}m (range: ${minGap}m–${maxGap}m).`);
       }
 
       mockStore.addLog({
@@ -742,9 +838,19 @@ export class SchedulingService {
    */
   public async autoApproveEligibleConfessions(): Promise<number> {
     const confessions = mockStore.getConfessions();
-    const toApprove = confessions.filter(
-      (c) => c.status === 'READY_FOR_REVIEW' && c.moderation_status === 'LOW'
-    );
+    const settings = mockStore.getSettings();
+    const toApprove = confessions.filter((c) => {
+      if (c.status !== 'READY_FOR_REVIEW' || c.moderation_status !== 'LOW') {
+        return false;
+      }
+      // Quality Gate check: Never auto-approve LOW_VALUE or NEEDS_REVIEW without override
+      if (settings.enable_quality_gate !== false && c.quality_override !== true) {
+        if (c.quality_status === 'LOW_VALUE' || c.quality_status === 'NEEDS_REVIEW') {
+          return false;
+        }
+      }
+      return true;
+    });
     let count = 0;
     for (const c of toApprove) {
       try {
@@ -842,26 +948,41 @@ export class SchedulingService {
   /**
    * Adaptive Schedule Generator:
    * Generates or repairs the upcoming publishing queue using Growth Intelligence recommendations.
-   * - Preserves valid future timestamps when preserveExistingFuture=true (no flapping on page reload)
+   * - Reconciles Settings hard limits vs Growth Intelligence performance strategy
    * - Applies sample-size-gated cadence intervals & format/category awareness
-   * - Enforces daily post limits and active human daytime hours
+   * - Enforces daily post limits and rolling 12–24h horizon
    */
   public async generateFutureSchedule(options?: {
     forceRecalculate?: boolean;
     preserveExistingFuture?: boolean;
+    enforceRollingHorizon?: boolean;
+    rollingHorizonHours?: number;
   }): Promise<ScheduleGenerationResult> {
     const settings = mockStore.getSettings();
     const tz = settings.timezone || 'Asia/Kolkata';
-    const maxDaily = settings.max_daily_posts || 24;
     const forceRecalculate = options?.forceRecalculate ?? false;
     const preserveExisting = options?.preserveExistingFuture ?? true;
 
     const { cadenceAnalyzer } = await import('@/services/growth/cadenceAnalyzer');
     const rec = await cadenceAnalyzer.getCadenceRecommendation();
 
+    // Query authoritative Daily Growth Plan
+    let dailyPlan: any = null;
+    try {
+      dailyPlan = await cadenceAnalyzer.generateDailyGrowthPlan();
+    } catch (dpErr) {
+      console.warn('[SchedulingService] Failed to query daily growth plan for schedule generation:', dpErr);
+    }
+
+    const effectiveDailyCap = dailyPlan ? dailyPlan.effective_daily_posts : (settings.max_daily_posts || 24);
+    const enforceRollingHorizon = options?.enforceRollingHorizon ?? false;
+    const horizonHours = options?.rollingHorizonHours ?? settings.rolling_horizon_hours ?? 24;
+
+    await this.autoHealConfessions();
     const allConfessions = mockStore.getConfessions();
     const now = new Date();
     const nowMs = now.getTime();
+    const horizonLimitMs = nowMs + horizonHours * 60 * 60 * 1000;
 
     // Eligible candidates for scheduled queue
     const eligible = allConfessions.filter(
@@ -900,10 +1021,32 @@ export class SchedulingService {
       preservedItems.length = 0;
     }
 
-    // Sort strictly in FIFO order by Google Sheet row number
+    // Sort strictly in FIFO order by Google Sheet row number initially
     itemsToSchedule.sort((a, b) => (a.google_sheet_row || 0) - (b.google_sheet_row || 0));
 
-    // Track daily post volume across days to enforce max_daily_posts
+    // When QUALITY_FIRST mode is active, rank items using ContentScoringService
+    try {
+      const { contentScoringService } = await import('@/services/growth/contentScoringService');
+      const minThreshold = settings.content_quality_threshold ?? 50;
+      const scoredRanked = await contentScoringService.rankCandidates(itemsToSchedule, minThreshold);
+      if (scoredRanked.length > 0) {
+        const rankedIds = new Set(scoredRanked.map((s) => s.confession.id));
+        const orderedItems = [
+          ...scoredRanked.map((s) => {
+            const conf = s.confession;
+            conf.predicted_performance_score = s.predictedPerformanceScore;
+            return conf;
+          }),
+          ...itemsToSchedule.filter((c) => !rankedIds.has(c.id)),
+        ];
+        itemsToSchedule.length = 0;
+        itemsToSchedule.push(...orderedItems);
+      }
+    } catch (scoreErr: any) {
+      console.warn('[SchedulingService] Content scoring ranking warning:', scoreErr?.message || scoreErr);
+    }
+
+    // Track daily post volume across days to enforce daily limit
     const postsPerDay = new Map<string, number>();
 
     // Count already published posts for today
@@ -932,6 +1075,19 @@ export class SchedulingService {
       cursor = this.alignToActiveHours(new Date(nowMs + 5 * 60 * 1000), settings, rec.preferredWindows);
     }
 
+    // Post Saturation & Velocity Guard: If recent post is actively accelerating, delay initial cursor
+    try {
+      const { postSaturationService } = await import('@/services/growth/postSaturationService');
+      const satEval = await postSaturationService.evaluateSaturation();
+      if (satEval.hasRecentPost && satEval.shouldDelayNextPost && satEval.isAccelerating) {
+        const waitMs = satEval.recommendedWaitMinutes * 60 * 1000;
+        const delayedTime = nowMs + waitMs;
+        if (delayedTime > cursor.getTime()) {
+          cursor = this.alignToActiveHours(new Date(delayedTime), settings, rec.preferredWindows);
+        }
+      }
+    } catch {}
+
     const scheduledResults: Array<{
       id: string;
       google_sheet_row?: number;
@@ -942,53 +1098,101 @@ export class SchedulingService {
     }> = [];
 
     let lastRolledGap = 0;
-    for (const c of itemsToSchedule) {
+    for (let idx = 0; idx < itemsToSchedule.length; idx++) {
+      const c = itemsToSchedule[idx];
       const format: MediaFormatType = c.slides && c.slides.length > 1 ? 'CAROUSEL' : 'IMAGE';
       const category = (c as any).content_category || undefined;
-      const gapInfo = cadenceAnalyzer.calculateEffectiveGap(rec, format, category);
 
-      // Prevent adjacent identical gaps (e.g. 70m, 70m) to guarantee organic human variation
-      if (gapInfo.rolledGap === lastRolledGap && gapInfo.max > gapInfo.min) {
-        gapInfo.rolledGap = Math.floor(Math.random() * (gapInfo.max - gapInfo.min + 1)) + gapInfo.min;
-        if (gapInfo.rolledGap === lastRolledGap) {
-          gapInfo.rolledGap = gapInfo.rolledGap > gapInfo.min ? gapInfo.rolledGap - 5 : gapInfo.rolledGap + 5;
+      const isFixed = settings.random_gap_enabled === false || settings.scheduling_strategy_mode === 'MANUAL' || rec.mode === 'manual';
+      let gapInfo: { min: number; max: number; rolledGap: number; reason: string };
+
+      if (isFixed) {
+        const base = settings.scheduling_strategy_mode === 'MANUAL'
+          ? Math.max(15, settings.manual_fixed_gap_minutes || settings.auto_publish_interval_minutes || 60)
+          : Math.max(15, settings.auto_publish_interval_minutes || 180);
+        const maxJitter = settings.scheduling_strategy_mode === 'MANUAL'
+          ? 0
+          : (settings.anti_bot_jitter_minutes !== undefined ? settings.anti_bot_jitter_minutes : 30);
+        const jitter = maxJitter > 0 ? (idx * 7) % (maxJitter + 1) : 0;
+        gapInfo = {
+          min: base,
+          max: base + maxJitter,
+          rolledGap: base + jitter,
+          reason: `Fixed cooldown: ${base}m base (+${jitter}m jitter)`,
+        };
+      } else {
+        gapInfo = cadenceAnalyzer.calculateEffectiveGap(rec, format, category);
+
+        // Prevent adjacent identical gaps (e.g. 70m, 70m) to guarantee organic human variation
+        if (gapInfo.rolledGap === lastRolledGap && gapInfo.max > gapInfo.min) {
+          gapInfo.rolledGap = Math.floor(Math.random() * (gapInfo.max - gapInfo.min + 1)) + gapInfo.min;
+          if (gapInfo.rolledGap === lastRolledGap) {
+            gapInfo.rolledGap = gapInfo.rolledGap > gapInfo.min ? gapInfo.rolledGap - 5 : gapInfo.rolledGap + 5;
+          }
         }
       }
       lastRolledGap = gapInfo.rolledGap;
 
       // Advance cursor by the evidence-backed interval
-      cursor = new Date(cursor.getTime() + gapInfo.rolledGap * 60 * 1000);
-      cursor = this.alignToActiveHours(cursor, settings, rec.preferredWindows);
+      let tentativeCursor = new Date(cursor.getTime() + gapInfo.rolledGap * 60 * 1000);
+      tentativeCursor = this.alignToActiveHours(tentativeCursor, settings, rec.preferredWindows);
 
       // Enforce daily cap (pushing excess posts to next day's active hours)
-      let dayKey = this.getDayKey(cursor, tz);
+      let dayKey = this.getDayKey(tentativeCursor, tz);
       let daySafety = 0;
-      while ((postsPerDay.get(dayKey) || 0) >= maxDaily && daySafety < 30) {
+      while ((postsPerDay.get(dayKey) || 0) >= effectiveDailyCap && daySafety < 30) {
         daySafety++;
-        cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
-        cursor = this.alignToActiveHours(cursor, settings, rec.preferredWindows);
-        dayKey = this.getDayKey(cursor, tz);
+        tentativeCursor = new Date(tentativeCursor.getTime() + 24 * 60 * 60 * 1000);
+        tentativeCursor = this.alignToActiveHours(tentativeCursor, settings, rec.preferredWindows);
+        dayKey = this.getDayKey(tentativeCursor, tz);
       }
 
+      // Rolling Horizon Guard: If enforceRollingHorizon is enabled and slot exceeds rolling window
+      if (enforceRollingHorizon && tentativeCursor.getTime() > horizonLimitMs) {
+        console.log(`[SchedulingService] Rolling horizon reached (${horizonHours}h limit). Halting future slot allocation. Remaining items remain in APPROVED queue.`);
+        // Revert remaining unassigned items to APPROVED
+        for (let j = idx; j < itemsToSchedule.length; j++) {
+          const rem = itemsToSchedule[j];
+          if (rem.status === 'SCHEDULED' || rem.scheduled_at) {
+            await confessionService.updateConfession(rem.id, {
+              status: 'APPROVED',
+              scheduled_at: null,
+              scheduling_reason: `Held in approved queue: Exceeds ${horizonHours}h rolling horizon. Scheduled as rolling window advances.`,
+            });
+          }
+        }
+        break;
+      }
+
+      cursor = tentativeCursor;
       postsPerDay.set(dayKey, (postsPerDay.get(dayKey) || 0) + 1);
 
       const scheduledAtIso = cursor.toISOString();
+      const isGrowthOptimized = !isFixed && rec.mode === 'growth_optimized';
+      const gapHours = Math.floor(gapInfo.rolledGap / 60);
+      const gapMins = gapInfo.rolledGap % 60;
+      const gapLabel = gapHours > 0 ? (gapMins > 0 ? `${gapHours}h ${gapMins}m` : `${gapHours}h`) : `${gapMins}m`;
+      const strategyLabel = isFixed ? 'Fixed cooldown' : isGrowthOptimized ? 'Growth optimized' : 'Random fallback';
+      const whyThisTime = `${strategyLabel} · ${gapLabel} (${gapInfo.reason || rec.strategy})`;
+
       await confessionService.updateConfession(c.id, {
         status: 'SCHEDULED',
         scheduled_at: scheduledAtIso,
-        scheduling_strategy: rec.strategy,
+        scheduling_strategy: isFixed ? 'ADMIN_OVERRIDE' : rec.strategy,
         scheduling_gap_minutes: gapInfo.rolledGap,
         scheduling_reason: gapInfo.reason,
-        scheduling_confidence: rec.confidence,
-        scheduling_evidence_count: rec.evidenceCount,
-        experiment_id: rec.experimentId,
+        scheduling_confidence: isFixed ? 'HIGH' : rec.confidence,
+        scheduling_evidence_count: isFixed ? 0 : rec.evidenceCount,
+        experiment_id: isFixed ? undefined : rec.experimentId,
+        predicted_performance_score: c.predicted_performance_score,
+        why_this_time: whyThisTime,
       });
 
       scheduledResults.push({
         id: c.id,
         google_sheet_row: c.google_sheet_row,
         scheduled_at: scheduledAtIso,
-        strategy: rec.strategy,
+        strategy: isFixed ? 'ADMIN_OVERRIDE' : rec.strategy,
         gap_minutes: gapInfo.rolledGap,
         reason: gapInfo.reason,
       });
@@ -1014,6 +1218,21 @@ export class SchedulingService {
       },
       items: scheduledResults,
     };
+  }
+
+  /**
+   * Primary Queue Schedule Generator enforcing Rolling Horizon (12–24h)
+   */
+  public async generateQueueSchedule(options?: {
+    forceRecalculate?: boolean;
+    preserveExistingFuture?: boolean;
+    enforceRollingHorizon?: boolean;
+    rollingHorizonHours?: number;
+  }): Promise<ScheduleGenerationResult> {
+    return this.generateFutureSchedule({
+      enforceRollingHorizon: true,
+      ...options,
+    });
   }
 
   /**
@@ -1067,7 +1286,27 @@ export class SchedulingService {
     for (const c of stalePosts) {
       const format: MediaFormatType = c.slides && c.slides.length > 1 ? 'CAROUSEL' : 'IMAGE';
       const category = (c as any).content_category || undefined;
-      const gapInfo = cadenceAnalyzer.calculateEffectiveGap(rec, format, category);
+
+      const isFixed = settings.random_gap_enabled === false || settings.scheduling_strategy_mode === 'MANUAL' || rec.mode === 'manual';
+      let gapInfo: { min: number; max: number; rolledGap: number; reason: string };
+
+      if (isFixed) {
+        const base = settings.scheduling_strategy_mode === 'MANUAL'
+          ? Math.max(15, settings.manual_fixed_gap_minutes || settings.auto_publish_interval_minutes || 60)
+          : Math.max(15, settings.auto_publish_interval_minutes || 180);
+        const maxJitter = settings.scheduling_strategy_mode === 'MANUAL'
+          ? 0
+          : (settings.anti_bot_jitter_minutes !== undefined ? settings.anti_bot_jitter_minutes : 30);
+        const jitter = maxJitter > 0 ? (repairedConfessions.length * 7) % (maxJitter + 1) : 0;
+        gapInfo = {
+          min: base,
+          max: base + maxJitter,
+          rolledGap: base + jitter,
+          reason: `Fixed cooldown: ${base}m base (+${jitter}m jitter)`,
+        };
+      } else {
+        gapInfo = cadenceAnalyzer.calculateEffectiveGap(rec, format, category);
+      }
 
       let dayKey = this.getDayKey(cursor, tz);
       let daySafety = 0;
@@ -1082,14 +1321,22 @@ export class SchedulingService {
       const newScheduledAt = cursor.toISOString();
       const prevScheduledAt = c.scheduled_at;
 
+      const isGrowthOptimized = !isFixed && rec.mode === 'growth_optimized';
+      const gapHours = Math.floor(gapInfo.rolledGap / 60);
+      const gapMins = gapInfo.rolledGap % 60;
+      const gapLabel = gapHours > 0 ? (gapMins > 0 ? `${gapHours}h ${gapMins}m` : `${gapHours}h`) : `${gapMins}m`;
+      const strategyLabel = isFixed ? 'Fixed cooldown' : isGrowthOptimized ? 'Growth optimized' : 'Random fallback';
+      const whyThisTime = `${strategyLabel} · ${gapLabel} (Stale queue repair: ${gapInfo.reason || rec.strategy})`;
+
       await confessionService.updateConfession(c.id, {
         scheduled_at: newScheduledAt,
-        scheduling_strategy: rec.strategy,
+        scheduling_strategy: isFixed ? 'ADMIN_OVERRIDE' : rec.strategy,
         scheduling_gap_minutes: gapInfo.rolledGap,
         scheduling_reason: `Stale queue repair: ${gapInfo.reason}`,
-        scheduling_confidence: rec.confidence,
-        scheduling_evidence_count: rec.evidenceCount,
-        experiment_id: rec.experimentId,
+        scheduling_confidence: isFixed ? 'HIGH' : rec.confidence,
+        scheduling_evidence_count: isFixed ? 0 : rec.evidenceCount,
+        experiment_id: isFixed ? undefined : rec.experimentId,
+        why_this_time: whyThisTime,
       });
 
       repairedConfessions.push({
@@ -1098,7 +1345,7 @@ export class SchedulingService {
         previousScheduledAt: prevScheduledAt,
         newScheduledAt,
         gapMinutes: gapInfo.rolledGap,
-        strategy: rec.strategy,
+        strategy: isFixed ? 'ADMIN_OVERRIDE' : rec.strategy,
       });
 
       // Advance cursor for next item

@@ -21,6 +21,7 @@ import {
   Zap,
   Undo2,
   Settings,
+  ShieldAlert,
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -29,7 +30,7 @@ import { PublishModal } from '@/components/confessions/PublishModal';
 import { ScheduleModal } from '@/components/confessions/ScheduleModal';
 import { useToast } from '@/components/ui/ToastContext';
 
-type TabType = 'queue' | 'scheduled' | 'published' | 'deleted';
+type TabType = 'queue' | 'scheduled' | 'published' | 'low_value' | 'deleted';
 
 export default function ConfessionsPage() {
   const [allConfessions, setAllConfessions] = useState<Confession[]>([]);
@@ -53,8 +54,20 @@ export default function ConfessionsPage() {
 
   // Auto-publish settings for ETA
   const [publishSettings, setPublishSettings] = useState<{
-    interval: number; startHour: number; endHour: number;
-  }>({ interval: 120, startHour: 9, endHour: 23 });
+    interval: number;
+    startHour: number;
+    endHour: number;
+    isRandomGap: boolean;
+    jitter: number;
+    strategyMode: string;
+  }>({
+    interval: 180,
+    startHour: 9,
+    endHour: 22,
+    isRandomGap: true,
+    jitter: 30,
+    strategyMode: 'AUTO',
+  });
 
   // Growth Cadence Intelligence state
   const [cadenceInfo, setCadenceInfo] = useState<{
@@ -90,10 +103,17 @@ export default function ConfessionsPage() {
       setAllConfessions(data.confessions || []);
       setTemplates(tpls || []);
       if (settings) {
+        const isRandom = settings.random_gap_enabled !== false;
+        const interval = isRandom
+          ? (settings.current_random_gap_minutes ?? settings.auto_publish_interval_minutes ?? 60)
+          : (settings.auto_publish_interval_minutes ?? 180);
         setPublishSettings({
-          interval: settings.random_gap_enabled !== false ? (settings.current_random_gap_minutes ?? 60) : (settings.auto_publish_interval_minutes ?? 60),
+          interval,
           startHour: settings.auto_publish_start_hour ?? 9,
           endHour: settings.auto_publish_end_hour ?? 22,
+          isRandomGap: isRandom,
+          jitter: settings.anti_bot_jitter_minutes ?? 30,
+          strategyMode: settings.scheduling_strategy_mode || 'AUTO',
         });
       }
 
@@ -152,19 +172,35 @@ export default function ConfessionsPage() {
 
   useEffect(() => {
     loadData();
+    const handleRefresh = () => {
+      loadData();
+    };
+    window.addEventListener('confessionflow:refresh', handleRefresh);
     const pollInterval = setInterval(() => {
       loadData();
     }, 20000);
-    return () => clearInterval(pollInterval);
+    return () => {
+      window.removeEventListener('confessionflow:refresh', handleRefresh);
+      clearInterval(pollInterval);
+    };
   }, [loadData]);
   useEffect(() => { setPage(1); setSelectedIds([]); }, [activeTab, search, riskFilter]);
 
   // ─── Section filters ──────────────────────────────────────────────────────
   const queueConfessions = allConfessions.filter(
-    (c) => !['PUBLISHED', 'SCHEDULED', 'REJECTED', 'DELETED'].includes(c.status)
+    (c) =>
+      !['PUBLISHED', 'SCHEDULED', 'REJECTED', 'DELETED'].includes(c.status) &&
+      c.quality_status !== 'LOW_VALUE'
   );
   const scheduledConfessions = allConfessions.filter((c) => c.status === 'SCHEDULED');
   const publishedConfessions = allConfessions.filter((c) => c.status === 'PUBLISHED');
+  const lowValueConfessions = allConfessions.filter(
+    (c) =>
+      c.status !== 'DELETED' &&
+      (c.quality_status === 'LOW_VALUE' ||
+        c.quality_decision === 'REJECT' ||
+        (c.status === 'REJECTED' && c.quality_category === 'LOW_INFORMATION'))
+  );
   const deletedConfessions = allConfessions.filter((c) => c.status === 'DELETED');
   const failedConfessions = allConfessions.filter(
     (c) =>
@@ -195,6 +231,7 @@ export default function ConfessionsPage() {
     activeTab === 'queue' ? queueConfessions :
     activeTab === 'scheduled' ? scheduledConfessions :
     activeTab === 'published' ? publishedConfessions :
+    activeTab === 'low_value' ? lowValueConfessions :
     deletedConfessions
   );
 
@@ -202,14 +239,35 @@ export default function ConfessionsPage() {
   const paginated = activeList.slice((page - 1) * LIMIT, page * LIMIT);
 
   // ─── ETA helpers ─────────────────────────────────────────────────────────
+  const getCalendarDayDiff = (target: Date, base: Date = new Date()): number => {
+    const getDaysSinceEpoch = (d: Date) => {
+      // en-CA produces YYYY-MM-DD reliably in Asia/Kolkata
+      const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d).split('-');
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      return Math.floor(Date.UTC(year, month, day) / 86400000);
+    };
+    return getDaysSinceEpoch(target) - getDaysSinceEpoch(base);
+  };
+
   const getOrganicGap = useCallback((idx: number): number => {
+    // If user configured fixed cooldown (Fixed Cooldown + Jitter mode or MANUAL strategy)
+    if (!publishSettings.isRandomGap || publishSettings.strategyMode === 'MANUAL') {
+      const base = Math.max(15, publishSettings.interval || 180);
+      const maxJitter = publishSettings.jitter ?? 30;
+      const primes = [7, 13, 19, 23, 11, 17, 29, 31, 3, 5];
+      const j = maxJitter > 0 ? (primes[idx % primes.length] * (idx + 1)) % (maxJitter + 1) : 0;
+      return base + j;
+    }
+
     const minGap = cadenceInfo?.gapMin ?? 30;
     const maxGap = cadenceInfo?.gapMax ?? 75;
     const spread = Math.max(1, maxGap - minGap);
     const primes = [37, 53, 41, 67, 31, 59, 43, 71, 47, 61];
     const p = primes[idx % primes.length];
     return minGap + ((p * (idx + 1) * 7) % (spread + 1));
-  }, [cadenceInfo]);
+  }, [cadenceInfo, publishSettings]);
 
   const computeETA = (queueIndex: number): Date => {
     const { startHour, endHour } = publishSettings;
@@ -243,13 +301,27 @@ export default function ConfessionsPage() {
   };
 
   const formatETA = (date: Date): string => {
-    const diff = date.getTime() - Date.now();
-    const days = Math.floor(diff / 86400000);
-    const mins = Math.floor((diff % 3600000) / 60000);
-    const timeStr = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
-    const dateStr = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
+    const now = new Date();
+    const diff = date.getTime() - now.getTime();
+    if (diff <= 0) return 'Due now (publishing soon)';
     if (diff < 60000) return 'Any moment now';
-    if (diff < 3600000) return `~${mins}m from now`;
+
+    const dayDiff = getCalendarDayDiff(date, now);
+    const mins = Math.floor(diff / 60000);
+
+    // If within 45 minutes on the same calendar day
+    if (diff < 45 * 60000 && dayDiff === 0) {
+      return `~${mins}m from now`;
+    }
+
+    const timeStr = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+    const dateStr =
+      dayDiff === 0
+        ? 'Today'
+        : dayDiff === 1
+        ? 'Tomorrow'
+        : date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
+
     return `${dateStr} at ${timeStr}`;
   };
 
@@ -431,6 +503,22 @@ export default function ConfessionsPage() {
     }
   };
 
+  const handleQualityOverrideApprove = async (id: string) => {
+    try {
+      const res = await fetch(`/api/confessions/${encodeURIComponent(id)}/quality-override`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'APPROVE', reason: 'Admin manual approval override from Low Value tab' }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Quality override failed');
+      success('Confession quality-approved and returned to queue!');
+      await loadData();
+    } catch (err: any) {
+      error(err?.message || 'Failed to approve confession');
+    }
+  };
+
   // ─── Tab config ───────────────────────────────────────────────────────────
   const tabs: { id: TabType; label: string; icon: React.ReactNode; count: number; color: string }[] = [
     {
@@ -455,6 +543,13 @@ export default function ConfessionsPage() {
       color: 'emerald',
     },
     {
+      id: 'low_value',
+      label: 'Low Value',
+      icon: <ShieldAlert className="w-4 h-4" />,
+      count: lowValueConfessions.length,
+      color: 'slate',
+    },
+    {
       id: 'deleted',
       label: 'Deleted',
       icon: <Trash2 className="w-4 h-4" />,
@@ -467,12 +562,14 @@ export default function ConfessionsPage() {
     indigo: 'border-indigo-500 text-indigo-700 bg-indigo-50',
     amber:  'border-amber-500 text-amber-700 bg-amber-50',
     emerald:'border-emerald-500 text-emerald-700 bg-emerald-50',
+    slate:  'border-slate-500 text-slate-700 bg-slate-50',
     rose:   'border-rose-500 text-rose-700 bg-rose-50',
   };
   const badgeColorMap: Record<string, string> = {
     indigo: 'bg-indigo-100 text-indigo-700',
     amber:  'bg-amber-100 text-amber-700',
     emerald:'bg-emerald-100 text-emerald-700',
+    slate:  'bg-slate-100 text-slate-700',
     rose:   'bg-rose-100 text-rose-700',
   };
 
@@ -483,7 +580,7 @@ export default function ConfessionsPage() {
     return <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">LOW</span>;
   };
 
-  const statusBadge = (status: string, errorMessage?: string | null) => {
+  const statusBadge = (status: string, errorMessage?: string | null, qualityStatus?: string | null) => {
     const map: Record<string, string> = {
       PUBLISHED: 'bg-emerald-100 text-emerald-700 border-emerald-200',
       PUBLISHING: 'bg-blue-100 text-blue-700 border-blue-200',
@@ -501,6 +598,11 @@ export default function ConfessionsPage() {
         <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${cls}`}>
           {status.replace(/_/g, ' ')}
         </span>
+        {qualityStatus === 'LOW_VALUE' && (
+          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+            LOW VALUE
+          </span>
+        )}
         {isFailed && errorMessage && (
           <span
             className="text-[10px] text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded max-w-[190px] truncate block cursor-help font-medium"
@@ -523,6 +625,9 @@ export default function ConfessionsPage() {
             <h1 className="text-2xl font-bold text-zinc-900">Confessions</h1>
             <p className="text-sm text-zinc-500 mt-0.5">
               {allConfessions.filter(c => c.status !== 'DELETED').length} active · {queueConfessions.length} queued · {publishedConfessions.length} published
+              {lowValueConfessions.length > 0 && (
+                <span className="ml-2 font-semibold text-slate-600">· {lowValueConfessions.length} low value</span>
+              )}
               {deletedConfessions.length > 0 && (
                 <span className="ml-2 font-semibold text-zinc-500">· {deletedConfessions.length} deleted</span>
               )}
@@ -789,11 +894,13 @@ export default function ConfessionsPage() {
             {activeTab === 'queue' && <ListTodo className="w-10 h-10" />}
             {activeTab === 'scheduled' && <Clock className="w-10 h-10" />}
             {activeTab === 'published' && <CheckCircle2 className="w-10 h-10" />}
+            {activeTab === 'low_value' && <ShieldAlert className="w-10 h-10 text-slate-400" />}
             {activeTab === 'deleted' && <Trash2 className="w-10 h-10" />}
             <p className="text-sm font-medium">
               {activeTab === 'queue' && 'No confessions in queue'}
               {activeTab === 'scheduled' && 'No scheduled confessions'}
               {activeTab === 'published' && 'No published confessions yet'}
+              {activeTab === 'low_value' && 'No low-value or meaningless submissions found'}
               {activeTab === 'deleted' && 'No deleted confessions (trash is empty)'}
             </p>
           </div>
@@ -820,6 +927,7 @@ export default function ConfessionsPage() {
                       {activeTab === 'queue' && '📅 Estimated Upload'}
                       {activeTab === 'scheduled' && '🕐 Scheduled For'}
                       {activeTab === 'published' && '✅ Published At'}
+                      {activeTab === 'low_value' && '🛡️ Quality Assessment'}
                       {activeTab === 'deleted' && '🗑️ Deleted At'}
                     </th>
                     <th className="py-3.5 px-4 w-36 text-right pr-6">Actions</th>
@@ -864,7 +972,7 @@ export default function ConfessionsPage() {
 
                         <td className="py-3.5 px-3 whitespace-nowrap">{riskBadge(c.moderation_status)}</td>
 
-                        <td className="py-3.5 px-3 whitespace-nowrap">{statusBadge(c.status, c.error_message)}</td>
+                        <td className="py-3.5 px-3 whitespace-nowrap">{statusBadge(c.status, c.error_message, c.quality_status)}</td>
 
                         {/* Time column — changes per tab */}
                         <td className="py-3.5 px-4 whitespace-nowrap">
@@ -879,6 +987,22 @@ export default function ConfessionsPage() {
                                 </div>
                               </div>
                             ) : <span className="text-zinc-400 text-[11px]">Deleted</span>
+                          ) : activeTab === 'low_value' ? (
+                            <div className="text-[11px] space-y-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-slate-800">
+                                  Score: {c.quality_score ?? 0}/100
+                                </span>
+                                {c.quality_category && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 uppercase font-mono">
+                                    {c.quality_category.replace(/_/g, ' ')}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-zinc-500 text-[10px] max-w-xs truncate" title={c.quality_reason || undefined}>
+                                {c.quality_reason || 'Filtered by Confession Quality Gate'}
+                              </div>
+                            </div>
                           ) : activeTab === 'published' ? (
                             c.published_at ? (
                               <div className="text-[11px]">
@@ -899,7 +1023,24 @@ export default function ConfessionsPage() {
                                 <div className="text-zinc-400">
                                   {new Date(c.scheduled_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
                                 </div>
-                                {c.scheduling_strategy && (
+                                {c.why_this_time ? (
+                                  <div className="mt-1 flex flex-col gap-0.5">
+                                    <span
+                                      className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded font-medium border cursor-help w-fit ${
+                                        c.why_this_time.startsWith('Growth optimized')
+                                          ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                          : 'bg-zinc-100 text-zinc-700 border-zinc-200'
+                                      }`}
+                                      title={c.why_this_time}
+                                    >
+                                      <Sparkles className="w-2.5 h-2.5 text-purple-600" />
+                                      {c.why_this_time.split('(')[0].trim()}
+                                    </span>
+                                    <span className="text-[8px] text-zinc-400 pl-0.5 cursor-help" title={c.why_this_time}>
+                                      Why this time?
+                                    </span>
+                                  </div>
+                                ) : c.scheduling_strategy ? (
                                   <div className="mt-1">
                                     <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded font-medium bg-purple-50 text-purple-700 border border-purple-200" title={c.scheduling_reason || undefined}>
                                       <Sparkles className="w-2.5 h-2.5" />
@@ -913,24 +1054,67 @@ export default function ConfessionsPage() {
                                       {c.scheduling_gap_minutes ? ` · ${c.scheduling_gap_minutes}m` : ''}
                                     </span>
                                   </div>
-                                )}
+                                ) : null}
                               </div>
                             ) : <span className="text-zinc-300 text-[11px]">—</span>
                           ) : (
                             // Queue tab — show ETA
                             c.status === 'PUBLISHING' ? (
-                              <span className="text-[11px] text-blue-500 font-semibold animate-pulse">⏳ Uploading…</span>
+                              <div className="flex flex-col items-start gap-1">
+                                <span className="text-[11px] text-blue-500 font-semibold animate-pulse">⏳ Uploading…</span>
+                                <button
+                                  onClick={() => handleRestartQueue([c.id])}
+                                  disabled={restartingQueue}
+                                  className="text-[9px] text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded cursor-pointer transition-colors"
+                                  title="If upload timed out or got stuck, click to reset back to queue"
+                                >
+                                  Unstick / Reset
+                                </button>
+                              </div>
                             ) : qIdx >= 0 ? (
                               <div className="text-[11px]">
                                 <div className="text-indigo-600 font-semibold">
                                    {c.scheduled_at ? formatETA(new Date(c.scheduled_at)) : formatETA(computeETA(qIdx))}
                                  </div>
-                                <div className="text-zinc-400">
+                                <div className="mt-0.5 flex flex-col gap-0.5">
                                   {(() => {
-                                    const actualGap = c.scheduling_gap_minutes;
-                                    const modeLabel = cadenceInfo ? (cadenceInfo.mode === 'growth_optimized' ? 'Growth' : 'Adaptive') : 'Adaptive';
-                                    if (actualGap) return `Queue #${qIdx + 1} · ${modeLabel} · ${actualGap}m gap`;
-                                    return `Queue #${qIdx + 1} · ${modeLabel} · ~${getOrganicGap(qIdx)}m gap`;
+                                    const isFixed = !publishSettings.isRandomGap || publishSettings.strategyMode === 'MANUAL';
+                                    const isGrowth = !isFixed && cadenceInfo?.mode === 'growth_optimized';
+                                    const actualGap = c.scheduling_gap_minutes || getOrganicGap(qIdx);
+                                    const gapHours = Math.floor(actualGap / 60);
+                                    const gapMins = actualGap % 60;
+                                    const gapLabel = gapHours > 0 ? (gapMins > 0 ? `${gapHours}h ${gapMins}m` : `${gapHours}h`) : `${gapMins}m`;
+                                    const badgeLabel = isFixed
+                                      ? `Fixed cooldown · ${gapLabel}`
+                                      : isGrowth
+                                      ? `Growth optimized · ${gapLabel}`
+                                      : `Random fallback · ${gapLabel}`;
+                                    const explanation = c.why_this_time || (isFixed
+                                      ? `Fixed cooldown (${publishSettings.interval}m base + jitter)`
+                                      : isGrowth
+                                      ? `Growth optimized · ${gapLabel} (${cadenceInfo?.reason || 'Empirical peak reach window'})`
+                                      : `Random fallback · ${gapLabel} (Safe exploratory gap spacing)`);
+
+                                    return (
+                                      <>
+                                        <span
+                                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium border w-fit cursor-help ${
+                                            isFixed
+                                              ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                              : isGrowth
+                                              ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                              : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                                          }`}
+                                          title={explanation}
+                                        >
+                                          <Sparkles className={`w-2.5 h-2.5 ${isFixed ? 'text-blue-500' : 'text-purple-500'}`} />
+                                          {badgeLabel}
+                                        </span>
+                                        <span className="text-[8px] text-zinc-400 pl-0.5 cursor-help" title={explanation}>
+                                          Why this time?
+                                        </span>
+                                      </>
+                                    );
                                   })()}
                                 </div>
                               </div>
@@ -961,9 +1145,29 @@ export default function ConfessionsPage() {
                                   <Trash2 className="w-4 h-4" />
                                 </button>
                               </>
+                            ) : activeTab === 'low_value' ? (
+                              <>
+                                <button
+                                  onClick={() => handleQualityOverrideApprove(c.id)}
+                                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors shadow-xs cursor-pointer"
+                                  title="Approve Anyway (Override AI Quality Filter and return to Queue)"
+                                >
+                                  <Check className="w-3.5 h-3.5" /> Approve
+                                </button>
+                                <Link href={`/confessions/${c.id}`} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors" title="View">
+                                  <Eye className="w-4 h-4" />
+                                </Link>
+                                <button
+                                  onClick={() => handleDelete(c.id, false)}
+                                  className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                  title="Move to Deleted"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </>
                             ) : (
                               <>
-                                {c.status === 'FAILED' && (
+                                {(c.status === 'FAILED' || c.status === 'PUBLISHING') && (
                                   <button
                                     onClick={() => handleRestartQueue([c.id])}
                                     disabled={restartingQueue}

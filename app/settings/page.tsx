@@ -24,7 +24,7 @@ import {
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { SystemSettings, GoogleSheetConfig, InstagramAccountConfig } from '@/types';
-import { SchedulerRecommendation } from '@/types/growth';
+import { SchedulerRecommendation, DailyGrowthPlan } from '@/types/growth';
 import { useToast } from '@/components/ui/ToastContext';
 
 function SettingsContent() {
@@ -40,6 +40,7 @@ function SettingsContent() {
   const [sheetConfig, setSheetConfig] = useState<GoogleSheetConfig | null>(null);
   const [instagramConfig, setInstagramConfig] = useState<InstagramAccountConfig | null>(null);
   const [cadenceRec, setCadenceRec] = useState<SchedulerRecommendation | null>(null);
+  const [dailyPlan, setDailyPlan] = useState<DailyGrowthPlan | null>(null);
 
   // Test Connection States
   const [testingSheet, setTestingSheet] = useState(false);
@@ -95,10 +96,16 @@ function SettingsContent() {
       if (cadenceRes && cadenceRes.ok) {
         try {
           const cData = await cadenceRes.json();
-          if (cData.success && cData.recommendation) {
-            setCadenceRec(cData.recommendation);
+          if (cData.success) {
+            if (cData.recommendation) setCadenceRec(cData.recommendation);
+            if (cData.dailyPlan) setDailyPlan(cData.dailyPlan);
           }
         } catch {}
+      }
+
+      if (!genRes.ok) {
+        error(genData?.error || 'Failed to load settings');
+        return;
       }
 
       // Check browser localStorage for persistent user preference backups
@@ -108,6 +115,16 @@ function SettingsContent() {
         if (localBackup) {
           try {
             const parsed = JSON.parse(localBackup);
+            if (parsed.auto_publish === false || parsed.auto_publish_enabled === false) {
+              parsed.auto_publish = false;
+              parsed.auto_publish_enabled = false;
+              if (!parsed.publishing_mode || parsed.publishing_mode === 'AUTO_PUBLISH') {
+                parsed.publishing_mode = 'MANUAL_APPROVAL';
+              }
+            } else if (parsed.publishing_mode === 'MANUAL_APPROVAL' || parsed.publishing_mode === 'AUTO_APPROVAL') {
+              parsed.auto_publish = false;
+              parsed.auto_publish_enabled = false;
+            }
             const needsSync = Object.entries(parsed).some(
               ([k, v]) => v !== undefined && v !== (genData as any)[k]
             );
@@ -183,15 +200,21 @@ function SettingsContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
       });
-      if (!res.ok) throw new Error('Failed to update settings');
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Failed to update settings');
+      }
       const saved = await res.json();
       setGeneralSettings(saved);
       if (typeof window !== 'undefined') {
         localStorage.setItem('confessionflow_custom_settings', JSON.stringify(saved));
       }
       if (!silent) success('Settings saved permanently as default!');
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('confessionflow:refresh'));
+      }
     } catch (err: any) {
-      if (!silent) error(err?.message || 'Error saving settings');
+      error(err?.message || 'Error saving settings');
     } finally {
       if (!silent) setSaving(false);
     }
@@ -853,6 +876,81 @@ function SettingsContent() {
                     <option value="HIGH">Permissive (Require review only on critical High risk)</option>
                   </select>
                 </div>
+
+                {/* Confession Quality Gate Section */}
+                <div className="pt-5 border-t border-zinc-200/80 space-y-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-zinc-900 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-purple-600" />
+                      <span>Confession Quality Gate & Low-Value Content Filtering</span>
+                    </h4>
+                    <p className="text-[11px] text-zinc-500 mt-0.5">
+                      Prevents gibberish, emoji-only, meaningless one-word noise, and test submissions from ever entering the publish queue while preserving meaningful short confessions.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/50">
+                    <div>
+                      <span className="font-semibold text-zinc-800 block">Enable Content Quality Gate</span>
+                      <p className="text-[11px] text-zinc-500">
+                        Evaluates all incoming submissions through deterministic and semantic quality checks.
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={generalSettings.enable_quality_gate !== false}
+                      onChange={(e) => updateSettingField('enable_quality_gate', e.target.checked)}
+                      className="w-4 h-4 rounded border-zinc-300 text-purple-600"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/50">
+                    <div>
+                      <span className="font-semibold text-zinc-800 block">Auto-Reject Low-Value Noise</span>
+                      <p className="text-[11px] text-zinc-500">
+                        Automatically routes low-value content to the Rejected section without human intervention.
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={generalSettings.auto_reject_low_value !== false}
+                      onChange={(e) => updateSettingField('auto_reject_low_value', e.target.checked)}
+                      className="w-4 h-4 rounded border-zinc-300 text-purple-600"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/50">
+                    <div>
+                      <span className="font-semibold text-zinc-800 block">Groq Semantic Quality Analysis</span>
+                      <p className="text-[11px] text-zinc-500">
+                        Uses Llama 3.3 70B to evaluate emotional and confession substance beyond word count.
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={generalSettings.enable_groq_quality !== false}
+                      onChange={(e) => updateSettingField('enable_groq_quality', e.target.checked)}
+                      className="w-4 h-4 rounded border-zinc-300 text-purple-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-zinc-700 mb-1.5">
+                      Minimum Quality Score Threshold (0 - 100)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={generalSettings.min_quality_score ?? 55}
+                      onChange={(e) => updateSettingField('min_quality_score', parseInt(e.target.value, 10) || 55)}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-semibold bg-white"
+                    />
+                    <p className="text-[11px] text-zinc-500 mt-1">
+                      Scores below 55 are rejected as Low Value. Scores between 55 and 79 require review. Scores 80+ are approved.
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <div className="pt-4 border-t border-zinc-100 flex justify-end">
@@ -904,6 +1002,7 @@ function SettingsContent() {
                       const updated = {
                         ...generalSettings,
                         auto_publish: enabled,
+                        auto_publish_enabled: enabled,
                         publishing_mode: enabled ? ('AUTO_PUBLISH' as const) : ('MANUAL_APPROVAL' as const),
                       };
                       setGeneralSettings(updated);
@@ -922,10 +1021,12 @@ function SettingsContent() {
                     value={generalSettings.publishing_mode || 'AUTO_PUBLISH'}
                     onChange={(e) => {
                       const mode = e.target.value as any;
+                      const isAuto = mode === 'AUTO_PUBLISH';
                       const updated = {
                         ...generalSettings,
                         publishing_mode: mode,
-                        auto_publish: mode === 'AUTO_PUBLISH',
+                        auto_publish: isAuto,
+                        auto_publish_enabled: isAuto,
                       };
                       setGeneralSettings(updated);
                       handleSaveGeneral(updated, true);
@@ -938,39 +1039,144 @@ function SettingsContent() {
                   </select>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="block font-semibold text-zinc-700">
-                        Posting Gap Strategy
-                      </label>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 font-bold border border-purple-200">
-                        {generalSettings.random_gap_enabled !== false ? '🎲 Organic' : '⏱️ Fixed'}
-                      </span>
+                {/* SECTION 1: HARD OPERATIONAL LIMITS / GUARDRAILS */}
+                <div className="pt-2">
+                  <div className="flex items-center justify-between mb-3 border-b border-zinc-100 pb-2">
+                    <div>
+                      <h4 className="font-bold text-xs text-zinc-900 uppercase tracking-wider flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5 text-zinc-600" />
+                        Posting Limits (Hard Operational Guardrails)
+                      </h4>
+                      <p className="text-[11px] text-zinc-500">
+                        Operational boundaries defining what the system is allowed to do. Growth Intelligence optimizes within these hard limits.
+                      </p>
                     </div>
-                    <select
-                      value={generalSettings.random_gap_enabled !== false ? 'random' : 'fixed'}
-                      onChange={(e) => updateSettingField('random_gap_enabled', e.target.value === 'random')}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-semibold bg-white"
-                    >
-                      <option value="random">Dynamic Random Gaps (45m - 1.5h)</option>
-                      <option value="fixed">Fixed Cooldown + Jitter</option>
-                    </select>
-                    <span className="text-[10px] text-zinc-500 mt-1 block">
-                      {generalSettings.random_gap_enabled !== false
-                        ? `Adaptive cadence active: ~${generalSettings.current_random_gap_minutes ?? 45}m upcoming gap`
-                        : 'Fixed base cooldown interval.'}
-                    </span>
                   </div>
 
-                  {generalSettings.random_gap_enabled !== false ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {/* Minimum Daily Posts */}
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1.5">
+                        Minimum Daily Posts (Hard Floor)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={generalSettings.min_daily_posts ?? 2}
+                        onChange={(e) => updateSettingField('min_daily_posts', Math.max(1, parseInt(e.target.value || '2', 10)))}
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
+                      />
+                      <span className="text-[10px] text-zinc-500 mt-1 block">
+                        Safety floor: System will never schedule fewer than this even during extreme lulls.
+                      </span>
+                    </div>
+
+                    {/* Fallback Target Daily Posts */}
                     <div>
                       <div className="flex items-center justify-between mb-1.5">
                         <label className="block font-semibold text-zinc-700">
-                          Exploratory Gap Range
+                          Fallback Target Daily Posts
+                        </label>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-bold border border-blue-200">
+                          Fallback Only
+                        </span>
+                      </div>
+                      <input
+                        type="number"
+                        min={1}
+                        max={24}
+                        value={generalSettings.target_daily_posts ?? 4}
+                        onChange={(e) => updateSettingField('target_daily_posts', Math.max(1, parseInt(e.target.value || '4', 10)))}
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
+                      />
+                      <span className="text-[10px] text-zinc-500 mt-1 block">
+                        Used <strong>strictly as fallback</strong> when Growth Intelligence has insufficient data (N&lt;20 posts or &lt;7 days). Not a mandatory quota.
+                      </span>
+                    </div>
+
+                    {/* Maximum Daily Posts */}
+                    <div>
+                      <label className="block font-semibold text-zinc-700 mb-1.5">
+                        Maximum Daily Posts (Hard Ceiling)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={24}
+                        value={generalSettings.max_daily_posts ?? 12}
+                        onChange={(e) => updateSettingField('max_daily_posts', parseInt(e.target.value || '12', 10))}
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
+                      />
+                      <span className="text-[10px] text-zinc-500 mt-1 block">
+                        Hard upper limit: Growth Intelligence can <strong>never</strong> override or exceed this ceiling.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                    {/* Safe Human Daytime Window */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block font-semibold text-zinc-700">
+                          Active Hours Window (Account Timezone)
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = {
+                              ...generalSettings,
+                              auto_publish_start_hour: 0,
+                              auto_publish_end_hour: 24,
+                            };
+                            setGeneralSettings(updated);
+                            handleSaveGeneral(updated, true);
+                          }}
+                          className="text-[10px] text-purple-600 font-bold hover:underline cursor-pointer"
+                        >
+                          ⚡ Set 24/7 All Day & Night
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={generalSettings.auto_publish_start_hour ?? 9}
+                          onChange={(e) => updateSettingField('auto_publish_start_hour', parseInt(e.target.value, 10))}
+                          className="w-1/2 px-2.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
+                        >
+                          {Array.from({ length: 24 }).map((_, h) => (
+                            <option key={h} value={h}>
+                              {String(h).padStart(2, '0')}:00 {h === 0 ? '(Midnight)' : h === 9 ? '(9 AM - Start)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="text-zinc-500">to</span>
+                        <select
+                          value={generalSettings.auto_publish_end_hour ?? 22}
+                          onChange={(e) => updateSettingField('auto_publish_end_hour', parseInt(e.target.value, 10))}
+                          className="w-1/2 px-2.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
+                        >
+                          {Array.from({ length: 25 }).map((_, h) => (
+                            <option key={h} value={h}>
+                              {String(h).padStart(2, '0')}:00 {h === 24 ? '(24:00 - 24/7)' : h === 22 ? '(10 PM - Rest)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <span className="text-[10px] text-zinc-500 mt-1 block">
+                        {(generalSettings.auto_publish_start_hour ?? 0) === 0 && (generalSettings.auto_publish_end_hour ?? 24) >= 24
+                          ? '🟢 24/7 Continuous Publishing Active (Posts round the clock without nightly pause).'
+                          : 'Overnight rest active. Posts hold until next morning to protect Meta trust score.'}
+                      </span>
+                    </div>
+
+                    {/* Gap Guardrails */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block font-semibold text-zinc-700">
+                          Post Spacing Guardrails (Min/Max Gap)
                         </label>
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
-                          {generalSettings.current_random_gap_minutes ?? 45}m active
+                          {generalSettings.current_random_gap_minutes ?? 60}m active
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
@@ -979,10 +1185,9 @@ function SettingsContent() {
                           onChange={(e) => updateSettingField('min_gap_minutes', parseInt(e.target.value, 10))}
                           className="w-1/2 px-2 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
                         >
+                          <option value={20}>20m min</option>
                           <option value={25}>25m min</option>
                           <option value={30}>30m min (Default)</option>
-                          <option value={35}>35m min</option>
-                          <option value={40}>40m min</option>
                           <option value={45}>45m min</option>
                           <option value={60}>60m min</option>
                         </select>
@@ -994,173 +1199,123 @@ function SettingsContent() {
                         >
                           <option value={60}>60m max</option>
                           <option value={75}>75m max (Default)</option>
-                          <option value={85}>85m max</option>
                           <option value={90}>90m max (1.5h)</option>
-                          <option value={105}>105m max</option>
                           <option value={120}>120m max (2h)</option>
+                          <option value={180}>180m max (3h)</option>
                         </select>
                       </div>
                       <span className="text-[10px] text-zinc-500 mt-1 block">
-                        Base baseline interval range ({generalSettings.min_gap_minutes ?? 30}m–{generalSettings.max_gap_minutes ?? 75}m) used for exploration.
+                        Hard min/max bounds: Posts will not publish faster than {generalSettings.min_gap_minutes ?? 30}m or wait longer than {generalSettings.max_gap_minutes ?? 75}m.
                       </span>
                     </div>
-                  ) : (
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <label className="block font-semibold text-zinc-700">
-                          Base Post Cooldown
-                        </label>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
-                          +{generalSettings.current_jitter_minutes ?? 14}m jitter
-                        </span>
-                      </div>
-                      <select
-                        value={generalSettings.auto_publish_interval_minutes || 60}
-                        onChange={(e) => updateSettingField('auto_publish_interval_minutes', parseInt(e.target.value, 10))}
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
-                      >
-                        <option value={60}>Every 1 Hour (60m Base)</option>
-                        <option value={90}>Every 1.5 Hours (90m Base)</option>
-                        <option value={120}>Every 2 Hours (120m Base)</option>
-                        <option value={180}>Every 3 Hours (180m Base)</option>
-                      </select>
-                      <span className="text-[10px] text-zinc-500 mt-1 block">
-                        Fixed gap plus +0 to +30m jitter.
-                      </span>
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block font-semibold text-zinc-700 mb-1.5">
-                      Maximum Daily Posts
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={50}
-                      value={generalSettings.max_daily_posts ?? 24}
-                      onChange={(e) => updateSettingField('max_daily_posts', parseInt(e.target.value || '24', 10))}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
-                    />
-                    <span className="text-[10px] text-zinc-500 mt-1 block">
-                      Meta Graph API limit: 50 posts/day. 24–30 posts/day is optimal for 24/7 continuous posting.
-                    </span>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="block font-semibold text-zinc-700">
-                        Active Hours Window (Local)
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const updated = {
-                            ...generalSettings,
-                            auto_publish_start_hour: 0,
-                            auto_publish_end_hour: 24,
-                            max_daily_posts: 24,
-                          };
-                          setGeneralSettings(updated);
-                          handleSaveGeneral(updated, true);
-                        }}
-                        className="text-[10px] text-purple-600 font-bold hover:underline cursor-pointer"
-                      >
-                        ⚡ Set 24/7 All Day & Night
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={generalSettings.auto_publish_start_hour ?? 0}
-                        onChange={(e) => updateSettingField('auto_publish_start_hour', parseInt(e.target.value, 10))}
-                        className="w-1/2 px-2.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
-                      >
-                        {Array.from({ length: 24 }).map((_, h) => (
-                          <option key={h} value={h}>
-                            {String(h).padStart(2, '0')}:00 {h === 0 ? '(00:00 - 24/7)' : h === 9 ? '(9 AM)' : ''}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="text-zinc-500">to</span>
-                      <select
-                        value={generalSettings.auto_publish_end_hour ?? 24}
-                        onChange={(e) => updateSettingField('auto_publish_end_hour', parseInt(e.target.value, 10))}
-                        className="w-1/2 px-2.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium bg-white"
-                      >
-                        {Array.from({ length: 25 }).map((_, h) => (
-                          <option key={h} value={h}>
-                            {String(h).padStart(2, '0')}:00 {h === 24 ? '(24:00 - 24/7 Round Clock)' : h === 22 ? '(10 PM - Rest)' : ''}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <span className="text-[10px] text-zinc-500 mt-1 block">
-                      {(generalSettings.auto_publish_start_hour ?? 0) === 0 && (generalSettings.auto_publish_end_hour ?? 24) >= 24
-                        ? '🟢 24/7 Continuous Publishing Active (Posts round the clock without nightly pause).'
-                        : 'Custom window active. Account rests outside these hours.'}
-                    </span>
                   </div>
                 </div>
 
-                {/* Growth Intelligence Cadence Card */}
-                <div className="p-4 rounded-xl border border-purple-200 bg-gradient-to-br from-purple-50/50 via-indigo-50/30 to-white text-zinc-900 space-y-3 mt-4 shadow-xs">
+                {/* SECTION 2: GROWTH INTELLIGENCE STRATEGY & ACTIVE AUTHORITY */}
+                <div className="p-4 rounded-xl border border-purple-200 bg-gradient-to-br from-purple-50/60 via-indigo-50/40 to-white text-zinc-900 space-y-3 mt-4 shadow-xs">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-purple-600" />
-                      <span className="font-bold text-xs text-purple-950">Growth Cadence Scheduling Strategy</span>
+                      <div>
+                        <span className="font-bold text-xs text-purple-950">Growth Intelligence Strategy & Authority</span>
+                        <span className="text-[10px] text-purple-700/80 block">
+                          Performance strategy derived from empirical frequency saturation & reach curves
+                        </span>
+                      </div>
                     </div>
-                    <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider border ${
-                      cadenceRec?.mode === 'growth_optimized'
+                    <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider border ${
+                      dailyPlan?.authority_source === 'GROWTH_INTELLIGENCE'
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : cadenceRec?.mode === 'manual'
+                        : dailyPlan?.authority_source === 'SETTINGS_HARD_LIMIT'
                         ? 'bg-amber-50 text-amber-700 border-amber-200'
+                        : dailyPlan?.authority_source === 'ADMIN_OVERRIDE'
+                        ? 'bg-purple-50 text-purple-700 border-purple-200'
                         : 'bg-blue-50 text-blue-700 border-blue-200'
                     }`}>
-                      {cadenceRec?.mode ? cadenceRec.mode.replace(/_/g, ' ') : 'Adaptive'}
+                      {dailyPlan?.authority_source ? dailyPlan.authority_source.replace(/_/g, ' ') : 'SETTINGS FALLBACK'}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                    <div className="p-3 bg-white/90 rounded-lg border border-purple-100 shadow-xs">
-                      <span className="text-[10px] text-zinc-500 font-medium block">Active Strategy</span>
-                      <span className="font-semibold text-purple-950 text-xs mt-0.5 block">
-                        {cadenceRec?.strategy ? cadenceRec.strategy.replace(/_/g, ' ') : 'BALANCED CADENCE'}
-                      </span>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+                    {/* Planned Daily Frequency */}
+                    <div className="p-3 bg-white/95 rounded-lg border border-purple-100 shadow-xs">
+                      <span className="text-[10px] text-zinc-500 font-medium block">Planned Frequency</span>
+                      <div className="flex items-baseline gap-1 mt-0.5">
+                        <span className="text-lg font-bold text-purple-950">
+                          {dailyPlan?.effective_daily_posts ?? generalSettings.target_daily_posts ?? 4}
+                        </span>
+                        <span className="text-xs text-zinc-500 font-medium">posts/day</span>
+                      </div>
                       <span className="text-[10px] text-zinc-500 mt-1 block">
-                        Confidence: <strong className="text-purple-700 font-semibold">{cadenceRec?.confidence || 'LOW'}</strong> (N={cadenceRec?.evidenceCount || 0})
+                        {dailyPlan?.is_fallback
+                          ? `Fallback target active (${generalSettings.min_daily_posts ?? 2}–${generalSettings.max_daily_posts ?? 12} limits)`
+                          : `Recommended: ${dailyPlan?.recommended_posts ?? 4}/day (Overrides target)`}
                       </span>
                     </div>
 
-                    <div className="p-3 bg-white/90 rounded-lg border border-purple-100 shadow-xs">
-                      <span className="text-[10px] text-zinc-500 font-medium block">Evidence-Backed Interval</span>
-                      <span className="font-semibold text-zinc-900 text-xs mt-0.5 block">
-                        {cadenceRec?.recommendedGapRangeMinutes
-                          ? `${cadenceRec.recommendedGapRangeMinutes.min}m – ${cadenceRec.recommendedGapRangeMinutes.max}m`
-                          : '30m – 75m'}
-                      </span>
+                    {/* Evidence & Confidence */}
+                    <div className="p-3 bg-white/95 rounded-lg border border-purple-100 shadow-xs">
+                      <span className="text-[10px] text-zinc-500 font-medium block">Empirical Confidence</span>
+                      <div className="flex items-baseline gap-1 mt-0.5">
+                        <span className="text-lg font-bold text-purple-950">
+                          {Math.round((dailyPlan?.confidence ?? 0) * 100)}%
+                        </span>
+                        <span className="text-xs text-zinc-500 font-medium">statistical</span>
+                      </div>
                       <span className="text-[10px] text-zinc-500 mt-1 block">
-                        Max ~{cadenceRec?.recommendedPostsPerHour || 1}/hr · Cooldown {cadenceRec?.cooldownMinutes || 30}m
+                        N={dailyPlan?.sample_size ?? cadenceRec?.evidenceCount ?? 0} posts across {dailyPlan?.days_of_data ?? 0} days
                       </span>
                     </div>
 
-                    <div className="p-3 bg-white/90 rounded-lg border border-purple-100 shadow-xs">
-                      <span className="text-[10px] text-zinc-500 font-medium block">Strategy Mode Mode</span>
+                    {/* Cadence Spacing & Jitter */}
+                    <div className="p-3 bg-white/95 rounded-lg border border-purple-100 shadow-xs">
+                      <span className="text-[10px] text-zinc-500 font-medium block">Recommended Spacing</span>
+                      <span className="font-semibold text-zinc-900 text-xs mt-1 block">
+                        {dailyPlan?.recommended_spacing
+                          ? `${dailyPlan.recommended_spacing.min_minutes}m – ${dailyPlan.recommended_spacing.max_minutes}m`
+                          : `${cadenceRec?.recommendedGapRangeMinutes?.min ?? 30}m – ${cadenceRec?.recommendedGapRangeMinutes?.max ?? 75}m`}
+                      </span>
+                      <span className="text-[10px] text-zinc-500 mt-1 block">
+                        Rolling Horizon: {generalSettings.rolling_horizon_hours ?? 24} hours
+                      </span>
+                    </div>
+
+                    {/* Strategy Mode Switcher */}
+                    <div className="p-3 bg-white/95 rounded-lg border border-purple-100 shadow-xs">
+                      <span className="text-[10px] text-zinc-500 font-medium block">Strategy Authority Mode</span>
                       <select
                         value={generalSettings.scheduling_strategy_mode || 'AUTO'}
                         onChange={(e) => handleUpdateCadenceOverride(e.target.value as any, generalSettings.manual_fixed_gap_minutes)}
-                        className="w-full mt-1 px-2 py-1.5 rounded-md border border-zinc-200 text-xs font-medium bg-white focus:outline-none focus:ring-1 focus:ring-purple-400"
+                        className="w-full mt-1.5 px-2 py-1.5 rounded-md border border-zinc-200 text-xs font-medium bg-white focus:outline-none focus:ring-1 focus:ring-purple-400"
                       >
                         <option value="AUTO">AUTO (Growth Adaptive)</option>
                         <option value="BASELINE">BASELINE (Exploration)</option>
                         <option value="MANUAL">MANUAL (Admin Override)</option>
                       </select>
+                      <span className="text-[9px] text-zinc-400 mt-1 block">
+                        AUTO allows Growth Intelligence to decide.
+                      </span>
                     </div>
                   </div>
 
-                  {cadenceRec?.reason && (
+                  {/* Saturation Warning if Degradation Detected */}
+                  {dailyPlan?.saturation_detected && (
+                    <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 p-2.5 rounded-lg text-xs text-amber-900">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold block">Reach Degradation Warning Observed:</span>
+                        <span>
+                          Account analytics detected that posting more than {dailyPlan.saturation_knee_posts_per_day} posts/day diminishes average reach per post. The scheduler is intentionally pacing posts to maximize per-post reach.
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Observational Reasoning */}
+                  {(dailyPlan?.reason || cadenceRec?.reason) && (
                     <div className="text-[11px] text-purple-950 bg-purple-100/60 p-2.5 rounded-lg border border-purple-200/60 leading-relaxed">
-                      <span className="font-semibold text-purple-900 block mb-0.5">Observational Reasoning:</span>
-                      {cadenceRec.reason}
+                      <span className="font-semibold text-purple-900 block mb-0.5">Strategy Reasoning:</span>
+                      {dailyPlan?.reason || cadenceRec?.reason}
                     </div>
                   )}
                 </div>

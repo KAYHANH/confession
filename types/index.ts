@@ -1,3 +1,6 @@
+export * from './quality';
+import { QualityStatus, QualityCategory, QualityDecision } from './quality';
+
 export type ConfessionStatus =
   | 'NEW'
   | 'IMPORTED'
@@ -53,6 +56,27 @@ export interface Confession {
   slides?: string[];
   format?: 'IMAGE' | 'CAROUSEL' | 'REEL' | 'VIDEO' | 'OTHER';
   content_category?: string;
+  predicted_performance_score?: number | null;
+  post_saturation_score?: number | null;
+  why_this_time?: string | null;
+  // Confession Quality Gate Metadata
+  quality_status?: QualityStatus;
+  quality_score?: number | null;
+  quality_decision?: QualityDecision | null;
+  quality_intent?: string | null;
+  quality_reason?: string | null;
+  quality_category?: QualityCategory | null;
+  quality_confidence?: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+  quality_model_version?: string | null;
+  quality_prompt_version?: string | null;
+  quality_rules_version?: string | null;
+  quality_analyzed_at?: string | null;
+  quality_override?: boolean | null;
+  quality_override_by?: string | null;
+  quality_override_at?: string | null;
+  quality_override_reason?: string | null;
+  quality_false_positive?: boolean | null;
+  quality_false_negative?: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -102,7 +126,15 @@ export interface ActivityLog {
     | 'INSTAGRAM_CONNECTED'
     | 'SETTINGS_UPDATED'
     | 'DELETED'
-    | 'RESTORED';
+    | 'RESTORED'
+    | 'QUALITY_ANALYSIS_STARTED'
+    | 'QUALITY_ANALYSIS_COMPLETED'
+    | 'QUALITY_REJECTED'
+    | 'QUALITY_REVIEW_REQUIRED'
+    | 'QUALITY_OVERRIDE'
+    | 'QUALITY_DUPLICATE'
+    | 'QUALITY_GIBBERISH'
+    | 'QUALITY_EMOJI_ONLY';
   entity_type: 'confession' | 'sheet' | 'instagram' | 'template' | 'settings' | 'queue';
   entity_id?: string | null;
   metadata: Record<string, any>;
@@ -162,9 +194,14 @@ export interface SystemSettings {
   default_template_id: string;
   timezone: string;
   auto_publish: boolean;
+  auto_publish_enabled?: boolean; // Frontend compatibility alias
   publishing_mode: 'MANUAL_APPROVAL' | 'AUTO_APPROVAL' | 'AUTO_PUBLISH';
   default_publishing_time: string; // e.g. "19:30"
-  max_daily_posts: number;
+  max_daily_posts: number; // Hard ceiling on posts per day (default 6)
+  min_daily_posts?: number; // Minimum target daily posts (default 2)
+  target_daily_posts?: number; // Target daily posts (default 4)
+  scheduling_mode?: 'QUALITY_FIRST' | 'BALANCED' | 'HIGH_VOLUME'; // Overall scheduling strategy policy (default QUALITY_FIRST)
+  content_quality_threshold?: number; // Minimum score for immediate scheduling in QUALITY_FIRST mode
   auto_publish_interval_minutes?: number; // Base cooldown between posts in minutes (e.g. 60 or 120)
   auto_publish_start_hour?: number; // Active window start hour in local time (0-23, e.g. 9 for 9 AM)
   auto_publish_end_hour?: number; // Active window end hour in local time (0-23, e.g. 23 for 11 PM)
@@ -189,6 +226,16 @@ export interface SystemSettings {
   scheduling_strategy_mode?: 'AUTO' | 'GROWTH_OPTIMIZED' | 'BASELINE' | 'MANUAL';
   manual_fixed_gap_minutes?: number;
   enable_experimental_scheduling?: boolean;
+  // Content Quality Gate Settings
+  enable_quality_gate?: boolean;
+  auto_reject_low_value?: boolean;
+  min_quality_score?: number;
+  enable_groq_quality?: boolean;
+  // Authority Model Settings
+  min_posts_for_cadence_learning?: number; // Minimum historical posts required for Growth Intelligence authority (default 20)
+  min_days_for_cadence_learning?: number; // Minimum distinct days of data required (default 7)
+  min_growth_confidence?: number; // Minimum confidence required (0.0 to 1.0, default 0.70)
+  rolling_horizon_hours?: number; // Rolling scheduling horizon in hours (default 24)
 }
 
 export interface ModerationCheckResult {

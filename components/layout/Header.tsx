@@ -32,7 +32,7 @@ export function Header({ title, subtitle }: HeaderProps) {
         .then((res) => res.json())
         .then((settings) => {
           setAutoPublishActive(
-            Boolean(settings.auto_publish === true || settings.publishing_mode === 'AUTO_PUBLISH')
+            Boolean(settings.auto_publish === true && settings.publishing_mode === 'AUTO_PUBLISH')
           );
         })
         .catch(() => {});
@@ -100,10 +100,15 @@ export function Header({ title, subtitle }: HeaderProps) {
         )}
 
         {/* 24/7 Auto-Publish Badge */}
-        {autoPublishActive && (
+        {autoPublishActive ? (
           <div className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-purple-50 text-purple-800 text-xs font-semibold border border-purple-200">
             <span className="w-2 h-2 rounded-full bg-purple-600 animate-pulse"></span>
             <span>24/7 Auto-Publish ON</span>
+          </div>
+        ) : (
+          <div className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-100 text-zinc-600 text-xs font-semibold border border-zinc-200">
+            <span className="w-2 h-2 rounded-full bg-zinc-400"></span>
+            <span>Auto-Publish PAUSED</span>
           </div>
         )}
 

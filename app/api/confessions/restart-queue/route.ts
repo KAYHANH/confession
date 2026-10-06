@@ -17,8 +17,14 @@ export async function POST(request: NextRequest) {
       Array.isArray(ids) && ids.length > 0 ? ids : undefined
     );
 
-
-    // If auto publish is enabled or requested, trigger cycle in background immediately
+    // Recalculate schedule timings for restarted items
+    if (result.restartedCount > 0) {
+      try {
+        await schedulingService.generateFutureSchedule({ forceRecalculate: true });
+      } catch (schedErr) {
+        console.warn('[RestartQueue] Future schedule recalculation warning:', schedErr);
+      }
+    }
     const settings = mockStore.getSettings();
     const shouldPublish = triggerPublish && (settings.auto_publish || settings.publishing_mode === 'AUTO_PUBLISH');
 

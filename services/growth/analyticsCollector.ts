@@ -15,6 +15,8 @@ import {
   MediaFormatType,
 } from '@/types/growth';
 import { Confession } from '@/types';
+import { growthMetricsService } from './growthMetricsService';
+import { recommendationLearningService } from './recommendationLearningService';
 
 export const OBSERVATION_MILESTONES: { bucket: AgeBucket; targetMinutes: number; minAgeMinutes: number }[] = [
   { bucket: '15m', targetMinutes: 15, minAgeMinutes: 12 },
@@ -65,6 +67,20 @@ export class AnalyticsCollector {
 
       const saved = await growthStore.addPublishedMedia(mediaRecord);
       console.log(`📊 [AnalyticsCollector] Registered published media for tracking: ${mediaRecord.id}`);
+
+      // Initialize PostPerformanceRecord for account learning
+      try {
+        const allPublished = await growthStore.getPublishedMedia();
+        const postRecord = growthMetricsService.buildPostPerformanceRecord(
+          saved,
+          confession,
+          [],
+          allPublished
+        );
+        await growthStore.savePostPerformanceRecord(postRecord);
+      } catch (recErr: any) {
+        console.warn('[AnalyticsCollector] Non-fatal notice creating initial PostPerformanceRecord:', recErr?.message || recErr);
+      }
 
       // If analytics collection is enabled, trigger initial check asynchronously
       const flags = getGrowthFeatureFlags();
@@ -225,8 +241,34 @@ export class AnalyticsCollector {
         created_at: new Date().toISOString(),
       };
 
-      await growthStore.addSnapshot(snapshot);
+      // Enrich with calculated interval deltas and velocities
+      const existingSnaps = await growthStore.getSnapshots();
+      const mediaSnaps = existingSnaps.filter((s) => s.published_media_id === media.id);
+      const allSnapsForMedia = [...mediaSnaps, snapshot];
+      const enrichedSnaps = growthMetricsService.calculateSnapshotDeltasAndVelocities(allSnapsForMedia);
+      const finalSnapshot = enrichedSnaps.find((s) => s.id === snapshot.id) || snapshot;
+
+      await growthStore.addSnapshot(finalSnapshot);
       console.log(`📈 [AnalyticsCollector] Snapshot saved: ${media.id} @ ${ageBucket} (Actual: ${actualMinutes}m)`);
+
+      // Update PostPerformanceRecord for account learning
+      try {
+        const allPublished = await growthStore.getPublishedMedia();
+        const confession = mockStore.getConfessionById(media.content_id);
+        const updatedRecord = growthMetricsService.buildPostPerformanceRecord(
+          media,
+          confession,
+          enrichedSnaps,
+          allPublished
+        );
+        await growthStore.savePostPerformanceRecord(updatedRecord);
+
+        // Evaluate pending recommendations against newly observed data
+        recommendationLearningService.evaluatePendingRecommendations().catch(() => {});
+      } catch (recErr: any) {
+        console.warn('[AnalyticsCollector] Non-fatal notice updating PostPerformanceRecord:', recErr?.message || recErr);
+      }
+
       return true;
     } catch (err: any) {
       console.warn(`⚠️ [AnalyticsCollector] Failed to collect snapshot for ${media.id} @ ${ageBucket}:`, err?.message || err);

@@ -23,6 +23,9 @@ import {
   Filter,
   Activity,
   X,
+  Brain,
+  RefreshCw,
+  CalendarCheck,
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useToast } from '@/components/ui/ToastContext';
@@ -38,7 +41,7 @@ import {
   SchedulerRecommendation,
 } from '@/types/growth';
 
-type GrowthTab = 'overview' | 'formats' | 'timing' | 'content' | 'experiments' | 'diagnostics';
+type GrowthTab = 'overview' | 'brain' | 'formats' | 'timing' | 'content' | 'experiments' | 'diagnostics';
 
 export default function GrowthIntelligencePage() {
   const [activeTab, setActiveTab] = useState<GrowthTab>('overview');
@@ -60,6 +63,15 @@ export default function GrowthIntelligencePage() {
   const [cadenceRec, setCadenceRec] = useState<SchedulerRecommendation | null>(null);
   const [queueDiagnostics, setQueueDiagnostics] = useState<any | null>(null);
 
+  // Account Learning & Adaptive Scheduling Brain state
+  const [learningOverview, setLearningOverview] = useState<any | null>(null);
+  const [brainRecommendation, setBrainRecommendation] = useState<any | null>(null);
+  const [brainLoading, setBrainLoading] = useState(false);
+  const [isOverrideModalOpen, setIsOverrideModalOpen] = useState(false);
+  const [overrideFormat, setOverrideFormat] = useState('IMAGE');
+  const [overrideTime, setOverrideTime] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
+
   // Reel modal state
   const [isReelModalOpen, setIsReelModalOpen] = useState(false);
   const [reelConfessionId, setReelConfessionId] = useState('');
@@ -80,7 +92,7 @@ export default function GrowthIntelligencePage() {
   const loadAllGrowthData = useCallback(async () => {
     try {
       setLoading(true);
-      const [ovRes, fmtRes, timeRes, gapRes, catRes, hookRes, postRes, expRes, anaRes, cadRes] = await Promise.all([
+      const [ovRes, fmtRes, timeRes, gapRes, catRes, hookRes, postRes, expRes, anaRes, cadRes, learnRes, recRes] = await Promise.all([
         fetch('/api/growth/overview'),
         fetch('/api/growth/formats'),
         fetch('/api/growth/times'),
@@ -91,6 +103,8 @@ export default function GrowthIntelligencePage() {
         fetch('/api/growth/experiments'),
         fetch('/api/growth/analysis'),
         fetch('/api/growth/cadence').catch(() => null),
+        fetch('/api/growth/learning/overview').catch(() => null),
+        fetch('/api/growth/learning/recommendation').catch(() => null),
       ]);
 
       const [ovData, fmtData, timeData, gapData, catData, hookData, postData, expData, anaData] = await Promise.all([
@@ -112,6 +126,20 @@ export default function GrowthIntelligencePage() {
             setCadenceRec(cData.recommendation);
             setQueueDiagnostics(cData.diagnostics);
           }
+        } catch {}
+      }
+
+      if (learnRes && learnRes.ok) {
+        try {
+          const lData = await learnRes.json();
+          if (lData.success) setLearningOverview(lData.data);
+        } catch {}
+      }
+
+      if (recRes && recRes.ok) {
+        try {
+          const rData = await recRes.json();
+          if (rData.success) setBrainRecommendation(rData);
         } catch {}
       }
 
@@ -258,6 +286,80 @@ export default function GrowthIntelligencePage() {
     }
   };
 
+  const handleAcceptRecommendation = async () => {
+    if (!brainRecommendation?.data?.recordId) return;
+    try {
+      setBrainLoading(true);
+      const res = await fetch('/api/growth/learning/recommendation/accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recordId: brainRecommendation.data.recordId,
+          confessionId: brainRecommendation.data.targetConfession?.id,
+          scheduledTime: brainRecommendation.data.validation?.targetTimestamp,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        success('Recommendation accepted! Next confession scheduled successfully.');
+        loadAllGrowthData();
+      } else {
+        error(data.error || 'Failed to accept recommendation.');
+      }
+    } catch {
+      error('Failed to accept recommendation.');
+    } finally {
+      setBrainLoading(false);
+    }
+  };
+
+  const handleOverrideRecommendation = async () => {
+    if (!brainRecommendation?.data?.recordId) return;
+    try {
+      setBrainLoading(true);
+      const res = await fetch('/api/growth/learning/recommendation/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recordId: brainRecommendation.data.recordId,
+          format: overrideFormat,
+          scheduleTime: overrideTime || undefined,
+          reason: overrideReason || 'Manual user override',
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        success('Recommendation overridden successfully.');
+        setIsOverrideModalOpen(false);
+        loadAllGrowthData();
+      } else {
+        error(data.error || 'Failed to override recommendation.');
+      }
+    } catch {
+      error('Failed to override recommendation.');
+    } finally {
+      setBrainLoading(false);
+    }
+  };
+
+  const handleRefreshRecommendation = async () => {
+    try {
+      setBrainLoading(true);
+      const res = await fetch('/api/growth/learning/recommendation', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setBrainRecommendation(data);
+        success('Generated fresh scheduling recommendation.');
+      } else {
+        error(data.error || 'Failed to refresh recommendation.');
+      }
+    } catch {
+      error('Failed to refresh recommendation.');
+    } finally {
+      setBrainLoading(false);
+    }
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-6 max-w-7xl mx-auto pb-16">
@@ -390,6 +492,18 @@ export default function GrowthIntelligencePage() {
           </button>
 
           <button
+            onClick={() => setActiveTab('brain')}
+            className={`px-4 py-2 rounded-xl transition-all whitespace-nowrap flex items-center gap-2 ${
+              activeTab === 'brain'
+                ? 'bg-indigo-600 text-white shadow-sm font-semibold'
+                : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100'
+            }`}
+          >
+            <Brain className="w-4 h-4 text-indigo-300" />
+            Adaptive Scheduling Brain
+          </button>
+
+          <button
             onClick={() => setActiveTab('formats')}
             className={`px-4 py-2 rounded-xl transition-all whitespace-nowrap flex items-center gap-2 ${
               activeTab === 'formats'
@@ -453,6 +567,263 @@ export default function GrowthIntelligencePage() {
         {/* ================= TAB 1: OVERVIEW & GROQ ANALYST ================= */}
         {activeTab === 'overview' && (
           <div className="space-y-6">
+            {/* Real-time Adaptive Scheduling Brain Card */}
+            {brainRecommendation?.data && (
+              <div className="p-6 rounded-2xl bg-gradient-to-br from-indigo-950 via-slate-900 to-zinc-950 text-white shadow-xl border border-indigo-500/20 space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-indigo-900/60 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                      <Brain className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-lg font-bold tracking-tight">Adaptive Scheduling Brain</h3>
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider ${
+                          brainRecommendation.data.validation?.status === 'VALIDATED'
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        }`}>
+                          {brainRecommendation.data.validation?.status || 'VALIDATED'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-indigo-200/70 mt-0.5">
+                        Closed learning loop powered by Llama-3.3-70B with deterministic platform safety validation.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleRefreshRecommendation}
+                      disabled={brainLoading}
+                      className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-semibold flex items-center gap-1.5 transition-all text-white border border-white/10"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${brainLoading ? 'animate-spin' : ''}`} />
+                      Refresh Recommendation
+                    </button>
+                  </div>
+                </div>
+
+                {/* Key Recommendation Metrics Grid */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                  <div className="p-3.5 rounded-xl bg-white/5 border border-white/10">
+                    <span className="text-zinc-400 block text-[11px] uppercase font-semibold">Recommended Format</span>
+                    <span className="text-base font-bold text-indigo-300 mt-1 block">
+                      {brainRecommendation.data.validation?.targetFormat || brainRecommendation.data.recommendation?.recommended_format}
+                    </span>
+                    <span className="text-[10px] text-zinc-400">
+                      Alt: {brainRecommendation.data.recommendation?.alternative?.format || 'CAROUSEL'}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-white/5 border border-white/10">
+                    <span className="text-zinc-400 block text-[11px] uppercase font-semibold">Validated Next Publish</span>
+                    <span className="text-sm font-bold text-emerald-300 mt-1 block">
+                      {new Date(brainRecommendation.data.validation?.targetTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    <span className="text-[10px] text-zinc-400">
+                      Window: {brainRecommendation.data.recommendation?.recommended_publish_window?.start}–{brainRecommendation.data.recommendation?.recommended_publish_window?.end}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-white/5 border border-white/10">
+                    <span className="text-zinc-400 block text-[11px] uppercase font-semibold">Recommended Cadence Gap</span>
+                    <span className="text-base font-bold text-white mt-1 block">
+                      {brainRecommendation.data.recommendation?.recommended_gap_minutes?.min}–{brainRecommendation.data.recommendation?.recommended_gap_minutes?.max}m
+                    </span>
+                    <span className="text-[10px] text-zinc-400">
+                      {brainRecommendation.data.recommendation?.recommended_posts_per_3h || 1} post(s) / 3h max
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-white/5 border border-white/10">
+                    <span className="text-zinc-400 block text-[11px] uppercase font-semibold">Confidence & Support</span>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                        brainRecommendation.data.recommendation?.confidence === 'HIGH'
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : brainRecommendation.data.recommendation?.confidence === 'MEDIUM'
+                          ? 'bg-indigo-500/20 text-indigo-300'
+                          : 'bg-amber-500/20 text-amber-300'
+                      }`}>
+                        {brainRecommendation.data.recommendation?.confidence}
+                      </span>
+                      <span className="text-[11px] text-zinc-400">
+                        (N={brainRecommendation.data.recommendation?.evidence_count})
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-zinc-400 block mt-0.5">
+                      Exploration: {brainRecommendation.data.recommendation?.exploration?.percentage}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Reasoning & Adjustments */}
+                <div className="p-4 rounded-xl bg-indigo-900/30 border border-indigo-500/30 text-xs space-y-2">
+                  <div className="flex items-start gap-2">
+                    <Sparkles className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-indigo-200 block font-semibold">AI Recommendation Strategy & Rationale:</strong>
+                      <p className="text-zinc-300 mt-0.5 leading-relaxed">
+                        {brainRecommendation.data.recommendation?.reason}
+                      </p>
+                    </div>
+                  </div>
+
+                  {brainRecommendation.data.validation?.adjustments?.length > 0 && (
+                    <div className="pt-2 border-t border-indigo-800/40 text-amber-300 text-[11px] space-y-1">
+                      <strong>Deterministic Safety Guardrail Adjustments:</strong>
+                      <ul className="list-disc list-inside space-y-0.5 text-zinc-300">
+                        {brainRecommendation.data.validation.adjustments.map((adj: string, i: number) => (
+                          <li key={i}>{adj}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                {/* Target Confession Preview & Action Buttons */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-1">
+                  {brainRecommendation.data.targetConfession ? (
+                    <div className="text-xs text-zinc-300">
+                      <span className="font-semibold text-white">Next Pending Confession: </span>
+                      <span className="text-indigo-300 font-mono">#{brainRecommendation.data.targetConfession.row || 'Queue'}</span>
+                      <p className="text-zinc-400 text-[11px] truncate max-w-md mt-0.5">
+                        &quot;{brainRecommendation.data.targetConfession.text}&quot;
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-zinc-400">
+                      No approved unscheduled confessions currently pending in queue.
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => setIsOverrideModalOpen(true)}
+                      className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-semibold text-white transition-all border border-white/10"
+                    >
+                      Override Format/Time
+                    </button>
+                    <button
+                      onClick={handleAcceptRecommendation}
+                      disabled={brainLoading || !brainRecommendation.data.targetConfession}
+                      className="px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-xs font-semibold text-white transition-all shadow-md flex items-center gap-1.5"
+                    >
+                      <CalendarCheck className="w-3.5 h-3.5" />
+                      Accept & Schedule Next Post
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Dedicated Posting Strategy Summary Card */}
+            <div className="p-6 rounded-2xl bg-white border border-indigo-100 shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-100 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-purple-50 text-purple-600 border border-purple-200">
+                    <Sparkles className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-bold text-zinc-900">Posting Strategy &amp; Cadence</h3>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-200">
+                        {cadenceRec?.strategy?.replace(/_/g, ' ') || 'QUALITY FIRST'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-500 mt-0.5">
+                      Fewer posts + higher reach per post. Optimized for observation windows &amp; viral discovery.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                    Saturation Guard Active
+                  </span>
+                </div>
+              </div>
+
+              {/* Strategy Metrics Grid */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-100">
+                  <span className="text-zinc-500 block text-[11px] font-semibold uppercase">Target Daily Volume</span>
+                  <div className="text-lg font-bold text-zinc-900 mt-0.5 flex items-baseline gap-1">
+                    <span>{cadenceRec?.recommendedDailyPosts || 4} posts/day</span>
+                  </div>
+                  <span className="text-[10px] text-zinc-500 block mt-1">
+                    Safe range: 2–6 posts (Cap = 6)
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-100">
+                  <span className="text-zinc-500 block text-[11px] font-semibold uppercase">Optimal Spacing Gap</span>
+                  <div className="text-lg font-bold text-indigo-700 mt-0.5">
+                    {cadenceRec?.recommendedGapRangeMinutes
+                      ? `${cadenceRec.recommendedGapRangeMinutes.min}m – ${cadenceRec.recommendedGapRangeMinutes.max}m`
+                      : '60m – 90m'}
+                  </div>
+                  <span className="text-[10px] text-zinc-500 block mt-1">
+                    Mode: {cadenceRec?.mode === 'growth_optimized' ? 'Growth optimized' : 'Baseline exploration'}
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-100">
+                  <span className="text-zinc-500 block text-[11px] font-semibold uppercase">Peak Reach Window</span>
+                  <div className="text-lg font-bold text-purple-700 mt-0.5">
+                    {cadenceRec?.postingStrategySummary?.bestWindow || '19:00 – 21:00'}
+                  </div>
+                  <span className="text-[10px] text-zinc-500 block mt-1">
+                    Best hour: {cadenceRec?.peakHoursSummary?.bestHour !== undefined ? `${cadenceRec.peakHoursSummary.bestHour}:00` : '19:00'}
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-100">
+                  <span className="text-zinc-500 block text-[11px] font-semibold uppercase">Primary Format &amp; Category</span>
+                  <div className="text-lg font-bold text-emerald-700 mt-0.5">
+                    {cadenceRec?.postingStrategySummary?.bestFormat || 'CAROUSEL'}
+                  </div>
+                  <span className="text-[10px] text-zinc-500 block mt-1 truncate">
+                    Top cat: {cadenceRec?.postingStrategySummary?.bestCategory || 'Relationship'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Peak Hours & Observation Guard Details */}
+              <div className="p-3.5 rounded-xl bg-indigo-50/50 border border-indigo-100 text-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="font-semibold text-indigo-950 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Cadence Rationale &amp; Timing Analysis:</span>
+                  </div>
+                  <p className="text-indigo-900/80 text-[11px] leading-relaxed">
+                    {cadenceRec?.reason || 'Adaptive Growth scheduling monitors post velocity curves and delays successive posts when the active post is accelerating.'}
+                  </p>
+                </div>
+
+                {cadenceRec?.peakHoursSummary && (
+                  <div className="flex items-center gap-3 shrink-0 text-[11px] bg-white px-3 py-2 rounded-lg border border-indigo-100 text-zinc-700">
+                    <div>
+                      <span className="text-zinc-400 block text-[9px] uppercase font-bold">Best Slot</span>
+                      <span className="font-bold text-emerald-700">{cadenceRec.peakHoursSummary.bestHour}:00</span>
+                    </div>
+                    <div className="w-px h-6 bg-zinc-200" />
+                    <div>
+                      <span className="text-zinc-400 block text-[9px] uppercase font-bold">2nd Best</span>
+                      <span className="font-bold text-indigo-700">{cadenceRec.peakHoursSummary.secondBestHour}:00</span>
+                    </div>
+                    <div className="w-px h-6 bg-zinc-200" />
+                    <div>
+                      <span className="text-zinc-400 block text-[9px] uppercase font-bold">Avoid</span>
+                      <span className="font-bold text-rose-600">{cadenceRec.peakHoursSummary.worstHour}:00</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Top KPI Grid (Mean & Median explicitly separated) */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="p-5 rounded-2xl bg-white border border-zinc-200 shadow-sm">
@@ -599,6 +970,271 @@ export default function GrowthIntelligencePage() {
 
                 <div className="p-3 rounded-xl bg-amber-50/60 border border-amber-100 text-[11px] text-amber-800">
                   <strong>Statistical Confidence Caveat:</strong> {analysis.confidence?.join(' ')}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ================= TAB: ADAPTIVE SCHEDULING BRAIN ================= */}
+        {activeTab === 'brain' && (
+          <div className="space-y-6">
+            {/* Account-Level Learning Summary Header Card */}
+            <div className="bg-white rounded-2xl border border-zinc-200 p-6 shadow-sm space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-100 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600">
+                    <Brain className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-zinc-900 tracking-tight">Account-Level Learning Summary</h2>
+                    <p className="text-xs text-zinc-500 mt-0.5">
+                      Aggregated multi-dimensional statistical baselines derived across all historical published confessions.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                    learningOverview?.summary?.confidence === 'HIGH'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : learningOverview?.summary?.confidence === 'MEDIUM'
+                      ? 'bg-indigo-100 text-indigo-800'
+                      : 'bg-amber-100 text-amber-800'
+                  }`}>
+                    Confidence: {learningOverview?.summary?.confidence || 'CALCULATING'}
+                  </span>
+                  <span className="text-xs text-zinc-500 font-mono">
+                    (N={learningOverview?.summary?.total_posts_analyzed ?? 0} Posts Analyzed)
+                  </span>
+                </div>
+              </div>
+
+              {/* Percentile Distributions & Key Learning Indices */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200/70 space-y-2">
+                  <span className="text-zinc-500 uppercase font-bold text-[11px] block">Views Distribution</span>
+                  <div className="text-xl font-bold text-zinc-900">
+                    P50: {learningOverview?.summary?.views_distribution?.p50?.toLocaleString() ?? 0}
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 text-[11px] text-zinc-600 pt-1 border-t border-zinc-200">
+                    <div>P25: {learningOverview?.summary?.views_distribution?.p25?.toLocaleString() ?? 0}</div>
+                    <div>P75: {learningOverview?.summary?.views_distribution?.p75?.toLocaleString() ?? 0}</div>
+                    <div>P90: {learningOverview?.summary?.views_distribution?.p90?.toLocaleString() ?? 0}</div>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200/70 space-y-2">
+                  <span className="text-zinc-500 uppercase font-bold text-[11px] block">Reach Distribution</span>
+                  <div className="text-xl font-bold text-zinc-900">
+                    P50: {learningOverview?.summary?.reach_distribution?.p50?.toLocaleString() ?? 0}
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 text-[11px] text-zinc-600 pt-1 border-t border-zinc-200">
+                    <div>P25: {learningOverview?.summary?.reach_distribution?.p25?.toLocaleString() ?? 0}</div>
+                    <div>P75: {learningOverview?.summary?.reach_distribution?.p75?.toLocaleString() ?? 0}</div>
+                    <div>P90: {learningOverview?.summary?.reach_distribution?.p90?.toLocaleString() ?? 0}</div>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200/70 space-y-2">
+                  <span className="text-zinc-500 uppercase font-bold text-[11px] block">Time to First Views</span>
+                  <div className="text-xl font-bold text-indigo-600">
+                    {learningOverview?.summary?.median_time_to_first_observed_view ?? 0}m
+                  </div>
+                  <p className="text-[11px] text-zinc-500 pt-1 border-t border-zinc-200">
+                    Sampled time until earliest views &gt; 0 observed.
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200/70 space-y-2">
+                  <span className="text-zinc-500 uppercase font-bold text-[11px] block">Peak Growth Velocity</span>
+                  <div className="text-xl font-bold text-emerald-600">
+                    {learningOverview?.summary?.median_peak_velocity ?? 0} <span className="text-xs font-normal">v/hr</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-500 pt-1 border-t border-zinc-200">
+                    Median steepest velocity interval in sample.
+                  </p>
+                </div>
+              </div>
+
+              {/* Best Performing Learned Patterns Grid */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+                <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
+                  <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Top Category</span>
+                  <span className="text-sm font-bold text-indigo-950 mt-1 block capitalize">
+                    {learningOverview?.summary?.best_performing_category || 'General'}
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
+                  <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Top Format</span>
+                  <span className="text-sm font-bold text-indigo-950 mt-1 block">
+                    {learningOverview?.summary?.best_performing_format || 'IMAGE'}
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
+                  <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Publish Clock Window</span>
+                  <span className="text-sm font-bold text-indigo-950 mt-1 block">
+                    {learningOverview?.summary?.best_observed_window || '20:00 - 21:00'}
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
+                  <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Post Growth Elapsed</span>
+                  <span className="text-sm font-bold text-indigo-950 mt-1 block">
+                    {learningOverview?.summary?.best_observed_post_growth_window || '30–60m'}
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
+                  <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Best Cadence Gap</span>
+                  <span className="text-sm font-bold text-indigo-950 mt-1 block">
+                    {learningOverview?.summary?.best_observed_cadence || '60–90m'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Disclaimer */}
+              <div className="p-3 rounded-xl bg-zinc-50 border border-zinc-200 text-[11px] text-zinc-500">
+                <strong>Observational Note:</strong> {learningOverview?.summary?.disclaimer || 'Findings reflect observed historical sample. Algorithmic shifts and content quality variations may impact individual post outcomes.'}
+              </div>
+            </div>
+
+            {/* Recency Trends (Last 30 Days vs Historical) */}
+            {learningOverview?.recencyTrends && (
+              <div className="bg-white rounded-2xl border border-zinc-200 p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+                  <div>
+                    <h3 className="font-bold text-zinc-900 text-base">Recency Shifts (Last 30 Days vs Historical)</h3>
+                    <p className="text-xs text-zinc-500">
+                      Detects rising and declining engagement trends across categories and formats.
+                    </p>
+                  </div>
+                  <span className="text-xs font-semibold px-2.5 py-1 bg-zinc-100 text-zinc-700 rounded-lg">
+                    Threshold: ±15% Change
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  <div className="p-4 rounded-xl bg-emerald-50/50 border border-emerald-100 space-y-2">
+                    <strong className="text-emerald-950 block font-semibold flex items-center gap-1.5">
+                      <TrendingUp className="w-4 h-4 text-emerald-600" />
+                      Rising Trends:
+                    </strong>
+                    {learningOverview.recencyTrends.rising_categories?.length > 0 || learningOverview.recencyTrends.rising_formats?.length > 0 ? (
+                      <ul className="space-y-1.5 list-disc list-inside text-emerald-900">
+                        {learningOverview.recencyTrends.rising_categories?.map((r: any, i: number) => (
+                          <li key={i}>{r.observed_summary}</li>
+                        ))}
+                        {learningOverview.recencyTrends.rising_formats?.map((r: any, i: number) => (
+                          <li key={i}>{r.observed_summary}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-zinc-500">No categories or formats currently showing &gt; 15% acceleration.</p>
+                    )}
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-rose-50/50 border border-rose-100 space-y-2">
+                    <strong className="text-rose-950 block font-semibold flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-rose-600" />
+                      Declining Trends:
+                    </strong>
+                    {learningOverview.recencyTrends.declining_categories?.length > 0 || learningOverview.recencyTrends.declining_formats?.length > 0 ? (
+                      <ul className="space-y-1.5 list-disc list-inside text-rose-900">
+                        {learningOverview.recencyTrends.declining_categories?.map((r: any, i: number) => (
+                          <li key={i}>{r.observed_summary}</li>
+                        ))}
+                        {learningOverview.recencyTrends.declining_formats?.map((r: any, i: number) => (
+                          <li key={i}>{r.observed_summary}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-zinc-500">No categories or formats currently showing &gt; 15% drop.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Post Density Analysis Table */}
+            {learningOverview?.densityStats && (
+              <div className="bg-white rounded-2xl border border-zinc-200 p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+                  <div>
+                    <h3 className="font-bold text-zinc-900 text-base">Post Density Analysis</h3>
+                    <p className="text-xs text-zinc-500">
+                      Observes how clustering multiple posts in preceding 1h, 3h, 6h, and 24h windows correlates with reach.
+                    </p>
+                  </div>
+                  <span className="text-xs font-semibold px-2.5 py-1 bg-zinc-100 text-zinc-700 rounded-lg">
+                    Non-hardcoded Cadence Learning
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-zinc-200 text-zinc-500">
+                        <th className="py-2.5 font-semibold">Preceding Window</th>
+                        <th className="py-2.5 font-semibold">Density Bucket</th>
+                        <th className="py-2.5 font-semibold">Sample Size</th>
+                        <th className="py-2.5 font-semibold">Median Reach</th>
+                        <th className="py-2.5 font-semibold">Median Views</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100">
+                      {learningOverview.densityStats.map((d: any, i: number) => (
+                        <tr key={i} className="hover:bg-zinc-50/50">
+                          <td className="py-2.5 font-semibold text-zinc-900">{d.window_hours} hour(s)</td>
+                          <td className="py-2.5 font-medium text-indigo-600">{d.density_bucket}</td>
+                          <td className="py-2.5 text-zinc-600 font-mono">N={d.sample_size}</td>
+                          <td className="py-2.5 font-bold text-zinc-900">{d.median_reach?.toLocaleString() ?? 0}</td>
+                          <td className="py-2.5 text-zinc-700">{d.median_views?.toLocaleString() ?? 0}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Post Gap Detailed Analysis Table */}
+            {learningOverview?.gapStats && (
+              <div className="bg-white rounded-2xl border border-zinc-200 p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+                  <div>
+                    <h3 className="font-bold text-zinc-900 text-base">Post Gap Spacing Analysis</h3>
+                    <p className="text-xs text-zinc-500">
+                      Observational correlation between previous post cooldown gap and subsequent post performance.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-zinc-200 text-zinc-500">
+                        <th className="py-2.5 font-semibold">Gap Interval</th>
+                        <th className="py-2.5 font-semibold">Sample Size</th>
+                        <th className="py-2.5 font-semibold">Median Reach</th>
+                        <th className="py-2.5 font-semibold">Median Views</th>
+                        <th className="py-2.5 font-semibold">Observational Finding</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100">
+                      {learningOverview.gapStats.map((g: any, i: number) => (
+                        <tr key={i} className="hover:bg-zinc-50/50">
+                          <td className="py-2.5 font-bold text-zinc-900">{g.gap_bucket}</td>
+                          <td className="py-2.5 text-zinc-600 font-mono">N={g.sample_size}</td>
+                          <td className="py-2.5 font-bold text-zinc-900">{g.median_reach?.toLocaleString() ?? 0}</td>
+                          <td className="py-2.5 text-zinc-700">{g.median_views?.toLocaleString() ?? 0}</td>
+                          <td className="py-2.5 text-zinc-600 max-w-md">{g.observational_finding}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
@@ -1257,6 +1893,84 @@ export default function GrowthIntelligencePage() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* ================= MODAL: OVERRIDE RECOMMENDATION ================= */}
+        {isOverrideModalOpen && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-zinc-200 space-y-4">
+              <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <Brain className="w-5 h-5 text-indigo-600" />
+                  <h3 className="font-bold text-zinc-900 text-base">Override AI Recommendation</h3>
+                </div>
+                <button onClick={() => setIsOverrideModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">
+                  ✕
+                </button>
+              </div>
+
+              <div className="space-y-4 text-xs">
+                <div>
+                  <label className="font-semibold text-zinc-700 block mb-1">Select Custom Format</label>
+                  <select
+                    value={overrideFormat}
+                    onChange={(e) => setOverrideFormat(e.target.value)}
+                    className="w-full px-3 py-2 border border-zinc-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="IMAGE">Static Card (IMAGE)</option>
+                    <option value="CAROUSEL">Multi-Slide (CAROUSEL)</option>
+                    <option value="REEL">Animated 9:16 (REEL)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-semibold text-zinc-700 block mb-1">Custom Publish Time (Optional)</label>
+                  <input
+                    type="datetime-local"
+                    value={overrideTime}
+                    onChange={(e) => setOverrideTime(e.target.value)}
+                    className="w-full px-3 py-2 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span className="text-[10px] text-zinc-400 mt-0.5 block">
+                    Leave blank to preserve validated spacing.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="font-semibold text-zinc-700 block mb-1">Override Reason</label>
+                  <input
+                    type="text"
+                    value={overrideReason}
+                    onChange={(e) => setOverrideReason(e.target.value)}
+                    placeholder="e.g. Breaking school confession, urgent posting"
+                    className="w-full px-3 py-2 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/80 text-[11px] text-amber-800">
+                  <strong>Learning Accountability:</strong> Manual overrides are permanently logged to evaluate when human editorial choices outperform or underperform AI recommendations.
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsOverrideModalOpen(false)}
+                    className="px-4 py-2 border border-zinc-200 rounded-xl font-semibold text-zinc-600 hover:bg-zinc-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleOverrideRecommendation}
+                    disabled={brainLoading}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    Save Override
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}

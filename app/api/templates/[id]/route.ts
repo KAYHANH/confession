@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { mockStore } from '@/lib/mockStore';
+import { confessionService } from '@/services/confessionService';
 import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
@@ -35,6 +36,8 @@ export async function PATCH(
     if (!updated) {
       return NextResponse.json({ error: 'Template not found' }, { status: 404 });
     }
+    // Invalidate cached images for confessions using this template so they re-render
+    await confessionService.invalidateImagesForTemplate(id);
     return NextResponse.json(updated);
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Failed to update template' }, { status: 500 });

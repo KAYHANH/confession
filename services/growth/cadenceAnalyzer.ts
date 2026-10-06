@@ -15,6 +15,8 @@ import {
   MediaFormatType,
   ConfidenceLevel,
   StatisticalSupportState,
+  DailyGrowthPlan,
+  AuthoritySource,
 } from '@/types/growth';
 import { growthStore } from '@/lib/growthStore';
 import { mockStore } from '@/lib/mockStore';
@@ -23,6 +25,8 @@ import { growthMetricsService } from './growthMetricsService';
 export class CadenceAnalyzer {
   private cachedRecommendation: SchedulerRecommendation | null = null;
   private cacheExpiresAtMs: number = 0;
+  private cachedDailyPlan: DailyGrowthPlan | null = null;
+  private dailyPlanCacheExpiresAtMs: number = 0;
 
   /**
    * Invalidate cached recommendation when new posts or snapshots are registered
@@ -30,6 +34,8 @@ export class CadenceAnalyzer {
   public invalidateCache(): void {
     this.cachedRecommendation = null;
     this.cacheExpiresAtMs = 0;
+    this.cachedDailyPlan = null;
+    this.dailyPlanCacheExpiresAtMs = 0;
   }
 
   /**
@@ -79,7 +85,7 @@ export class CadenceAnalyzer {
         confidence: 'HIGH',
         supportState: 'SUPPORTED',
         evidenceCount: 0,
-        reason: `Admin override active: Fixed posting gap set to ${manualGap} minutes.`,
+        reason: `Admin override active: Configured to fixed ${manualGap}m post spacing.`,
         explorationAllowed: false,
         generated_at: new Date().toISOString(),
         version: '1.0.0-manual',
@@ -337,14 +343,54 @@ export class CadenceAnalyzer {
     // 8. Viral Cooldown Policy
     const viralCooldownPolicy = {
       triggerReachMultiplier: 1.8,
-      cooldownMinutes: Math.min(120, Math.round(chosenMax * 1.4)),
+      cooldownMinutes: Math.min(180, Math.round(chosenMax * 1.4)),
       reason: 'If a post achieves >1.8x median reach, a longer cooldown prevents cannibalizing engagement of the trending post.',
     };
 
+    // 9. Peak & Off-Peak Hours and Weekdays Analysis
+    const sortedHours = [...timeSlots].filter((s) => s.sample_size > 0).sort((a, b) => b.median_reach - a.median_reach);
+    const bestHour = sortedHours.length > 0 ? sortedHours[0].hour_of_day : 19;
+    const secondBestHour = sortedHours.length > 1 ? sortedHours[1].hour_of_day : 20;
+    const worstHour = sortedHours.length > 0 ? sortedHours[sortedHours.length - 1].hour_of_day : 14;
+
+    const weekdayMap = new Map<number, number[]>();
+    for (const slot of timeSlots) {
+      if (!weekdayMap.has(slot.day_of_week)) weekdayMap.set(slot.day_of_week, []);
+      if (slot.median_reach > 0) weekdayMap.get(slot.day_of_week)!.push(slot.median_reach);
+    }
+    const weekdayAverages = Array.from(weekdayMap.entries()).map(([day, reaches]) => ({
+      day,
+      avg: reaches.length > 0 ? reaches.reduce((a, b) => a + b, 0) / reaches.length : 0,
+    })).sort((a, b) => b.avg - a.avg);
+
+    const bestWeekday = weekdayAverages.length > 0 ? weekdayAverages[0].day : 4; // Thursday
+    const worstWeekday = weekdayAverages.length > 0 ? weekdayAverages[weekdayAverages.length - 1].day : 2; // Tuesday
+
+    const peakHoursSummary = {
+      bestHour,
+      secondBestHour,
+      worstHour,
+      bestWeekday,
+      worstWeekday,
+    };
+
     const avgGap = (chosenMin + chosenMax) / 2;
+    const targetDailyPosts = settings.target_daily_posts || 4;
     const recommendedPostsPerHour = Math.round((60 / avgGap) * 10) / 10;
     const recommendedPostsPerThreeHours = Math.min(4, Math.max(1, Math.round(180 / avgGap)));
     const cooldownMinutes = Math.max(30, Math.round(chosenMin * 0.7));
+
+    const topCategory = categoryStats.length > 0 ? categoryStats[0].category : 'CRUSH';
+    const topFormat = formats.length > 0 ? formats.sort((a, b) => b.median_reach - a.median_reach)[0].format_type : 'CAROUSEL';
+
+    const postingStrategySummary = {
+      recommendedPostsPerDay: targetDailyPosts,
+      averageGapMinutes: Math.round(avgGap),
+      bestWindow: preferredWindows[0]?.label || '18:00 - 21:30',
+      bestCategory: topCategory,
+      bestFormat: topFormat,
+      reason: strategyReason,
+    };
 
     return {
       id: `rec-growth-${Date.now()}`,
@@ -353,6 +399,7 @@ export class CadenceAnalyzer {
       recommendedGapRangeMinutes: { min: chosenMin, max: chosenMax },
       recommendedPostsPerHour,
       recommendedPostsPerThreeHours,
+      recommendedDailyPosts: targetDailyPosts,
       cooldownMinutes,
       preferredWindows,
       confidence,
@@ -363,6 +410,8 @@ export class CadenceAnalyzer {
       formatCadenceMap,
       categoryCadenceMap,
       viralCooldownPolicy,
+      peakHoursSummary,
+      postingStrategySummary,
       generated_at: new Date().toISOString(),
       version: '1.0.0-growth-adaptive',
     };
@@ -376,29 +425,166 @@ export class CadenceAnalyzer {
     formatType?: MediaFormatType,
     category?: string
   ): { min: number; max: number; rolledGap: number; reason: string } {
+    const isManual = recommendation.mode === 'manual' || recommendation.strategy === 'ADMIN_OVERRIDE';
     let min = recommendation.recommendedGapRangeMinutes.min;
     let max = recommendation.recommendedGapRangeMinutes.max;
     let reason = recommendation.reason;
 
-    // Format override if present
-    if (formatType && recommendation.formatCadenceMap?.[formatType]) {
-      const fmt = recommendation.formatCadenceMap[formatType];
-      min = fmt.minGap;
-      max = fmt.maxGap;
-      reason = `${fmt.reason} (${reason})`;
-    }
+    // Only apply format / category overrides if NOT in manual / fixed cooldown mode
+    if (!isManual) {
+      // Format override if present
+      if (formatType && recommendation.formatCadenceMap?.[formatType]) {
+        const fmt = recommendation.formatCadenceMap[formatType];
+        min = fmt.minGap;
+        max = fmt.maxGap;
+        reason = `${fmt.reason} (${reason})`;
+      }
 
-    // Category override if present
-    if (category && recommendation.categoryCadenceMap?.[category]) {
-      const cat = recommendation.categoryCadenceMap[category];
-      min = Math.min(min, cat.minGap);
-      reason = `${cat.reason} · ${reason}`;
+      // Category override if present
+      if (category && recommendation.categoryCadenceMap?.[category]) {
+        const cat = recommendation.categoryCadenceMap[category];
+        min = Math.min(min, cat.minGap);
+        reason = `${cat.reason} · ${reason}`;
+      }
     }
 
     // Apply controlled random jitter strictly INSIDE the evidence-backed interval
     const rolledGap = Math.floor(Math.random() * (max - min + 1)) + min;
 
     return { min, max, rolledGap, reason };
+  }
+
+  /**
+   * Authority-Driven Daily Growth Plan:
+   * Reconciles Settings (Hard Limits) vs Growth Intelligence (Performance Strategy).
+   * - Target daily posts is strictly a fallback when data or confidence is insufficient.
+   * - Growth Intelligence is authoritative when sample size >= min_posts_for_cadence_learning,
+   *   days >= min_days_for_cadence_learning, and confidence >= min_growth_confidence.
+   * - Hard limits (min_daily_posts, max_daily_posts) are strictly enforced and can NEVER be exceeded.
+   */
+  public async generateDailyGrowthPlan(date?: Date, forceFresh: boolean = false): Promise<DailyGrowthPlan> {
+    const nowMs = Date.now();
+    if (!forceFresh && this.cachedDailyPlan && nowMs < this.dailyPlanCacheExpiresAtMs) {
+      return this.cachedDailyPlan;
+    }
+
+    const settings = mockStore.getSettings();
+    const tz = settings.timezone || 'Asia/Kolkata';
+    const targetDate = date || new Date();
+    const dateKey = growthMetricsService.getDateKeyInAccountTz(targetDate, tz);
+
+    const minAllowed = Math.max(1, settings.min_daily_posts ?? 2);
+    const maxAllowed = Math.max(minAllowed, settings.max_daily_posts ?? 12);
+    const targetFallback = Math.min(Math.max(settings.target_daily_posts ?? 4, minAllowed), maxAllowed);
+
+    const minPostsThreshold = settings.min_posts_for_cadence_learning ?? 20;
+    const minDaysThreshold = settings.min_days_for_cadence_learning ?? 7;
+    const minConfidenceThreshold = settings.min_growth_confidence ?? 0.70;
+    const rollingHorizonHours = settings.rolling_horizon_hours ?? 24;
+
+    const saturation = await growthMetricsService.getPostingFrequencySaturationAnalysis();
+    const strategyMode = settings.scheduling_strategy_mode || 'AUTO';
+
+    const hasSufficientEvidence =
+      saturation.sample_size >= minPostsThreshold &&
+      saturation.days_of_data >= minDaysThreshold &&
+      saturation.confidence >= minConfidenceThreshold;
+
+    let isFallback = false;
+    let authoritySource: AuthoritySource;
+    let recommendedPosts: number;
+    let effectiveDailyPosts: number;
+    let reason: string;
+
+    if (strategyMode === 'MANUAL') {
+      isFallback = true;
+      authoritySource = 'ADMIN_OVERRIDE';
+      recommendedPosts = targetFallback;
+      effectiveDailyPosts = targetFallback;
+      reason = `Admin override mode active. Using manual operational quota (${effectiveDailyPosts} posts/day).`;
+    } else if (strategyMode === 'BASELINE') {
+      isFallback = true;
+      authoritySource = 'SETTINGS_FALLBACK';
+      recommendedPosts = targetFallback;
+      effectiveDailyPosts = targetFallback;
+      reason = `Baseline Exploration mode active. Using operational target fallback of ${effectiveDailyPosts} posts/day bounded by settings [${minAllowed}-${maxAllowed}].`;
+    } else if (!hasSufficientEvidence) {
+      isFallback = true;
+      authoritySource = 'SETTINGS_FALLBACK';
+      recommendedPosts = targetFallback;
+      effectiveDailyPosts = targetFallback;
+      reason = `Insufficient historical evidence (posts: ${saturation.sample_size}/${minPostsThreshold}, days: ${saturation.days_of_data}/${minDaysThreshold}, confidence: ${(saturation.confidence * 100).toFixed(0)}%/${(minConfidenceThreshold * 100).toFixed(0)}%). Using operational target fallback of ${effectiveDailyPosts} posts/day bounded by settings guardrails [${minAllowed}-${maxAllowed}].`;
+    } else {
+      // Growth Intelligence is authoritative!
+      isFallback = false;
+      recommendedPosts = saturation.optimal_posts_per_day;
+      // Clamping strictly inside hard limits
+      effectiveDailyPosts = Math.min(Math.max(recommendedPosts, minAllowed), maxAllowed);
+
+      if (effectiveDailyPosts !== recommendedPosts) {
+        authoritySource = 'SETTINGS_HARD_LIMIT';
+        reason = `Growth Intelligence recommended ${recommendedPosts} posts/day based on empirical reach saturation across N=${saturation.sample_size} posts, clamped to ${effectiveDailyPosts} by hard settings limits [${minAllowed}-${maxAllowed}].`;
+      } else {
+        authoritySource = 'GROWTH_INTELLIGENCE';
+        const degradationText = saturation.degradation_detected
+          ? ` with degradation observed beyond ${saturation.saturation_knee_point || recommendedPosts} posts/day`
+          : '';
+        reason = `Growth Intelligence authoritative: In observed sample (N=${saturation.sample_size} posts across ${saturation.days_of_data} days, confidence ${(saturation.confidence * 100).toFixed(0)}%), ${recommendedPosts} posts/day demonstrated optimal reach-per-post balance${degradationText}. Overriding target (${targetFallback}/day).`;
+      }
+    }
+
+    // Preferred windows & format/category preferences
+    const baseRec = await this.getCadenceRecommendation();
+    const formats = await growthMetricsService.getFormatComparison();
+    const categories = await growthMetricsService.getCategoryGrowthStats();
+
+    const preferredFormats = formats
+      .sort((a, b) => b.median_reach - a.median_reach)
+      .map((f) => f.format_type);
+
+    const preferredCategories = categories
+      .filter((c) => c.post_count > 0)
+      .sort((a, b) => b.median_reach - a.median_reach)
+      .slice(0, 5)
+      .map((c) => c.category);
+
+    const minGap = Math.max(settings.min_gap_minutes ?? 30, baseRec.recommendedGapRangeMinutes.min);
+    const maxGap = Math.max(minGap + 10, settings.max_gap_minutes ?? 75, baseRec.recommendedGapRangeMinutes.max);
+
+    const plan: DailyGrowthPlan = {
+      date: dateKey,
+      recommended_posts: recommendedPosts,
+      effective_daily_posts: effectiveDailyPosts,
+      min_allowed_posts: minAllowed,
+      max_allowed_posts: maxAllowed,
+      target_fallback_posts: targetFallback,
+      confidence: Math.round(saturation.confidence * 100) / 100,
+      sample_size: saturation.sample_size,
+      days_of_data: saturation.days_of_data,
+      is_fallback: isFallback,
+      authority_source: authoritySource,
+      preferred_windows: baseRec.preferredWindows.map((w) => ({
+        start: w.start,
+        end: w.end,
+        label: w.label,
+      })),
+      recommended_spacing: {
+        min_minutes: minGap,
+        max_minutes: maxGap,
+      },
+      preferred_categories: preferredCategories,
+      preferred_formats: preferredFormats.length > 0 ? preferredFormats : ['IMAGE', 'CAROUSEL'],
+      reason,
+      saturation_detected: saturation.degradation_detected,
+      saturation_knee_posts_per_day: saturation.saturation_knee_point ?? undefined,
+      degradation_observed: saturation.degradation_detected,
+      rolling_horizon_hours: rollingHorizonHours,
+      generated_at: new Date().toISOString(),
+    };
+
+    this.cachedDailyPlan = plan;
+    this.dailyPlanCacheExpiresAtMs = nowMs + 15 * 60 * 1000;
+    return plan;
   }
 }
 

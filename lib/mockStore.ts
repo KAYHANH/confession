@@ -130,7 +130,11 @@ const DEFAULT_SETTINGS: SystemSettings = {
   auto_publish: process.env.AUTO_PUBLISH_ENABLED !== 'false',
   publishing_mode: process.env.AUTO_PUBLISH_ENABLED === 'false' ? 'MANUAL_APPROVAL' : 'AUTO_PUBLISH',
   default_publishing_time: '19:30',
-  max_daily_posts: parseInt(process.env.MAX_DAILY_POSTS || '24', 10),
+  max_daily_posts: parseInt(process.env.MAX_DAILY_POSTS || '6', 10),
+  min_daily_posts: parseInt(process.env.MIN_DAILY_POSTS || '2', 10),
+  target_daily_posts: parseInt(process.env.TARGET_DAILY_POSTS || '4', 10),
+  scheduling_mode: (process.env.SCHEDULING_MODE as any) || 'QUALITY_FIRST',
+  content_quality_threshold: parseInt(process.env.CONTENT_QUALITY_THRESHOLD || '60', 10),
   auto_publish_interval_minutes: parseInt(process.env.AUTO_PUBLISH_INTERVAL_MINUTES || '60', 10),
   auto_publish_start_hour: parseInt(process.env.AUTO_PUBLISH_START_HOUR || '0', 10),
   auto_publish_end_hour: parseInt(process.env.AUTO_PUBLISH_END_HOUR || '24', 10),
@@ -160,6 +164,14 @@ const DEFAULT_SETTINGS: SystemSettings = {
   scheduling_strategy_mode: (process.env.QUEUE_SCHEDULING_MODE as any) || 'AUTO',
   manual_fixed_gap_minutes: 60,
   enable_experimental_scheduling: false,
+  enable_quality_gate: true,
+  auto_reject_low_value: true,
+  min_quality_score: 55,
+  enable_groq_quality: true,
+  min_posts_for_cadence_learning: parseInt(process.env.MIN_POSTS_FOR_CADENCE_LEARNING || '20', 10),
+  min_days_for_cadence_learning: parseInt(process.env.MIN_DAYS_FOR_CADENCE_LEARNING || '7', 10),
+  min_growth_confidence: parseFloat(process.env.MIN_GROWTH_CONFIDENCE || '0.70'),
+  rolling_horizon_hours: parseInt(process.env.ROLLING_HORIZON_HOURS || '24', 10),
 };
 
 const DEFAULT_CONFESSIONS: Confession[] = [];
@@ -173,6 +185,7 @@ class MockStore {
   }
 
   private ensureFresh() {
+    if (process.env.NODE_ENV === 'test') return;
     try {
       if (fs.existsSync(DATA_FILE)) {
         const stat = fs.statSync(DATA_FILE);
@@ -227,8 +240,18 @@ class MockStore {
             parsed.settings.auto_publish_start_hour = 0;
             parsed.settings.auto_publish_end_hour = 24;
           }
-          if (parsed.settings.max_daily_posts === 8) {
-            parsed.settings.max_daily_posts = 24;
+          if (parsed.settings.max_daily_posts > 6 || parsed.settings.max_daily_posts === 8 || parsed.settings.max_daily_posts === 24 || parsed.settings.max_daily_posts === 25) {
+            parsed.settings.max_daily_posts = parseInt(process.env.MAX_DAILY_POSTS || '6', 10);
+          }
+          parsed.settings.min_daily_posts = parseInt(process.env.MIN_DAILY_POSTS || '2', 10);
+          parsed.settings.target_daily_posts = parseInt(process.env.TARGET_DAILY_POSTS || '4', 10);
+          if (!parsed.settings.scheduling_mode) {
+            parsed.settings.scheduling_mode = 'QUALITY_FIRST';
+          }
+          if (process.env.AUTO_PUBLISH_ENABLED === 'false') {
+            parsed.settings.auto_publish = false;
+            parsed.settings.auto_publish_enabled = false;
+            parsed.settings.publishing_mode = 'MANUAL_APPROVAL';
           }
         }
         if (parsed.confessions) {
@@ -303,6 +326,9 @@ class MockStore {
   }
 
   public save() {
+    if (process.env.NODE_ENV === 'test') {
+      return;
+    }
     try {
       fs.writeFileSync(DATA_FILE, JSON.stringify(this.data, null, 2), 'utf-8');
       if (fs.existsSync(DATA_FILE)) {
@@ -370,6 +396,25 @@ class MockStore {
     this.data.confessions[index] = updated;
     this.save();
     return updated;
+  }
+
+  public batchUpdateConfessions(updater: (c: Confession) => Partial<Confession> | null): number {
+    this.ensureFresh();
+    let updatedCount = 0;
+    this.data.confessions = this.data.confessions.map((c) => {
+      const updates = updater(c);
+      if (!updates || Object.keys(updates).length === 0) return c;
+      updatedCount++;
+      return {
+        ...c,
+        ...updates,
+        updated_at: new Date().toISOString(),
+      };
+    });
+    if (updatedCount > 0) {
+      this.save();
+    }
+    return updatedCount;
   }
 
   public softDeleteConfession(id: string): boolean {
@@ -608,12 +653,32 @@ class MockStore {
         this.save();
       }
     }
+    if (process.env.AUTO_PUBLISH_ENABLED === 'false') {
+      this.data.settings.auto_publish = false;
+      this.data.settings.auto_publish_enabled = false;
+      this.data.settings.publishing_mode = 'MANUAL_APPROVAL';
+    }
     return { ...this.data.settings };
   }
 
   public updateSettings(updates: Partial<SystemSettings>): SystemSettings {
     this.ensureFresh();
-    this.data.settings = { ...this.data.settings, ...updates };
+    const merged = { ...this.data.settings, ...updates };
+    if (updates.auto_publish === false || (updates as any).auto_publish_enabled === false) {
+      merged.auto_publish = false;
+      (merged as any).auto_publish_enabled = false;
+      if (!merged.publishing_mode || merged.publishing_mode === 'AUTO_PUBLISH') {
+        merged.publishing_mode = 'MANUAL_APPROVAL';
+      }
+    } else if (updates.publishing_mode === 'MANUAL_APPROVAL' || updates.publishing_mode === 'AUTO_APPROVAL') {
+      merged.auto_publish = false;
+      (merged as any).auto_publish_enabled = false;
+    } else if (updates.auto_publish === true || (updates as any).auto_publish_enabled === true || updates.publishing_mode === 'AUTO_PUBLISH') {
+      merged.auto_publish = true;
+      (merged as any).auto_publish_enabled = true;
+      merged.publishing_mode = 'AUTO_PUBLISH';
+    }
+    this.data.settings = merged;
     this.save();
     return this.data.settings;
   }

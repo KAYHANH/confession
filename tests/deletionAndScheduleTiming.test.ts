@@ -178,7 +178,7 @@ describe('Deleted Section & Schedule Recalculation Engine', () => {
           rowNumber: 43,
           timestamp: new Date().toISOString(),
           name: 'Charlie',
-          confession: 'Brand new confession',
+          confession: 'Brand new confession about my secret crush on the chemistry tutor from last semester.',
           status: 'READY_FOR_REVIEW',
           isAnonymous: false,
         },

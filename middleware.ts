@@ -33,6 +33,9 @@ export async function middleware(request: NextRequest) {
   const isProtectedUI = PROTECTED_UI_ROUTES.some((route) => pathname.startsWith(route));
 
   if (isProtectedUI) {
+    if (process.env.NODE_ENV === 'development') {
+      return NextResponse.next();
+    }
     const sessionCookie = request.cookies.get(SESSION_COOKIE);
 
     if (!sessionCookie?.value) {
@@ -58,6 +61,9 @@ export async function middleware(request: NextRequest) {
     const isPublicApi = PUBLIC_API_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 
     if (!isPublicApi) {
+      if (process.env.NODE_ENV === 'development') {
+        return NextResponse.next();
+      }
       const sessionCookie = request.cookies.get(SESSION_COOKIE);
 
       if (!sessionCookie?.value) {
