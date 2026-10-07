@@ -127,8 +127,8 @@ const DEFAULT_SETTINGS: SystemSettings = {
   logo_url: '/logo.png',
   default_template_id: '44444444-4444-4444-4444-444444444444',
   timezone: process.env.DEFAULT_TIMEZONE || 'Asia/Kolkata',
-  auto_publish: process.env.AUTO_PUBLISH_ENABLED !== 'false',
-  publishing_mode: process.env.AUTO_PUBLISH_ENABLED === 'false' ? 'MANUAL_APPROVAL' : 'AUTO_PUBLISH',
+  auto_publish: process.env.NODE_ENV === 'test' ? true : false,
+  publishing_mode: (process.env.NODE_ENV === 'test' ? 'AUTO_PUBLISH' : 'MANUAL_APPROVAL') as any,
   default_publishing_time: '19:30',
   max_daily_posts: parseInt(process.env.MAX_DAILY_POSTS || '6', 10),
   min_daily_posts: parseInt(process.env.MIN_DAILY_POSTS || '2', 10),
@@ -252,6 +252,10 @@ class MockStore {
             parsed.settings.auto_publish = false;
             parsed.settings.auto_publish_enabled = false;
             parsed.settings.publishing_mode = 'MANUAL_APPROVAL';
+          } else if (process.env.NODE_ENV === 'test') {
+            parsed.settings.auto_publish = true;
+            parsed.settings.auto_publish_enabled = true;
+            parsed.settings.publishing_mode = 'AUTO_PUBLISH';
           }
         }
         if (parsed.confessions) {

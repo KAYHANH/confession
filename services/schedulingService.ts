@@ -15,6 +15,7 @@ import {
 } from '@/types/growth';
 import { confessionQualityService } from './quality/confessionQualityService';
 import { validatePublishEligibility } from './quality/publishEligibilityService';
+import { generateContentHash, normalizeConfessionText } from '@/lib/contentHash';
 
 export interface AutoPublishCycleResult {
   ran: boolean;
@@ -46,30 +47,10 @@ export class SchedulingService {
 
   public async autoHealConfessions(): Promise<void> {
     try {
+      // Quarantines confessions stuck in PUBLISHING >3m to UNKNOWN_NEEDS_REVIEW
       await confessionService.autoHealStuckConfessions();
-      const allConfessions = mockStore.getConfessions();
-      for (const c of allConfessions) {
-        if (
-          (c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION') &&
-          c.error_message &&
-          (
-            c.error_message.includes('https://https://') ||
-            c.error_message.includes('cannot download the card image') ||
-            c.error_message.includes('credentials are not configured') ||
-            c.error_message.includes('Instagram credentials') ||
-            c.error_message.includes('MISSING_ACCESS_TOKEN') ||
-            c.error_message.includes('MISSING_ACCOUNT_ID')
-          )
-        ) {
-          console.log(`[AutoPublisher] Auto-healing confession #${c.google_sheet_row} (Error: "${c.error_message}") back to APPROVED.`);
-          await confessionService.updateConfession(c.id, {
-            status: 'APPROVED',
-            error_message: null,
-            retry_count: 0,
-            generated_image_url: null,
-          });
-        }
-      }
+      // DO NOT blindly reset FAILED or UNKNOWN confessions to APPROVED.
+      // Retries require verified reconciliation or explicit administrative action.
     } catch (healErr) {
       console.warn('[SchedulingService] autoHealConfessions error:', healErr);
     }
@@ -240,12 +221,29 @@ export class SchedulingService {
           continue;
         }
 
+        // DATABASE IS AUTHORITATIVE: If DB already knows this post is PUBLISHED, DB wins.
+        // If sheet erroneously shows FAILED or empty, restore PUBLISHED on Google Sheet!
+        if (existingConf && existingConf.status === 'PUBLISHED') {
+          if (!isAlreadyPublished) {
+            googleSheetsService.updateRowStatus(config, row.rowNumber, {
+              status: 'PUBLISHED',
+              processedAt: existingConf.published_at || new Date().toISOString(),
+              postId: existingConf.instagram_media_id || '',
+              instagramUrl: existingConf.instagram_permalink || '',
+              error: '',
+            }).catch(() => {});
+          }
+          continue;
+        }
+
         if (isAlreadyPublished) {
           if (existingConf && existingConf.status !== 'PUBLISHED') {
             const updatePayload = {
               status: 'PUBLISHED' as ConfessionStatus,
               published_at: row.processedAt || existingConf.published_at || new Date().toISOString(),
               instagram_media_id: row.postId || existingConf.instagram_media_id || 'sheet-imported-published',
+              reconciliation_status: 'RECONCILED' as const,
+              reconciliation_notes: 'Synchronized from Google Sheet marked PUBLISHED.',
             };
             if (useSupabase) {
               confessionService.updateConfession(existingConf.id, updatePayload).catch(() => {});
@@ -279,6 +277,18 @@ export class SchedulingService {
         ? moderationService.maskSensitiveInformation(row.confession, moderationResult.piiDetected)
         : row.confession;
 
+      const normHash = generateContentHash(cleanedText);
+
+      // Check if this identical confession was already published
+      const alreadyPublishedWithHash = existing.find(
+        (c) =>
+          c.status === 'PUBLISHED' &&
+          (c.normalized_content_hash === normHash || c.content_hash === normHash)
+      );
+
+      const isFailed = rawStatus === 'FAILED' || rawStatus === 'FAILED_CONFIRMED' || rawStatus === 'FAILED_REQUIRES_ACTION';
+      const isUnknown = rawStatus === 'UNKNOWN' || rawStatus === 'UNKNOWN_NEEDS_REVIEW';
+
       const isAnon = row.isAnonymous !== undefined 
         ? row.isAnonymous 
         : ((row.name || '').toLowerCase() === 'anonymous' || !row.name);
@@ -295,22 +305,25 @@ export class SchedulingService {
         confessionId: newId,
       });
 
-      let initialStatus: ConfessionStatus = isAlreadyPublished
-        ? 'PUBLISHED'
-        : isRejected
-        ? 'REJECTED'
-        : isScheduled
-        ? 'SCHEDULED'
-        : 'READY_FOR_REVIEW';
-
-      // Auto-reject low-value noise so it NEVER enters the publishing queue
-      if (
-        !isAlreadyPublished &&
-        !isScheduled &&
+      let initialStatus: ConfessionStatus;
+      if (alreadyPublishedWithHash) {
+        initialStatus = 'DUPLICATE_ALREADY_PUBLISHED';
+      } else if (isAlreadyPublished) {
+        initialStatus = 'PUBLISHED';
+      } else if (isRejected) {
+        initialStatus = 'REJECTED';
+      } else if (isScheduled) {
+        initialStatus = 'SCHEDULED';
+      } else if (isFailed || isUnknown) {
+        // CRITICAL: NEVER import a FAILED or UNKNOWN row from the sheet as READY_FOR_REVIEW!
+        initialStatus = 'UNKNOWN_NEEDS_REVIEW';
+      } else if (
         currentSettings.auto_reject_low_value !== false &&
         qualityResult.qualityStatus === 'LOW_VALUE'
       ) {
         initialStatus = 'REJECTED';
+      } else {
+        initialStatus = 'READY_FOR_REVIEW';
       }
 
       const newConfession: Confession = {
@@ -324,6 +337,23 @@ export class SchedulingService {
         display_name: displayName,
         is_anonymous: isAnon,
         status: initialStatus,
+        content_hash: normHash,
+        normalized_content_hash: normHash,
+        duplicate_of_id: alreadyPublishedWithHash?.id ?? null,
+        duplicate_of_row: alreadyPublishedWithHash?.google_sheet_row ?? null,
+        duplicate_of_permalink: alreadyPublishedWithHash?.instagram_permalink ?? null,
+        reconciliation_status: alreadyPublishedWithHash
+          ? 'RECONCILED'
+          : isAlreadyPublished
+          ? 'RECONCILED'
+          : (isFailed || isUnknown)
+          ? 'NEEDS_REVIEW'
+          : null,
+        reconciliation_notes: alreadyPublishedWithHash
+          ? `Duplicate of published confession #${alreadyPublishedWithHash.google_sheet_row || alreadyPublishedWithHash.id}`
+          : (isFailed || isUnknown)
+          ? 'Imported from Google Sheet with failed/unknown status. Quarantined for reconciliation.'
+          : null,
         moderation_status: moderationResult.risk,
         moderation_reason: moderationResult.reasons.length > 0 
           ? moderationResult.reasons.join('; ') 
@@ -646,7 +676,8 @@ export class SchedulingService {
           ? ['LOW', 'MEDIUM']
           : ['LOW'];
 
-      // Prioritize APPROVED, READY_FOR_REVIEW, and unposted SCHEDULED confessions in FIFO row order
+      // Prioritize strictly APPROVED, READY_FOR_REVIEW (in auto-publish mode), or unposted SCHEDULED confessions in FIFO row order
+      const isAutoPublishMode = settings.publishing_mode === 'AUTO_PUBLISH' || settings.auto_publish || force;
       const eligibleCandidates = freshConfessions
         .filter(
           (c) =>
@@ -654,7 +685,14 @@ export class SchedulingService {
             c.status !== 'REJECTED' &&
             c.status !== 'DELETED' &&
             c.status !== 'PUBLISHING' &&
-            (c.status === 'APPROVED' || c.status === 'READY_FOR_REVIEW' || c.status === 'SCHEDULED') &&
+            c.status !== 'FAILED' &&
+            c.status !== 'FAILED_CONFIRMED' &&
+            c.status !== 'FAILED_REQUIRES_ACTION' &&
+            c.status !== 'UNKNOWN' &&
+            c.status !== 'UNKNOWN_NEEDS_REVIEW' &&
+            c.status !== 'DUPLICATE_ALREADY_PUBLISHED' &&
+            c.status !== 'CANCELLED' &&
+            (c.status === 'APPROVED' || (isAutoPublishMode && c.status === 'READY_FOR_REVIEW') || (c.status === 'SCHEDULED' && !c.published_at && !c.instagram_media_id)) &&
             allowedRisks.includes(c.moderation_status) &&
             !c.instagram_media_id &&
             !c.published_at &&
@@ -984,13 +1022,10 @@ export class SchedulingService {
     const nowMs = now.getTime();
     const horizonLimitMs = nowMs + horizonHours * 60 * 60 * 1000;
 
-    // Eligible candidates for scheduled queue
+    // Eligible candidates for scheduled queue: strictly only APPROVED or already SCHEDULED
     const eligible = allConfessions.filter(
       (c) =>
-        c.status !== 'PUBLISHED' &&
-        c.status !== 'REJECTED' &&
-        c.status !== 'DELETED' &&
-        c.status !== 'PUBLISHING' &&
+        (c.status === 'APPROVED' || c.status === 'SCHEDULED') &&
         !c.published_at &&
         !c.instagram_media_id
     );

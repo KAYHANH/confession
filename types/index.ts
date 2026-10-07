@@ -12,7 +12,12 @@ export type ConfessionStatus =
   | 'PUBLISHING'
   | 'PUBLISHED'
   | 'FAILED'
+  | 'FAILED_CONFIRMED'
   | 'FAILED_REQUIRES_ACTION'
+  | 'UNKNOWN'
+  | 'UNKNOWN_NEEDS_REVIEW'
+  | 'DUPLICATE_ALREADY_PUBLISHED'
+  | 'CANCELLED'
   | 'DELETED';
 
 export type ModerationRisk = 'LOW' | 'MEDIUM' | 'HIGH';
@@ -77,6 +82,16 @@ export interface Confession {
   quality_override_reason?: string | null;
   quality_false_positive?: boolean | null;
   quality_false_negative?: boolean | null;
+  // Content Hash & Idempotency Protection
+  content_hash?: string | null;
+  normalized_content_hash?: string | null;
+  idempotency_key?: string | null;
+  publishing_attempt_id?: string | null;
+  reconciliation_status?: 'RECONCILED' | 'PENDING' | 'MANUAL_REVIEW_REQUIRED' | 'NEEDS_REVIEW' | null;
+  reconciliation_notes?: string | null;
+  duplicate_of_id?: string | null;
+  duplicate_of_row?: number | null;
+  duplicate_of_permalink?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -134,8 +149,9 @@ export interface ActivityLog {
     | 'QUALITY_OVERRIDE'
     | 'QUALITY_DUPLICATE'
     | 'QUALITY_GIBBERISH'
-    | 'QUALITY_EMOJI_ONLY';
-  entity_type: 'confession' | 'sheet' | 'instagram' | 'template' | 'settings' | 'queue';
+    | 'QUALITY_EMOJI_ONLY'
+    | 'RECONCILIATION_COMPLETED';
+  entity_type: 'confession' | 'sheet' | 'instagram' | 'template' | 'settings' | 'queue' | 'system';
   entity_id?: string | null;
   metadata: Record<string, any>;
   created_at: string;

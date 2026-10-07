@@ -17,6 +17,8 @@ export interface InstagramPublishResult {
   permalink?: string;
   errorCode?: string;
   error?: string;
+  isUnknownState?: boolean;
+  publishAttempted?: boolean;
 }
 
 export const INSTAGRAM_API_BASE_URL = 'https://graph.instagram.com';
@@ -209,8 +211,9 @@ export class InstagramService {
   /**
    * Safe fetch of recent media from connected Instagram account
    */
-  public async getRecentMedia(limit: number = 25): Promise<{
+  public async getRecentMedia(limit: number = 50): Promise<{
     id: string;
+    caption?: string;
     media_type: string;
     media_product_type?: string;
     permalink?: string;
@@ -226,7 +229,7 @@ export class InstagramService {
     }
 
     try {
-      const url = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media?fields=id,media_type,media_product_type,permalink,timestamp&limit=${limit}`;
+      const url = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media?fields=id,caption,media_type,media_product_type,permalink,timestamp&limit=${limit}`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json().catch(() => ({}));
       if (res.ok && Array.isArray(data.data)) {
@@ -427,29 +430,47 @@ export class InstagramService {
 
       // Step 3: Publish container
       const publishUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media_publish`;
-      const publishResp = await fetch(publishUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          creation_id: creationId,
-        }),
-      });
+      let publishResp: Response;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
+        publishResp = await fetch(publishUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            creation_id: creationId,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch (networkErr: any) {
+        return {
+          success: false,
+          errorCode: 'PUBLISH_STATUS_UNKNOWN',
+          isUnknownState: true,
+          publishAttempted: true,
+          error: `Instagram media_publish request dispatched, but connection timed out or failed (${networkErr?.message || 'Network error'}). Status is UNKNOWN.`,
+        };
+      }
 
       const publishData = await publishResp.json().catch(() => ({}));
       if (!publishResp.ok || publishData.error) {
+        const isServerError = publishResp.status >= 500;
         return {
           success: false,
-          errorCode: 'PUBLISH_FAILED',
-          error: `Failed to publish Instagram media container: ${publishData.error?.message || 'Publishing error'}`,
+          errorCode: isServerError ? 'PUBLISH_STATUS_UNKNOWN' : 'PUBLISH_FAILED',
+          isUnknownState: isServerError,
+          publishAttempted: true,
+          error: `Failed to publish Instagram media container: ${publishData.error?.message || `HTTP ${publishResp.status}`}`,
         };
       }
 
       const publishedMediaId = publishData.id;
 
-      // Step 4: Fetch permalink
+      // Step 4: Fetch permalink (non-fatal if fails)
       let permalink = `https://www.instagram.com/p/${publishedMediaId}/`;
       try {
         const permalinkUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${publishedMediaId}?fields=permalink`;
@@ -467,11 +488,13 @@ export class InstagramService {
         mediaId: publishedMediaId,
         permalink,
       };
-    } catch {
+    } catch (outerErr: any) {
       return {
         success: false,
         errorCode: 'API_UNAVAILABLE',
-        error: 'Instagram API request failed.',
+        isUnknownState: false,
+        publishAttempted: false,
+        error: `Instagram API request failed before publication: ${outerErr?.message || 'Unknown error'}`,
       };
     }
   }
@@ -656,29 +679,47 @@ export class InstagramService {
 
       // Step 5: Publish parent carousel container
       const publishUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media_publish`;
-      const publishResp = await fetch(publishUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          creation_id: carouselCreationId,
-        }),
-      });
+      let publishResp: Response;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
+        publishResp = await fetch(publishUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            creation_id: carouselCreationId,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch (networkErr: any) {
+        return {
+          success: false,
+          errorCode: 'PUBLISH_STATUS_UNKNOWN',
+          isUnknownState: true,
+          publishAttempted: true,
+          error: `Instagram carousel media_publish dispatched, but connection timed out or failed (${networkErr?.message || 'Network error'}). Status is UNKNOWN.`,
+        };
+      }
 
       const publishData = await publishResp.json().catch(() => ({}));
       if (!publishResp.ok || publishData.error) {
+        const isServerError = publishResp.status >= 500;
         return {
           success: false,
-          errorCode: 'PUBLISH_FAILED',
-          error: `Failed to publish Instagram carousel: ${publishData.error?.message || 'Publishing error'}`,
+          errorCode: isServerError ? 'PUBLISH_STATUS_UNKNOWN' : 'PUBLISH_FAILED',
+          isUnknownState: isServerError,
+          publishAttempted: true,
+          error: `Failed to publish Instagram carousel: ${publishData.error?.message || `HTTP ${publishResp.status}`}`,
         };
       }
 
       const publishedMediaId = publishData.id;
 
-      // Step 6: Fetch permalink
+      // Step 6: Fetch permalink (non-fatal if fails)
       let permalink = `https://www.instagram.com/p/${publishedMediaId}/`;
       try {
         const permalinkUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${publishedMediaId}?fields=permalink`;
@@ -700,7 +741,9 @@ export class InstagramService {
       return {
         success: false,
         errorCode: 'API_UNAVAILABLE',
-        error: `Instagram API request failed: ${err?.message || err}`,
+        isUnknownState: false,
+        publishAttempted: false,
+        error: `Instagram API request failed before carousel publication: ${err?.message || err}`,
       };
     }
   }
@@ -808,23 +851,41 @@ export class InstagramService {
 
       // Step 3: Publish container
       const publishUrl = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media_publish`;
-      const publishResp = await fetch(publishUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          creation_id: creationId,
-        }),
-      });
+      let publishResp: Response;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
+        publishResp = await fetch(publishUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            creation_id: creationId,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch (networkErr: any) {
+        return {
+          success: false,
+          errorCode: 'PUBLISH_STATUS_UNKNOWN',
+          isUnknownState: true,
+          publishAttempted: true,
+          error: `Instagram Reel media_publish dispatched, but connection timed out or failed (${networkErr?.message || 'Network error'}). Status is UNKNOWN.`,
+        };
+      }
 
       const publishData = await publishResp.json().catch(() => ({}));
       if (!publishResp.ok || publishData.error) {
+        const isServerError = publishResp.status >= 500;
         return {
           success: false,
-          errorCode: 'PUBLISH_FAILED',
-          error: `Failed to publish Instagram Reel: ${publishData.error?.message || 'Publishing error'}`,
+          errorCode: isServerError ? 'PUBLISH_STATUS_UNKNOWN' : 'PUBLISH_FAILED',
+          isUnknownState: isServerError,
+          publishAttempted: true,
+          error: `Failed to publish Instagram Reel: ${publishData.error?.message || `HTTP ${publishResp.status}`}`,
         };
       }
 
@@ -850,7 +911,9 @@ export class InstagramService {
       return {
         success: false,
         errorCode: 'API_UNAVAILABLE',
-        error: `Instagram API request failed: ${err?.message || err}`,
+        isUnknownState: false,
+        publishAttempted: false,
+        error: `Instagram API request failed before reel publication: ${err?.message || err}`,
       };
     }
   }

@@ -29,7 +29,8 @@ export class ImageService {
   /**
    * Escape HTML to prevent XSS in rendering
    */
-  public escapeHtml(str: string): string {
+  public escapeHtml(str?: string | null): string {
+    if (!str || typeof str !== 'string') return '';
     return str
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -85,7 +86,7 @@ export class ImageService {
     
     const rawText = options.slideText || confession.cleaned_text || confession.original_text;
     const safeText = this.escapeHtml(rawText);
-    const safeName = this.escapeHtml(confession.is_anonymous ? 'Anonymous' : confession.display_name);
+    const safeName = this.escapeHtml(confession.is_anonymous ? 'Anonymous' : (confession.display_name || confession.name || 'Anonymous'));
     const safeBrand = this.escapeHtml(brandName);
     const safeHandle = this.escapeHtml(instagramHandle);
     const numFormatted = String(confessionNumber).padStart(3, '0');
@@ -419,7 +420,7 @@ export class ImageService {
     const numFormatted = String(confessionNumber).padStart(3, '0');
     const rawText = options.slideText || confession.cleaned_text || confession.original_text || '';
     const safeText = this.escapeHtml(rawText);
-    const safeName = this.escapeHtml(confession.is_anonymous ? 'Anonymous' : confession.display_name);
+    const safeName = this.escapeHtml(confession.is_anonymous ? 'Anonymous' : (confession.display_name || confession.name || 'Anonymous'));
 
     const isCarousel = Boolean(options.totalSlides && options.totalSlides > 1);
     const badgeText = isCarousel

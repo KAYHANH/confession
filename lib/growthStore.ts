@@ -132,13 +132,18 @@ class GrowthStore {
     );
   }
 
+  private cachedMockData: GrowthStoreData | null = null;
+
   private readMockData(): GrowthStoreData {
+    if (this.cachedMockData) {
+      return this.cachedMockData;
+    }
     try {
       if (fs.existsSync(DATA_FILE)) {
         const raw = fs.readFileSync(DATA_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
         if (parsed.growth) {
-          return {
+          const loaded: GrowthStoreData = {
             publishedMedia: parsed.growth.publishedMedia || [],
             snapshots: parsed.growth.snapshots || [],
             metricDefinitions: parsed.growth.metricDefinitions || DEFAULT_METRIC_DEFINITIONS,
@@ -151,13 +156,15 @@ class GrowthStore {
             postPerformanceRecords: parsed.growth.postPerformanceRecords || [],
             recommendationRecords: parsed.growth.recommendationRecords || [],
           };
+          this.cachedMockData = loaded;
+          return loaded;
         }
       }
     } catch (e) {
       console.warn('[GrowthStore] Could not read mock file, using defaults');
     }
 
-    return {
+    const fallback: GrowthStoreData = {
       publishedMedia: [],
       snapshots: [],
       metricDefinitions: DEFAULT_METRIC_DEFINITIONS,
@@ -170,9 +177,15 @@ class GrowthStore {
       postPerformanceRecords: [],
       recommendationRecords: [],
     };
+    this.cachedMockData = fallback;
+    return fallback;
   }
 
   private saveMockData(data: GrowthStoreData): void {
+    this.cachedMockData = data;
+    if (process.env.NODE_ENV === 'test') {
+      return;
+    }
     try {
       let rootParsed: any = {};
       if (fs.existsSync(DATA_FILE)) {

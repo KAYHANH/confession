@@ -30,7 +30,7 @@ import { PublishModal } from '@/components/confessions/PublishModal';
 import { ScheduleModal } from '@/components/confessions/ScheduleModal';
 import { useToast } from '@/components/ui/ToastContext';
 
-type TabType = 'queue' | 'scheduled' | 'published' | 'low_value' | 'deleted';
+type TabType = 'queue' | 'scheduled' | 'published' | 'unknown' | 'duplicates' | 'low_value' | 'deleted';
 
 export default function ConfessionsPage() {
   const [allConfessions, setAllConfessions] = useState<Confession[]>([]);
@@ -170,6 +170,26 @@ export default function ConfessionsPage() {
     }
   };
 
+  const [reconciling, setReconciling] = useState(false);
+
+  const handleReconcile = async () => {
+    setReconciling(true);
+    try {
+      const res = await fetch('/api/confessions/reconcile', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Reconciliation failed');
+      const r = data.result;
+      success(
+        `Reconciliation complete: ${r.reconciledToPublished} marked Published, ${r.duplicatesFlagged} duplicates flagged, ${r.confirmedFailed} confirmed failed.`
+      );
+      await loadData();
+    } catch (err: any) {
+      error(err?.message || 'Reconciliation failed');
+    } finally {
+      setReconciling(false);
+    }
+  };
+
   useEffect(() => {
     loadData();
     const handleRefresh = () => {
@@ -189,11 +209,17 @@ export default function ConfessionsPage() {
   // ─── Section filters ──────────────────────────────────────────────────────
   const queueConfessions = allConfessions.filter(
     (c) =>
-      !['PUBLISHED', 'SCHEDULED', 'REJECTED', 'DELETED'].includes(c.status) &&
+      !['PUBLISHED', 'SCHEDULED', 'REJECTED', 'DELETED', 'FAILED', 'FAILED_CONFIRMED', 'FAILED_REQUIRES_ACTION', 'UNKNOWN', 'UNKNOWN_NEEDS_REVIEW', 'DUPLICATE_ALREADY_PUBLISHED', 'CANCELLED'].includes(c.status) &&
       c.quality_status !== 'LOW_VALUE'
   );
   const scheduledConfessions = allConfessions.filter((c) => c.status === 'SCHEDULED');
   const publishedConfessions = allConfessions.filter((c) => c.status === 'PUBLISHED');
+  const unknownConfessions = allConfessions.filter(
+    (c) => c.status === 'UNKNOWN' || c.status === 'UNKNOWN_NEEDS_REVIEW'
+  );
+  const duplicateConfessions = allConfessions.filter(
+    (c) => c.status === 'DUPLICATE_ALREADY_PUBLISHED'
+  );
   const lowValueConfessions = allConfessions.filter(
     (c) =>
       c.status !== 'DELETED' &&
@@ -204,7 +230,7 @@ export default function ConfessionsPage() {
   const deletedConfessions = allConfessions.filter((c) => c.status === 'DELETED');
   const failedConfessions = allConfessions.filter(
     (c) =>
-      (c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION') &&
+      (c.status === 'FAILED' || c.status === 'FAILED_CONFIRMED' || c.status === 'FAILED_REQUIRES_ACTION') &&
       !c.instagram_media_id &&
       !c.published_at
   );
@@ -231,6 +257,8 @@ export default function ConfessionsPage() {
     activeTab === 'queue' ? queueConfessions :
     activeTab === 'scheduled' ? scheduledConfessions :
     activeTab === 'published' ? publishedConfessions :
+    activeTab === 'unknown' ? unknownConfessions :
+    activeTab === 'duplicates' ? duplicateConfessions :
     activeTab === 'low_value' ? lowValueConfessions :
     deletedConfessions
   );
@@ -542,6 +570,28 @@ export default function ConfessionsPage() {
       count: publishedConfessions.length,
       color: 'emerald',
     },
+    ...(unknownConfessions.length > 0
+      ? [
+          {
+            id: 'unknown' as TabType,
+            label: 'Requires Review',
+            icon: <AlertTriangle className="w-4 h-4" />,
+            count: unknownConfessions.length,
+            color: 'purple',
+          },
+        ]
+      : []),
+    ...(duplicateConfessions.length > 0
+      ? [
+          {
+            id: 'duplicates' as TabType,
+            label: 'Duplicates',
+            icon: <ShieldAlert className="w-4 h-4" />,
+            count: duplicateConfessions.length,
+            color: 'orange',
+          },
+        ]
+      : []),
     {
       id: 'low_value',
       label: 'Low Value',
@@ -562,6 +612,8 @@ export default function ConfessionsPage() {
     indigo: 'border-indigo-500 text-indigo-700 bg-indigo-50',
     amber:  'border-amber-500 text-amber-700 bg-amber-50',
     emerald:'border-emerald-500 text-emerald-700 bg-emerald-50',
+    purple: 'border-purple-500 text-purple-700 bg-purple-50',
+    orange: 'border-amber-500 text-amber-800 bg-amber-50',
     slate:  'border-slate-500 text-slate-700 bg-slate-50',
     rose:   'border-rose-500 text-rose-700 bg-rose-50',
   };
@@ -569,6 +621,8 @@ export default function ConfessionsPage() {
     indigo: 'bg-indigo-100 text-indigo-700',
     amber:  'bg-amber-100 text-amber-700',
     emerald:'bg-emerald-100 text-emerald-700',
+    purple: 'bg-purple-100 text-purple-700',
+    orange: 'bg-amber-100 text-amber-800',
     slate:  'bg-slate-100 text-slate-700',
     rose:   'bg-rose-100 text-rose-700',
   };
@@ -588,7 +642,12 @@ export default function ConfessionsPage() {
       APPROVED: 'bg-indigo-100 text-indigo-700 border-indigo-200',
       REJECTED: 'bg-rose-100 text-rose-700 border-rose-200',
       FAILED: 'bg-rose-100 text-rose-700 border-rose-200',
+      FAILED_CONFIRMED: 'bg-rose-100 text-rose-700 border-rose-200',
       FAILED_REQUIRES_ACTION: 'bg-rose-200 text-rose-900 border-rose-300',
+      UNKNOWN: 'bg-purple-100 text-purple-700 border-purple-200',
+      UNKNOWN_NEEDS_REVIEW: 'bg-purple-100 text-purple-700 border-purple-200',
+      DUPLICATE_ALREADY_PUBLISHED: 'bg-amber-100 text-amber-800 border-amber-200',
+      CANCELLED: 'bg-zinc-100 text-zinc-600 border-zinc-200',
       DELETED: 'bg-zinc-100 text-zinc-600 border-zinc-300 line-through',
     };
     const cls = map[status] || 'bg-zinc-100 text-zinc-700 border-zinc-200';
@@ -638,6 +697,15 @@ export default function ConfessionsPage() {
           </div>
           <div className="flex items-center gap-2">
             <button
+              onClick={handleReconcile}
+              disabled={reconciling}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-xl hover:bg-purple-100 transition-all disabled:opacity-50 shadow-xs"
+              title="Reconcile failed, unknown, and candidate posts against live Instagram API to prevent duplicates"
+            >
+              <RefreshCw className={`w-4 h-4 ${reconciling ? 'animate-spin' : ''}`} />
+              {reconciling ? 'Reconciling…' : 'Reconcile with Instagram'}
+            </button>
+            <button
               onClick={() => handleRestartQueue()}
               disabled={restartingQueue}
               className={`flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-xl shadow-sm transition-all disabled:opacity-50 ${
@@ -664,6 +732,37 @@ export default function ConfessionsPage() {
             </button>
           </div>
         </div>
+
+        {/* ── Reconciliation & Duplicate Protection Alert Banner ── */}
+        {(unknownConfessions.length > 0 || duplicateConfessions.length > 0) && (
+          <div className="p-4 bg-purple-50/90 border border-purple-200 rounded-2xl text-purple-900 space-y-3">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-purple-100 rounded-xl text-purple-600 shrink-0">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="font-semibold text-sm">
+                    Duplicate Post Protection Active: {unknownConfessions.length} pending review, {duplicateConfessions.length} duplicate(s) quarantined
+                  </div>
+                  <div className="text-xs text-purple-700 mt-0.5">
+                    Submissions with unconfirmed Instagram state or matching previously published hashes are safely blocked from re-publishing.
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  onClick={handleReconcile}
+                  disabled={reconciling}
+                  className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-xl shadow-sm transition-all disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${reconciling ? 'animate-spin' : ''}`} />
+                  {reconciling ? 'Reconciling…' : 'Run Full Reconciliation'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Failed Alert & Quick Restart Banner ── */}
         {failedConfessions.length > 0 && (() => {
