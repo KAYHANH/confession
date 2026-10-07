@@ -33,6 +33,8 @@ import {
   StandardCategoryType,
   FrequencySaturationBucket,
   FrequencySaturationAnalysis,
+  ContentMixStrategy,
+  FormatRecommendationByLength,
 } from '@/types/growth';
 import { growthStore } from '@/lib/growthStore';
 import { mockStore } from '@/lib/mockStore';
@@ -1888,6 +1890,157 @@ export class GrowthMetricsService {
       days_of_data: totalDays,
       summary,
     };
+  }
+
+  /**
+   * Content Mix Intelligence:
+   * Compares each category's share of published posts against its share of total observed reach.
+   */
+  public async getContentMixStrategy(): Promise<ContentMixStrategy[]> {
+    const records = await this.getOrSyncPostPerformanceRecords();
+    if (records.length === 0) return [];
+
+    const rollingPosts = records.slice(-50);
+    const totalPosts = rollingPosts.length;
+    const totalReach = rollingPosts.reduce((sum, r) => sum + (r.final_observed_reach || 0), 0);
+
+    const categoryMap = new Map<string, { count: number; reach: number }>();
+    for (const r of rollingPosts) {
+      const cat = r.confession_category || 'other';
+      const existing = categoryMap.get(cat) || { count: 0, reach: 0 };
+      existing.count += 1;
+      existing.reach += r.final_observed_reach || 0;
+      categoryMap.set(cat, existing);
+    }
+
+    const result: ContentMixStrategy[] = [];
+
+    for (const [category, data] of categoryMap.entries()) {
+      const postSharePct = Math.round((data.count / totalPosts) * 1000) / 10;
+      const reachSharePct = totalReach > 0 ? Math.round((data.reach / totalReach) * 1000) / 10 : postSharePct;
+      const efficiencyRatio = postSharePct > 0 ? Math.round((reachSharePct / postSharePct) * 100) / 100 : 1.0;
+
+      let recommendation: 'INCREASE' | 'MAINTAIN' | 'REDUCE' = 'MAINTAIN';
+      if (efficiencyRatio >= 1.25 && data.count >= 2) {
+        recommendation = 'INCREASE';
+      } else if (efficiencyRatio <= 0.75 && data.count >= 3) {
+        recommendation = 'REDUCE';
+      }
+
+      result.push({
+        category,
+        historical_post_share_pct: postSharePct,
+        historical_reach_share_pct: reachSharePct,
+        efficiency_ratio: efficiencyRatio,
+        post_count: data.count,
+        total_reach: data.reach,
+        recommendation,
+      });
+    }
+
+    return result.sort((a, b) => b.efficiency_ratio - a.efficiency_ratio);
+  }
+
+  /**
+   * Format Intelligence by Text Length:
+   * Recommends single card vs carousel vs reel depending on confession word count.
+   */
+  public async getFormatRecommendationByLength(): Promise<FormatRecommendationByLength[]> {
+    const records = await this.getOrSyncPostPerformanceRecords();
+
+    const brackets: {
+      bracket: 'SHORT' | 'MEDIUM' | 'LONG';
+      range: string;
+      filter: (w: number) => boolean;
+      defaultFormat: MediaFormatType;
+      rationaleDefault: string;
+    }[] = [
+      {
+        bracket: 'SHORT',
+        range: '< 40 words',
+        filter: (w) => w < 40,
+        defaultFormat: 'IMAGE',
+        rationaleDefault: 'Single card format maximizes quick readability and instant visual impact for brief confessions.',
+      },
+      {
+        bracket: 'MEDIUM',
+        range: '40–100 words',
+        filter: (w) => w >= 40 && w <= 100,
+        defaultFormat: 'IMAGE',
+        rationaleDefault: 'Standard single card or 2-slide carousel maintains strong text sizing and engagement.',
+      },
+      {
+        bracket: 'LONG',
+        range: '> 100 words',
+        filter: (w) => w > 100,
+        defaultFormat: 'CAROUSEL',
+        rationaleDefault: 'Multi-slide carousel prevents tiny illegible text and drives higher swipe retention and dwell time.',
+      },
+    ];
+
+    const results: FormatRecommendationByLength[] = [];
+
+    for (const b of brackets) {
+      const matchingPosts = records.filter((r) => b.filter(r.word_count || 0));
+
+      if (matchingPosts.length < 3) {
+        results.push({
+          length_bracket: b.bracket,
+          word_count_range: b.range,
+          recommended_format: b.defaultFormat,
+          historical_median_reach: 0,
+          sample_size: matchingPosts.length,
+          comparison_notes: `${b.rationaleDefault} (Baseline heuristic due to small sample N=${matchingPosts.length}).`,
+        });
+        continue;
+      }
+
+      const formatGroups = new Map<MediaFormatType, number[]>();
+      for (const p of matchingPosts) {
+        const fmt = p.format || 'IMAGE';
+        if (!formatGroups.has(fmt)) formatGroups.set(fmt, []);
+        if (typeof p.final_observed_reach === 'number') {
+          formatGroups.get(fmt)!.push(p.final_observed_reach);
+        }
+      }
+
+      let bestFmt: MediaFormatType = b.defaultFormat;
+      let highestMedian = 0;
+      const notesParts: string[] = [];
+
+      for (const [fmt, reaches] of formatGroups.entries()) {
+        const med = this.calculateMedian(reaches);
+        notesParts.push(`${fmt}: ${med} reach (N=${reaches.length})`);
+        if (med > highestMedian && reaches.length >= 2) {
+          highestMedian = med;
+          bestFmt = fmt;
+        }
+      }
+
+      if (b.bracket === 'LONG') {
+        const carouselReaches = formatGroups.get('CAROUSEL') || [];
+        const imageReaches = formatGroups.get('IMAGE') || [];
+        const carouselMed = this.calculateMedian(carouselReaches);
+        const imageMed = this.calculateMedian(imageReaches);
+        if (carouselReaches.length >= 2 && carouselMed >= imageMed * 0.9) {
+          bestFmt = 'CAROUSEL';
+          highestMedian = carouselMed;
+        } else if (carouselReaches.length === 0) {
+          bestFmt = 'CAROUSEL';
+        }
+      }
+
+      results.push({
+        length_bracket: b.bracket,
+        word_count_range: b.range,
+        recommended_format: bestFmt,
+        historical_median_reach: highestMedian,
+        sample_size: matchingPosts.length,
+        comparison_notes: notesParts.length > 0 ? notesParts.join(' vs ') : b.rationaleDefault,
+      });
+    }
+
+    return results;
   }
 }
 

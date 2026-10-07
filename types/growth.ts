@@ -814,3 +814,122 @@ export interface DailyGrowthPlan {
   generated_at: string;
 }
 
+// -------------------------------------------------------------
+// Growth Intelligence 3.0: Closed-Loop Decision Engine Models
+// -------------------------------------------------------------
+
+import type { Confession } from './index';
+
+export type GrowthDecisionType =
+  | 'POST_NOW'
+  | 'WAIT'
+  | 'SCHEDULE'
+  | 'HOLD_CONTENT'
+  | 'NO_QUALIFIED_CONTENT';
+
+export interface RealtimePostStatus {
+  has_active_post: boolean;
+  media_id: string | null;
+  confession_id: string | null;
+  confession_row?: number | null;
+  published_at: string | null;
+  age_minutes: number;
+  current_views: number;
+  current_reach: number;
+  views_velocity_per_hour: number;
+  historical_percentile: number; // 0 to 100
+  is_accelerating: boolean;
+  is_plateaued: boolean;
+  should_hold_next_post: boolean;
+  hold_duration_minutes_recommended: number;
+  headline_alert?: string;
+  message: string;
+}
+
+export interface ContentMixStrategy {
+  category: string;
+  historical_post_share_pct: number;
+  historical_reach_share_pct: number;
+  efficiency_ratio: number; // reach_share / post_share
+  post_count: number;
+  total_reach: number;
+  recommendation: 'INCREASE' | 'MAINTAIN' | 'REDUCE';
+}
+
+export type TextLengthBracket = 'SHORT' | 'MEDIUM' | 'LONG';
+
+export interface FormatRecommendationByLength {
+  length_bracket: TextLengthBracket; // SHORT: < 40 words, MEDIUM: 40-100 words, LONG: > 100 words
+  word_count_range: string;
+  recommended_format: MediaFormatType;
+  historical_median_reach: number;
+  sample_size: number;
+  comparison_notes: string;
+}
+
+export interface GrowthDecisionRationale {
+  summary: string;
+  factors: {
+    frequency: string;
+    timing: string;
+    gap: string;
+    real_time_velocity: string;
+    format: string;
+    content_mix: string;
+    content_quality: string;
+  };
+  evidence_count: number;
+}
+
+export interface GrowthDecision {
+  id: string;
+  decision: GrowthDecisionType;
+  candidate?: Confession | null;
+  candidate_id?: string | null;
+  candidate_row?: number | null;
+  recommended_format: MediaFormatType;
+  recommended_time: string; // ISO string
+  recommended_gap_minutes: number;
+  current_post_status: RealtimePostStatus | null;
+  authority_source: AuthoritySource;
+  confidence: ConfidenceLevel;
+  confidence_score: number; // 0.0 to 1.0
+  rationale: GrowthDecisionRationale;
+  daily_strategy: {
+    recommended_daily_posts: number;
+    effective_daily_posts: number;
+    min_gap_minutes: number;
+    max_gap_minutes: number;
+    saturation_detected: boolean;
+    knee_point?: number | null;
+  };
+  backtest_summary?: {
+    lift_pct: number;
+    baseline_reach: number;
+    projected_reach: number;
+  };
+  timestamp: string;
+}
+
+export interface BacktestDayComparison {
+  date: string;
+  actual_posts: number;
+  recommended_posts: number;
+  actual_total_reach: number;
+  simulated_total_reach: number;
+  primary_driver: string;
+}
+
+export interface BacktestSimulationResult {
+  simulation_days: number;
+  baseline_posts_count: number;
+  baseline_total_reach: number;
+  baseline_median_reach_per_post: number;
+  simulated_posts_count: number;
+  simulated_total_reach: number;
+  simulated_median_reach_per_post: number;
+  projected_reach_lift_pct: number;
+  daily_comparisons: BacktestDayComparison[];
+  summary: string;
+}
+

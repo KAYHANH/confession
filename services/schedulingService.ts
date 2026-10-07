@@ -728,6 +728,32 @@ export class SchedulingService {
 
       candidate = selectedCandidate;
 
+      let growthDecision: any = null;
+      try {
+        const { growthDecisionEngine } = await import('@/services/growth/growthDecisionEngine');
+        growthDecision = await growthDecisionEngine.evaluateNextPost(selectedCandidate);
+        if (growthDecision && !force) {
+          if (growthDecision.decision === 'HOLD_CONTENT' || growthDecision.decision === 'NO_QUALIFIED_CONTENT') {
+            console.log(`[AutoPublisher] Growth Decision Engine held content: ${growthDecision.rationale?.summary}`);
+            return {
+              ran: false,
+              status: 'NO_CANDIDATES',
+              reason: growthDecision.rationale?.summary || 'Content held by Growth Decision Engine.',
+            };
+          }
+          if (growthDecision.decision === 'WAIT') {
+            console.log(`[AutoPublisher] Growth Decision Engine requested wait: ${growthDecision.rationale?.summary}`);
+            return {
+              ran: false,
+              status: 'RATE_LIMITED',
+              reason: growthDecision.rationale?.summary || 'Post paused by Growth Decision Engine.',
+            };
+          }
+        }
+      } catch (gdErr: any) {
+        console.warn('[AutoPublisher] Growth decision evaluation warning:', gdErr?.message || gdErr);
+      }
+
       console.log(`[AutoPublisher] Selected confession #${selectedCandidate.google_sheet_row} (ID: ${selectedCandidate.id}${selectedCandidate.predicted_performance_score ? `, Score: ${selectedCandidate.predicted_performance_score}` : ''}) for auto-publishing.`);
 
       // Lock candidate immediately to prevent concurrent re-selection
@@ -835,6 +861,8 @@ export class SchedulingService {
           evidenceCount: cadenceRec?.evidenceCount || 0,
           effectiveIntervalMinutes: effectiveIntervalMinutes,
           nextIntervalMinutes: nextGap,
+          recommendedFormat: growthDecision?.recommended_format || 'IMAGE',
+          growthDecisionSummary: growthDecision?.rationale?.summary || 'Standard cadence',
         },
       });
 

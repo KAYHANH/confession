@@ -26,6 +26,13 @@ import {
   Brain,
   RefreshCw,
   CalendarCheck,
+  TrendingDown,
+  Gauge,
+  Zap,
+  PieChart,
+  SlidersHorizontal,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useToast } from '@/components/ui/ToastContext';
@@ -39,15 +46,33 @@ import {
   PostGrowthAnalysis,
   PostingExperiment,
   SchedulerRecommendation,
+  GrowthDecision,
+  BacktestSimulationResult,
+  ContentMixStrategy,
+  FormatRecommendationByLength,
 } from '@/types/growth';
 
-type GrowthTab = 'overview' | 'brain' | 'formats' | 'timing' | 'content' | 'experiments' | 'diagnostics';
+type GrowthTab = 'overview' | 'brain' | 'simulation' | 'formats' | 'timing' | 'content' | 'experiments' | 'diagnostics';
 
 export default function GrowthIntelligencePage() {
   const [activeTab, setActiveTab] = useState<GrowthTab>('overview');
   const [loading, setLoading] = useState(true);
   const [flags, setFlags] = useState<Record<string, any>>({});
   
+  // Growth Intelligence 3.0 Decision Engine state
+  const [todayDecision, setTodayDecision] = useState<GrowthDecision | null>(null);
+  const [decisionLoading, setDecisionLoading] = useState(false);
+  const [isWhyPanelOpen, setIsWhyPanelOpen] = useState(true);
+
+  // Simulation & Backtesting state
+  const [simulationDays, setSimulationDays] = useState(30);
+  const [simulationResult, setSimulationResult] = useState<BacktestSimulationResult | null>(null);
+  const [simulationLoading, setSimulationLoading] = useState(false);
+
+  // Content Mix & Format Intelligence
+  const [contentMixList, setContentMixList] = useState<ContentMixStrategy[]>([]);
+  const [formatRecsList, setFormatRecsList] = useState<FormatRecommendationByLength[]>([]);
+
   // Data states
   const [overview, setOverview] = useState<AccountGrowthOverview | null>(null);
   const [formats, setFormats] = useState<FormatComparisonStats[]>([]);
@@ -92,7 +117,7 @@ export default function GrowthIntelligencePage() {
   const loadAllGrowthData = useCallback(async () => {
     try {
       setLoading(true);
-      const [ovRes, fmtRes, timeRes, gapRes, catRes, hookRes, postRes, expRes, anaRes, cadRes, learnRes, recRes] = await Promise.all([
+      const [ovRes, fmtRes, timeRes, gapRes, catRes, hookRes, postRes, expRes, anaRes, cadRes, learnRes, recRes, decRes, mixRes] = await Promise.all([
         fetch('/api/growth/overview'),
         fetch('/api/growth/formats'),
         fetch('/api/growth/times'),
@@ -105,6 +130,8 @@ export default function GrowthIntelligencePage() {
         fetch('/api/growth/cadence').catch(() => null),
         fetch('/api/growth/learning/overview').catch(() => null),
         fetch('/api/growth/learning/recommendation').catch(() => null),
+        fetch('/api/growth/decision').catch(() => null),
+        fetch('/api/growth/content-mix').catch(() => null),
       ]);
 
       const [ovData, fmtData, timeData, gapData, catData, hookData, postData, expData, anaData] = await Promise.all([
@@ -143,6 +170,23 @@ export default function GrowthIntelligencePage() {
         } catch {}
       }
 
+      if (decRes && decRes.ok) {
+        try {
+          const dData = await decRes.json();
+          if (dData.success) setTodayDecision(dData.decision);
+        } catch {}
+      }
+
+      if (mixRes && mixRes.ok) {
+        try {
+          const mData = await mixRes.json();
+          if (mData.success) {
+            setContentMixList(mData.contentMix || []);
+            setFormatRecsList(mData.formatRecs || []);
+          }
+        } catch {}
+      }
+
       if (ovData.success) {
         setOverview(ovData.data);
         setFlags(ovData.flags || {});
@@ -166,6 +210,52 @@ export default function GrowthIntelligencePage() {
       setLoading(false);
     }
   }, [selectedPostId]);
+
+  const handleRefreshDecision = async () => {
+    try {
+      setDecisionLoading(true);
+      const res = await fetch('/api/growth/decision?refresh=true');
+      const data = await res.json();
+      if (data.success) {
+        setTodayDecision(data.decision);
+        success('Growth Intelligence 3.0 decision refreshed.');
+      } else {
+        error(data.error || 'Failed to refresh decision.');
+      }
+    } catch {
+      error('Failed to refresh decision.');
+    } finally {
+      setDecisionLoading(false);
+    }
+  };
+
+  const handleRunSimulation = async (days: number = simulationDays) => {
+    try {
+      setSimulationLoading(true);
+      setSimulationDays(days);
+      const res = await fetch('/api/growth/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSimulationResult(data.data);
+      } else {
+        error(data.error || 'Simulation failed.');
+      }
+    } catch {
+      error('Failed to run simulation.');
+    } finally {
+      setSimulationLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'simulation' && !simulationResult && !simulationLoading) {
+      handleRunSimulation(simulationDays);
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     loadAllGrowthData();
@@ -477,6 +567,221 @@ export default function GrowthIntelligencePage() {
           </div>
         )}
 
+        {/* ================= HERO CARD: TODAY'S GROWTH DECISION 3.0 ================= */}
+        <div className="rounded-3xl bg-gradient-to-br from-slate-950 via-zinc-900 to-indigo-950 text-white border border-indigo-500/30 shadow-2xl p-6 sm:p-8 space-y-6">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-white/10 pb-6">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="p-2.5 rounded-2xl bg-indigo-500/20 text-indigo-400 border border-indigo-400/30">
+                  <Gauge className="w-6 h-6" />
+                </div>
+                <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white flex items-center gap-2.5">
+                  TODAY&apos;S GROWTH DECISION
+                </h2>
+                {todayDecision && (
+                  <span
+                    className={`px-3 py-1 rounded-full text-xs font-black tracking-wide uppercase flex items-center gap-1.5 shadow-md ${
+                      todayDecision.decision === 'POST_NOW'
+                        ? 'bg-emerald-500 text-white animate-pulse'
+                        : todayDecision.decision === 'WAIT'
+                        ? 'bg-amber-500 text-slate-950'
+                        : todayDecision.decision === 'SCHEDULE'
+                        ? 'bg-indigo-500 text-white'
+                        : todayDecision.decision === 'HOLD_CONTENT'
+                        ? 'bg-rose-500 text-white'
+                        : 'bg-zinc-600 text-white'
+                    }`}
+                  >
+                    {todayDecision.decision === 'POST_NOW' && <Zap className="w-3.5 h-3.5" />}
+                    {todayDecision.decision === 'WAIT' && <Clock className="w-3.5 h-3.5" />}
+                    {todayDecision.decision.replace(/_/g, ' ')}
+                  </span>
+                )}
+                {todayDecision && (
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-white/10 text-indigo-200 border border-white/10">
+                    Confidence: {todayDecision.confidence} ({(todayDecision.confidence_score * 100).toFixed(0)}%)
+                  </span>
+                )}
+                {todayDecision && (
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono text-purple-200 bg-purple-900/40 border border-purple-500/30">
+                    {todayDecision.authority_source}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs sm:text-sm text-zinc-300 max-w-3xl leading-relaxed">
+                Closed-loop decision engine that learns from every snapshot to dynamically govern posting cadence, spacing, and format.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+              <button
+                onClick={handleRefreshDecision}
+                disabled={decisionLoading}
+                className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-semibold flex items-center gap-1.5 transition-all text-white border border-white/15 shadow-sm"
+                title="Re-evaluate account state, real-time post velocity, and queue candidates"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${decisionLoading ? 'animate-spin' : ''}`} />
+                {decisionLoading ? 'Evaluating...' : 'Re-Evaluate Decision'}
+              </button>
+
+              <button
+                onClick={() => setActiveTab('simulation')}
+                className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-semibold flex items-center gap-1.5 transition-all text-white shadow-sm"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                Simulate 30 Days
+              </button>
+            </div>
+          </div>
+
+          {/* 4 Core Pillars KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* 1. Daily Frequency */}
+            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-sm space-y-1">
+              <div className="flex items-center justify-between text-zinc-400 text-xs font-semibold">
+                <span>Recommended Cadence</span>
+                <TrendingUp className="w-3.5 h-3.5 text-indigo-400" />
+              </div>
+              <div className="text-2xl font-black text-white tracking-tight">
+                {todayDecision?.daily_strategy.effective_daily_posts ?? 7}{' '}
+                <span className="text-sm font-normal text-zinc-300">posts / 24h</span>
+              </div>
+              <p className="text-[11px] text-zinc-400 leading-tight">
+                {todayDecision?.daily_strategy.saturation_detected
+                  ? `Knee point detected at ~${todayDecision.daily_strategy.knee_point} posts/day`
+                  : `Empirical peak reach balance vs hard cap`}
+              </p>
+            </div>
+
+            {/* 2. Spacing / Gap */}
+            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-sm space-y-1">
+              <div className="flex items-center justify-between text-zinc-400 text-xs font-semibold">
+                <span>Learned Spacing Range</span>
+                <Clock className="w-3.5 h-3.5 text-indigo-400" />
+              </div>
+              <div className="text-2xl font-black text-white font-mono tracking-tight">
+                {todayDecision ? `${todayDecision.daily_strategy.min_gap_minutes}–${todayDecision.daily_strategy.max_gap_minutes}m` : '90–150m'}
+              </div>
+              <p className="text-[11px] text-zinc-400 leading-tight">
+                Effective interval: {todayDecision?.recommended_gap_minutes ?? 90}m (protects retention)
+              </p>
+            </div>
+
+            {/* 3. Next Candidate & Format */}
+            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-sm space-y-1">
+              <div className="flex items-center justify-between text-zinc-400 text-xs font-semibold">
+                <span>Next Selected Post</span>
+                <Layers className="w-3.5 h-3.5 text-indigo-400" />
+              </div>
+              <div className="text-xl font-black text-white flex items-center gap-2">
+                <span>#{todayDecision?.candidate_row ?? todayDecision?.candidate?.google_sheet_row ?? 'Queue'}</span>
+                <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-indigo-500/30 text-indigo-300 border border-indigo-400/30">
+                  {todayDecision?.recommended_format ?? 'IMAGE'}
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-400 leading-tight">
+                Quality: {todayDecision?.candidate?.predicted_performance_score ?? 'Qualified'}/100 score
+              </p>
+            </div>
+
+            {/* 4. Active Post Velocity & Viral Guard */}
+            <div className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-sm space-y-1">
+              <div className="flex items-center justify-between text-zinc-400 text-xs font-semibold">
+                <span>Active Post Velocity</span>
+                <Flame className={`w-3.5 h-3.5 ${todayDecision?.current_post_status?.is_accelerating ? 'text-amber-400 animate-pulse' : 'text-zinc-500'}`} />
+              </div>
+              <div className="text-xl font-black text-white flex items-center gap-2">
+                <span>{todayDecision?.current_post_status?.views_velocity_per_hour ?? 0} v/hr</span>
+                <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold ${
+                  (todayDecision?.current_post_status?.historical_percentile ?? 50) >= 85
+                    ? 'bg-amber-500/30 text-amber-300 border border-amber-400/30'
+                    : 'bg-zinc-800 text-zinc-300'
+                }`}>
+                  {todayDecision?.current_post_status?.historical_percentile ?? 50}th %tile
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-400 leading-tight truncate">
+                {todayDecision?.current_post_status?.is_accelerating
+                  ? '🔥 Outperforming historical baseline'
+                  : 'Cadence pacing is clear'}
+              </p>
+            </div>
+          </div>
+
+          {/* Transparent "WHY" Section */}
+          <div className="rounded-2xl bg-black/30 border border-white/10 p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-indigo-400" />
+                <h3 className="font-bold text-sm tracking-wide uppercase text-indigo-200">
+                  Decision Rationale &amp; Empirical Evidence (&ldquo;WHY&rdquo;)
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsWhyPanelOpen(!isWhyPanelOpen)}
+                className="text-xs text-zinc-400 hover:text-white flex items-center gap-1 transition-colors"
+              >
+                {isWhyPanelOpen ? 'Collapse Rationale' : 'Expand Rationale'}
+                {isWhyPanelOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+
+            {/* Summary Sentence */}
+            <div className="p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs sm:text-sm text-indigo-100 font-medium leading-relaxed">
+              {todayDecision?.rationale.summary || 'Growth Intelligence is continuously observing post reach snapshots and calculating optimal cadence boundaries.'}
+            </div>
+
+            {/* 7 Factors Grid */}
+            {isWhyPanelOpen && todayDecision?.rationale.factors && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-2 text-xs">
+                <div className="p-3 rounded-xl bg-white/5 border border-white/5 space-y-1">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1.5">
+                    <span>1. Frequency Intelligence</span>
+                  </div>
+                  <p className="text-zinc-300 leading-relaxed text-[11px]">{todayDecision.rationale.factors.frequency}</p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-white/5 border border-white/5 space-y-1">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1.5">
+                    <span>2. Real-Time Post Velocity</span>
+                  </div>
+                  <p className="text-zinc-300 leading-relaxed text-[11px]">{todayDecision.rationale.factors.real_time_velocity}</p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-white/5 border border-white/5 space-y-1">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1.5">
+                    <span>3. Gap &amp; Spacing Intelligence</span>
+                  </div>
+                  <p className="text-zinc-300 leading-relaxed text-[11px]">{todayDecision.rationale.factors.gap}</p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-white/5 border border-white/5 space-y-1">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1.5">
+                    <span>4. Format by Length</span>
+                  </div>
+                  <p className="text-zinc-300 leading-relaxed text-[11px]">{todayDecision.rationale.factors.format}</p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-white/5 border border-white/5 space-y-1">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1.5">
+                    <span>5. Content Mix &amp; Category Efficiency</span>
+                  </div>
+                  <p className="text-zinc-300 leading-relaxed text-[11px]">{todayDecision.rationale.factors.content_mix}</p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-white/5 border border-white/5 space-y-1">
+                  <div className="font-bold text-indigo-300 flex items-center gap-1.5">
+                    <span>6. Quality Gate &amp; Timing</span>
+                  </div>
+                  <p className="text-zinc-300 leading-relaxed text-[11px]">
+                    {todayDecision.rationale.factors.content_quality} · {todayDecision.rationale.factors.timing}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Tab Navigation */}
         <div className="flex items-center gap-1 border-b border-zinc-200 overflow-x-auto pb-1 text-sm font-medium">
           <button
@@ -501,6 +806,18 @@ export default function GrowthIntelligencePage() {
           >
             <Brain className="w-4 h-4 text-indigo-300" />
             Adaptive Scheduling Brain
+          </button>
+
+          <button
+            onClick={() => setActiveTab('simulation')}
+            className={`px-4 py-2 rounded-xl transition-all whitespace-nowrap flex items-center gap-2 ${
+              activeTab === 'simulation'
+                ? 'bg-purple-700 text-white shadow-sm font-semibold'
+                : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100'
+            }`}
+          >
+            <SlidersHorizontal className="w-4 h-4 text-purple-300" />
+            Simulation & Backtesting
           </button>
 
           <button
@@ -1241,6 +1558,164 @@ export default function GrowthIntelligencePage() {
           </div>
         )}
 
+        {/* ================= TAB: SIMULATION & BACKTESTING ================= */}
+        {activeTab === 'simulation' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-3xl border border-zinc-200 p-6 sm:p-8 shadow-sm space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-100 pb-5">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="p-2 rounded-xl bg-purple-50 text-purple-700 border border-purple-100">
+                      <SlidersHorizontal className="w-5 h-5" />
+                    </span>
+                    <h3 className="font-bold text-zinc-900 text-lg">
+                      30-Day Growth Intelligence Counterfactual Simulator
+                    </h3>
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-1 max-w-3xl">
+                    Backtest empirical decisions against real history. Simulates what account reach and efficiency would have been if Growth Intelligence 3.0 frequency caps, learned spacing, and format selection had actively controlled the queue.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="inline-flex rounded-xl bg-zinc-100 p-1 text-xs font-semibold text-zinc-700">
+                    {[7, 14, 30, 60].map((d) => (
+                      <button
+                        key={d}
+                        onClick={() => handleRunSimulation(d)}
+                        className={`px-3 py-1.5 rounded-lg transition-all ${
+                          simulationDays === d
+                            ? 'bg-purple-600 text-white shadow-xs'
+                            : 'hover:text-zinc-900'
+                        }`}
+                      >
+                        {d}d
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={() => handleRunSimulation(simulationDays)}
+                    disabled={simulationLoading}
+                    className="p-2 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-700 transition-all"
+                    title="Re-run simulation"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${simulationLoading ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {simulationLoading ? (
+                <div className="p-12 text-center space-y-3">
+                  <RefreshCw className="w-8 h-8 text-purple-600 animate-spin mx-auto" />
+                  <p className="text-sm font-semibold text-zinc-700">Running historical queue simulation...</p>
+                  <p className="text-xs text-zinc-400">Comparing actual posting timestamps and snapshots against empirical saturation models.</p>
+                </div>
+              ) : simulationResult ? (
+                <div className="space-y-6">
+                  {/* 3 Large KPI Comparison Cards */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {/* 1. Total Reach Impact */}
+                    <div className="p-5 rounded-2xl bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-100 space-y-2">
+                      <div className="text-xs font-bold text-purple-900 uppercase tracking-wide flex items-center justify-between">
+                        <span>Total Projected Reach</span>
+                        <TrendingUp className="w-4 h-4 text-purple-700" />
+                      </div>
+                      <div className="text-2xl font-black text-purple-950">
+                        {simulationResult.simulated_total_reach.toLocaleString()}
+                      </div>
+                      <div className="text-xs text-purple-800 flex items-center gap-2">
+                        <span>Actual: {simulationResult.baseline_total_reach.toLocaleString()}</span>
+                        <span className="font-bold px-1.5 py-0.5 rounded bg-purple-200/60 text-purple-900 text-[11px]">
+                          {simulationResult.projected_reach_lift_pct > 0 ? `+${simulationResult.projected_reach_lift_pct}%` : `${simulationResult.projected_reach_lift_pct}%`} Lift
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* 2. Publishing Volume */}
+                    <div className="p-5 rounded-2xl bg-zinc-50 border border-zinc-200 space-y-2">
+                      <div className="text-xs font-bold text-zinc-700 uppercase tracking-wide flex items-center justify-between">
+                        <span>Posts Published</span>
+                        <Layers className="w-4 h-4 text-zinc-500" />
+                      </div>
+                      <div className="text-2xl font-black text-zinc-900">
+                        {simulationResult.simulated_posts_count}{' '}
+                        <span className="text-sm font-normal text-zinc-500">posts</span>
+                      </div>
+                      <div className="text-xs text-zinc-600">
+                        Actual: {simulationResult.baseline_posts_count} posts (
+                        {simulationResult.baseline_posts_count - simulationResult.simulated_posts_count > 0
+                          ? `${simulationResult.baseline_posts_count - simulationResult.simulated_posts_count} fewer saturated posts`
+                          : 'Same volume'}
+                        )
+                      </div>
+                    </div>
+
+                    {/* 3. Median Reach Per Post (Efficiency) */}
+                    <div className="p-5 rounded-2xl bg-emerald-50/60 border border-emerald-100 space-y-2">
+                      <div className="text-xs font-bold text-emerald-900 uppercase tracking-wide flex items-center justify-between">
+                        <span>Median Reach Per Post</span>
+                        <Gauge className="w-4 h-4 text-emerald-700" />
+                      </div>
+                      <div className="text-2xl font-black text-emerald-950">
+                        {simulationResult.simulated_median_reach_per_post.toLocaleString()}
+                      </div>
+                      <div className="text-xs text-emerald-800">
+                        Actual median: {simulationResult.baseline_median_reach_per_post.toLocaleString()}{' '}
+                        (Higher median reach per post)
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Summary Callout */}
+                  <div className="p-4 rounded-2xl bg-purple-950 text-purple-100 text-xs sm:text-sm leading-relaxed border border-purple-800/50 flex items-start gap-3">
+                    <Sparkles className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-white block mb-0.5">Simulation Finding:</strong>
+                      {simulationResult.summary}
+                    </div>
+                  </div>
+
+                  {/* Historical Day-by-Day Table */}
+                  <div className="space-y-3">
+                    <h4 className="font-bold text-zinc-900 text-sm">Day-by-Day Counterfactual Comparison</h4>
+                    <div className="overflow-x-auto border border-zinc-200 rounded-2xl">
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="bg-zinc-50 border-b border-zinc-200 text-zinc-600">
+                            <th className="py-3 px-4 font-semibold">Date</th>
+                            <th className="py-3 px-4 font-semibold">Actual Posts</th>
+                            <th className="py-3 px-4 font-semibold">Simulated Posts</th>
+                            <th className="py-3 px-4 font-semibold">Actual Reach</th>
+                            <th className="py-3 px-4 font-semibold">Simulated Reach</th>
+                            <th className="py-3 px-4 font-semibold">Primary Performance Driver</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-100">
+                          {simulationResult.daily_comparisons.map((row) => (
+                            <tr key={row.date} className="hover:bg-zinc-50/60">
+                              <td className="py-3 px-4 font-mono font-semibold text-zinc-900">{row.date}</td>
+                              <td className="py-3 px-4 font-medium text-zinc-700">{row.actual_posts}</td>
+                              <td className="py-3 px-4 font-bold text-purple-700">{row.recommended_posts}</td>
+                              <td className="py-3 px-4 text-zinc-600">{row.actual_total_reach.toLocaleString()}</td>
+                              <td className="py-3 px-4 font-bold text-emerald-700">{row.simulated_total_reach.toLocaleString()}</td>
+                              <td className="py-3 px-4 text-zinc-600 text-[11px]">{row.primary_driver}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-8 text-center text-xs text-zinc-500">
+                  Click &ldquo;Simulate 30 Days&rdquo; to compute historical counterfactual analysis.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ================= TAB 2: FORMATS & REEL STUDIO ================= */}
         {activeTab === 'formats' && (
           <div className="space-y-6">
@@ -1326,6 +1801,40 @@ export default function GrowthIntelligencePage() {
                 Open Reel Builder
               </button>
             </div>
+
+            {/* Format Intelligence by Text Length */}
+            {formatRecsList.length > 0 && (
+              <div className="bg-white rounded-2xl border border-zinc-200 p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+                  <div>
+                    <h3 className="font-bold text-zinc-900 text-base">Format Intelligence by Confession Length</h3>
+                    <p className="text-xs text-zinc-500">
+                      Empirical format recommendation based on confession word count brackets.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                  {formatRecsList.map((f) => (
+                    <div key={f.length_bracket} className="p-4 rounded-xl bg-zinc-50 border border-zinc-200/80 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-zinc-900 uppercase text-[11px]">{f.length_bracket} ({f.word_count_range})</span>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800">
+                          {f.recommended_format}
+                        </span>
+                      </div>
+                      <div className="text-zinc-600 text-[11px] leading-relaxed">
+                        {f.comparison_notes}
+                      </div>
+                      <div className="text-[10px] text-zinc-500 pt-1 border-t border-zinc-200 flex justify-between">
+                        <span>Sample Size: N={f.sample_size}</span>
+                        {f.historical_median_reach > 0 && <span>Median Reach: {f.historical_median_reach}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1521,6 +2030,55 @@ export default function GrowthIntelligencePage() {
                 </div>
               </div>
             </div>
+
+            {/* Content Mix Strategy */}
+            {contentMixList.length > 0 && (
+              <div className="bg-white rounded-2xl border border-zinc-200 p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+                  <div>
+                    <h3 className="font-bold text-zinc-900 text-base">Content Mix &amp; Category Efficiency</h3>
+                    <p className="text-xs text-zinc-500">
+                      Compares post volume share against actual reach share. Identifies categories that punch above their weight.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto border border-zinc-200 rounded-xl">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="bg-zinc-50 border-b border-zinc-200 text-zinc-600">
+                        <th className="py-2.5 px-3 font-semibold">Category</th>
+                        <th className="py-2.5 px-3 font-semibold">Post Share %</th>
+                        <th className="py-2.5 px-3 font-semibold">Reach Share %</th>
+                        <th className="py-2.5 px-3 font-semibold">Efficiency Ratio</th>
+                        <th className="py-2.5 px-3 font-semibold">Growth Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100">
+                      {contentMixList.map((m) => (
+                        <tr key={m.category} className="hover:bg-zinc-50/50">
+                          <td className="py-2.5 px-3 font-bold text-zinc-900 capitalize">{m.category}</td>
+                          <td className="py-2.5 px-3 text-zinc-700 font-mono">{m.historical_post_share_pct}% ({m.post_count} posts)</td>
+                          <td className="py-2.5 px-3 font-semibold text-zinc-900 font-mono">{m.historical_reach_share_pct}%</td>
+                          <td className="py-2.5 px-3 font-mono font-bold text-indigo-700">{m.efficiency_ratio}x</td>
+                          <td className="py-2.5 px-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              m.recommendation === 'INCREASE'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : m.recommendation === 'REDUCE'
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-zinc-100 text-zinc-700'
+                            }`}>
+                              {m.recommendation}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
