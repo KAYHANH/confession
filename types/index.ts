@@ -24,6 +24,54 @@ export type ModerationRisk = 'LOW' | 'MEDIUM' | 'HIGH';
 
 export type RecommendedAction = 'APPROVE' | 'REVIEW' | 'REJECT';
 
+export type ReconciliationStatus =
+  | 'NOT_CHECKED'
+  | 'CHECKING'
+  | 'ALREADY_PUBLISHED'
+  | 'CONFIRMED_NOT_PUBLISHED'
+  | 'DUPLICATE'
+  | 'UNKNOWN'
+  | 'MANUAL_REVIEW'
+  | 'SAFE_TO_RETRY'
+  | 'VERIFIED'
+  | 'RECONCILED'
+  | 'NEEDS_REVIEW'
+  | 'PENDING'
+  | 'MANUAL_REVIEW_REQUIRED';
+
+export type ReconciliationCheckMethod =
+  | 'stored_media_id'
+  | 'stored_permalink'
+  | 'published_posts_ledger'
+  | 'authoritative_db_published'
+  | 'content_hash_exact'
+  | 'normalized_text_exact'
+  | 'semantic_text_similarity'
+  | 'pre_publish_rejection_error'
+  | 'instagram_api_feed_match'
+  | 'instagram_api_feed_not_found'
+  | 'instagram_api_timeout'
+  | 'instagram_api_network_error'
+  | 'instagram_api_rate_limit'
+  | 'exceeded_attempts_manual_review'
+  | 'manual_admin_action';
+
+export interface ReconciliationEvidence {
+  record_id: string;
+  checked_at: string;
+  source: 'database' | 'ledger' | 'instagram_api' | 'content_matcher' | 'admin';
+  check_method: ReconciliationCheckMethod | string;
+  result: ReconciliationStatus;
+  confidence: number;
+  evidence: string;
+  instagram_media_id?: string | null;
+  instagram_permalink?: string | null;
+  duplicate_of_id?: string | null;
+  duplicate_of_row?: number | null;
+  duplicate_of_permalink?: string | null;
+  details?: Record<string, any>;
+}
+
 export interface Confession {
   id: string;
   google_sheet_id: string;
@@ -84,12 +132,18 @@ export interface Confession {
   quality_false_positive?: boolean | null;
   quality_false_negative?: boolean | null;
   // Content Hash & Idempotency Protection
+  raw_content_hash?: string | null;
   content_hash?: string | null;
   normalized_content_hash?: string | null;
   idempotency_key?: string | null;
   publishing_attempt_id?: string | null;
-  reconciliation_status?: 'RECONCILED' | 'PENDING' | 'MANUAL_REVIEW_REQUIRED' | 'NEEDS_REVIEW' | null;
+  reconciliation_status?: ReconciliationStatus | 'RECONCILED' | 'PENDING' | 'MANUAL_REVIEW_REQUIRED' | 'NEEDS_REVIEW' | null;
   reconciliation_notes?: string | null;
+  reconciliation_reason?: string | null;
+  reconciliation_evidence?: ReconciliationEvidence | null;
+  last_reconciled_at?: string | null;
+  next_reconciliation_at?: string | null;
+  reconciliation_attempts?: number;
   duplicate_of_id?: string | null;
   duplicate_of_row?: number | null;
   duplicate_of_permalink?: string | null;

@@ -1,19 +1,42 @@
 import crypto from 'crypto';
 
 /**
+ * Decodes standard HTML entities and numerical entities.
+ */
+export function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#(\d+);/g, (_, dec) => {
+      try { return String.fromCharCode(parseInt(dec, 10)); } catch { return ''; }
+    })
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+      try { return String.fromCharCode(parseInt(hex, 16)); } catch { return ''; }
+    });
+}
+
+/**
  * Normalizes confession text for robust duplicate detection and canonical comparison.
+ * - Decodes HTML entities (&amp;, &quot;, &#39;, &nbsp;, etc.)
  * - Applies Unicode NFKC normalization
  * - Strips invisible and zero-width characters
- * - Normalizes all whitespace (newlines, tabs, multiple spaces) into a single space
+ * - Converts escaped breaks (\n, \r, \t) and multi-spaces into single spaces
  * - Lowercases the result
  * - Trims leading and trailing spaces
  */
 export function normalizeConfessionText(text: string | null | undefined): string {
   if (!text) return '';
-  return text
+  const decoded = decodeHtmlEntities(String(text));
+  return decoded
     .normalize('NFKC')
     // Remove zero-width spaces, invisible separators, directional marks
     .replace(/[\u200B-\u200D\uFEFF\u00A0\u200E\u200F\u202A-\u202E\u180E\u2060]/g, '')
+    // Normalize literal escaped characters (\n, \r, \t)
+    .replace(/\\n|\\r|\\t/g, ' ')
     // Normalize newlines and whitespace
     .replace(/\s+/g, ' ')
     .trim()

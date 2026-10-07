@@ -348,6 +348,15 @@ export class AdaptiveSchedulingEngine {
     const now = new Date();
     const nowMs = now.getTime();
 
+    if (
+      ['UNKNOWN', 'MANUAL_REVIEW', 'DUPLICATE', 'ALREADY_PUBLISHED'].includes(candidate.reconciliation_status as any) ||
+      candidate.status === 'DUPLICATE_ALREADY_PUBLISHED' ||
+      candidate.status === 'UNKNOWN_NEEDS_REVIEW' ||
+      candidate.status === 'UNKNOWN'
+    ) {
+      throw new Error(`Cannot schedule confession with unconfirmed status (${candidate.status} / ${candidate.reconciliation_status}). Reconciliation required.`);
+    }
+
     // 1. If explicit manual forceTime provided by admin
     if (options?.forceTime) {
       const explicitDate = new Date(options.forceTime);
@@ -503,7 +512,8 @@ export class AdaptiveSchedulingEngine {
           (c.status === 'SCHEDULED' || c.status === 'APPROVED') &&
           !c.published_at &&
           !c.instagram_media_id &&
-          c.quality_status !== 'LOW_VALUE'
+          c.quality_status !== 'LOW_VALUE' &&
+          !['UNKNOWN', 'MANUAL_REVIEW', 'DUPLICATE', 'ALREADY_PUBLISHED'].includes(c.reconciliation_status as any)
       )
       .sort((a, b) => (a.google_sheet_row || 0) - (b.google_sheet_row || 0));
 

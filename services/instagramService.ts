@@ -21,6 +21,20 @@ export interface InstagramPublishResult {
   publishAttempted?: boolean;
 }
 
+export interface InstagramFeedFetchResult {
+  success: boolean;
+  media: Array<{
+    id: string;
+    caption?: string;
+    media_type: string;
+    media_product_type?: string;
+    permalink?: string;
+    timestamp?: string;
+  }>;
+  errorType?: 'TIMEOUT' | 'NETWORK_ERROR' | 'RATE_LIMIT' | 'AUTH_ERROR' | 'NOT_CONFIGURED' | 'UNKNOWN';
+  errorMessage?: string;
+}
+
 export const INSTAGRAM_API_BASE_URL = 'https://graph.instagram.com';
 
 export class InstagramService {
@@ -208,6 +222,82 @@ export class InstagramService {
     };
   }
 
+
+  /**
+   * Authoritative fetch of recent media from connected Instagram account,
+   * returning exact error classification so callers never confuse network failure with "not published".
+   */
+  public async fetchRecentMediaWithStatus(limit: number = 50): Promise<InstagramFeedFetchResult> {
+    const serverConfig = getInstagramServerConfig();
+    const storeConfig = mockStore.getInstagramConfig();
+    const token = serverConfig.accessToken || storeConfig.access_token;
+    const accountId = serverConfig.accountId || storeConfig.account_id;
+
+    if (!token || !accountId) {
+      return {
+        success: false,
+        media: [],
+        errorType: 'NOT_CONFIGURED',
+        errorMessage: 'Instagram access token or account ID is not configured.',
+      };
+    }
+
+    try {
+      const url = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media?fields=id,caption,media_type,media_product_type,permalink,timestamp&limit=${limit}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s safety timeout
+
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timeoutId));
+
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && Array.isArray(data.data)) {
+        return {
+          success: true,
+          media: data.data,
+        };
+      }
+
+      const errMsg = data.error?.message || `Instagram API HTTP ${res.status}`;
+      const errCode = data.error?.code;
+
+      if (res.status === 429 || errCode === 4 || errCode === 17 || errMsg.toLowerCase().includes('rate limit')) {
+        return {
+          success: false,
+          media: [],
+          errorType: 'RATE_LIMIT',
+          errorMessage: errMsg,
+        };
+      }
+
+      if (res.status === 401 || errCode === 190 || errMsg.toLowerCase().includes('token') || errMsg.toLowerCase().includes('session')) {
+        return {
+          success: false,
+          media: [],
+          errorType: 'AUTH_ERROR',
+          errorMessage: errMsg,
+        };
+      }
+
+      return {
+        success: false,
+        media: [],
+        errorType: 'UNKNOWN',
+        errorMessage: errMsg,
+      };
+    } catch (err: any) {
+      const isAbort = err?.name === 'AbortError' || err?.message?.toLowerCase().includes('timeout');
+      return {
+        success: false,
+        media: [],
+        errorType: isAbort ? 'TIMEOUT' : 'NETWORK_ERROR',
+        errorMessage: err?.message || 'Instagram API network error',
+      };
+    }
+  }
+
   /**
    * Safe fetch of recent media from connected Instagram account
    */
@@ -219,26 +309,8 @@ export class InstagramService {
     permalink?: string;
     timestamp?: string;
   }[]> {
-    const serverConfig = getInstagramServerConfig();
-    const storeConfig = mockStore.getInstagramConfig();
-    const token = serverConfig.accessToken || storeConfig.access_token;
-    const accountId = serverConfig.accountId || storeConfig.account_id;
-
-    if (!token || !accountId || process.env.NODE_ENV === 'test' || process.env.MOCK_EXTERNAL_APIS === 'true') {
-      return [];
-    }
-
-    try {
-      const url = `${INSTAGRAM_API_BASE_URL}/v21.0/${accountId}/media?fields=id,caption,media_type,media_product_type,permalink,timestamp&limit=${limit}`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && Array.isArray(data.data)) {
-        return data.data;
-      }
-      return [];
-    } catch {
-      return [];
-    }
+    const res = await this.fetchRecentMediaWithStatus(limit);
+    return res.success ? res.media : [];
   }
 
   /**

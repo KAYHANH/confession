@@ -6,6 +6,7 @@ import { imageService } from './imageService';
 import { instagramService } from './instagramService';
 import { googleSheetsService } from './googleSheetsService';
 import { moderationService } from './moderationService';
+import { publicationReconciliationService } from './reconciliationService';
 import {
   paginateConfession,
   buildInstagramCaption,
@@ -821,6 +822,15 @@ export class ConfessionService {
       throw new Error('Only approved or ready-for-review confessions can be scheduled');
     }
 
+    if (
+      ['UNKNOWN', 'MANUAL_REVIEW', 'DUPLICATE', 'ALREADY_PUBLISHED'].includes(confession.reconciliation_status as any) ||
+      confession.status === 'DUPLICATE_ALREADY_PUBLISHED' ||
+      confession.status === 'UNKNOWN_NEEDS_REVIEW' ||
+      confession.status === 'UNKNOWN'
+    ) {
+      throw new Error(`Cannot schedule confession with unconfirmed reconciliation status: ${confession.reconciliation_status || confession.status}. Reconciliation required.`);
+    }
+
     const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
     const updated = await adaptiveSchedulingEngine.scheduleNextCandidate(confession, { forceTime: scheduledAtIso });
 
@@ -880,7 +890,13 @@ export class ConfessionService {
     const confession = await this.getConfessionById(id);
     if (!confession) throw new Error('Confession not found');
 
-    // 2. Strict duplicate and state checks
+    // 2. Strict pre-publish idempotency & state check via canonical publicationReconciliationService
+    const preCheck = await publicationReconciliationService.finalPublicationCheck(confession);
+    if (!preCheck.canPublish) {
+      throw new Error(`Publishing blocked by reconciliation check: ${preCheck.reason}`);
+    }
+
+    // 2a. Strict duplicate and state checks
     if (confession.status === 'PUBLISHED' || confession.instagram_media_id) {
       throw new Error(`Already published! (Instagram Media ID: ${confession.instagram_media_id})`);
     }
@@ -889,14 +905,14 @@ export class ConfessionService {
       throw new Error('Cannot publish a rejected confession. Please approve it first.');
     }
 
-    // 2a. Validate publish eligibility through Quality Gate and Safety Guards (Step 16 & 31)
+    // 2b. Validate publish eligibility through Quality Gate and Safety Guards (Step 16 & 31)
     const settings = mockStore.getSettings();
     const eligibility = validatePublishEligibility(confession, settings);
     if (!eligibility.isEligible) {
       throw new Error(`Publishing blocked: ${eligibility.reason}`);
     }
 
-    // 2b. Content hash canonical duplicate check against already published confessions
+    // 2c. Content hash canonical duplicate check against already published confessions
     const confessionText = confession.cleaned_text || confession.original_text || '';
     const contentHash = generateContentHash(confessionText);
     confession.normalized_content_hash = contentHash;
@@ -918,7 +934,7 @@ export class ConfessionService {
         duplicate_of_permalink: duplicatePublished.instagram_permalink ?? null,
         instagram_media_id: duplicatePublished.instagram_media_id,
         instagram_permalink: duplicatePublished.instagram_permalink,
-        reconciliation_status: 'RECONCILED',
+        reconciliation_status: 'DUPLICATE',
         reconciliation_notes: `Identical confession already published as #${duplicatePublished.google_sheet_row || duplicatePublished.id}`,
       });
       throw new Error(
@@ -926,7 +942,7 @@ export class ConfessionService {
       );
     }
 
-    // 2c. Check internal published posts ledger
+    // 2d. Check internal published posts ledger
     const publishedLedger = mockStore.getPublishedPosts();
     const ledgerMatch = publishedLedger.find((p) => {
       if (p.confession_id === id) return true;
@@ -941,7 +957,7 @@ export class ConfessionService {
         instagram_media_id: ledgerMatch.instagram_media_id,
         instagram_permalink: ledgerMatch.permalink,
         published_at: ledgerMatch.published_at,
-        reconciliation_status: 'RECONCILED',
+        reconciliation_status: 'ALREADY_PUBLISHED',
         reconciliation_notes: 'Found in published posts ledger before publish attempt.',
       });
       throw new Error(`Already published: Post verified in published posts ledger (Media ID: ${ledgerMatch.instagram_media_id})`);
@@ -1166,6 +1182,12 @@ export class ConfessionService {
         });
       }
 
+      // Pre-call atomic idempotency check right before external network transmission
+      const preSendCheck = await publicationReconciliationService.finalPublicationCheck(confession);
+      if (!preSendCheck.canPublish) {
+        throw new Error(`Publishing aborted: ${preSendCheck.reason}`);
+      }
+
       // 5. Call Instagram Service (reel, carousel, or single post)
       let publishResult;
       if (requestedMode === 'reel') {
@@ -1184,7 +1206,7 @@ export class ConfessionService {
           await this.updateConfession(id, {
             status: 'UNKNOWN_NEEDS_REVIEW',
             retry_count: newRetryCount,
-            reconciliation_status: 'NEEDS_REVIEW',
+            reconciliation_status: 'UNKNOWN',
             reconciliation_notes: 'Publish attempt timed out or dropped connection. Reconcile with Instagram before retrying.',
             error_message: publishResult.error || 'Publish outcome unknown (network timeout/drop).',
           });
@@ -1213,7 +1235,7 @@ export class ConfessionService {
           status: nextStatus,
           retry_count: newRetryCount,
           error_message: publishResult.error || 'Failed to publish post',
-          reconciliation_status: 'RECONCILED',
+          reconciliation_status: 'CONFIRMED_NOT_PUBLISHED',
           reconciliation_notes: 'Confirmed failed before publication on Instagram.',
         });
 
@@ -1238,13 +1260,25 @@ export class ConfessionService {
 
       // 6. Success: Transition to PUBLISHED
       const publishedAt = new Date().toISOString();
+
+      // Immediate ledger recording to guarantee idempotency even if DB/Sheet updates encounter glitches
+      mockStore.addPublishedPost({
+        confession_id: id,
+        confession_number: confession.google_sheet_row ?? 0,
+        instagram_media_id: publishResult.mediaId ?? '',
+        permalink: publishResult.permalink ?? '',
+        published_at: publishedAt,
+        template_name: mockStore.getTemplateById(confession.template_id ?? '')?.name,
+        preview_text: (confession.cleaned_text || confession.original_text || '').slice(0, 80),
+      });
+
       const updated = await this.updateConfession(id, {
         status: 'PUBLISHED',
         published_at: publishedAt,
         instagram_media_id: publishResult.mediaId,
         instagram_permalink: publishResult.permalink,
         error_message: null,
-        reconciliation_status: 'RECONCILED',
+        reconciliation_status: 'ALREADY_PUBLISHED',
         reconciliation_notes: 'Successfully published to Instagram.',
       });
 
@@ -1274,16 +1308,7 @@ export class ConfessionService {
         }
       }
 
-      // 8. Save permalink to internal published posts log (not in Google Sheet)
-      mockStore.addPublishedPost({
-        confession_id: id,
-        confession_number: confession.google_sheet_row ?? 0,
-        instagram_media_id: publishResult.mediaId ?? '',
-        permalink: publishResult.permalink ?? '',
-        published_at: publishedAt,
-        template_name: mockStore.getTemplateById(confession.template_id ?? '')?.name,
-        preview_text: (confession.cleaned_text || confession.original_text || '').slice(0, 80),
-      });
+
 
       // 9. Log success
       mockStore.addLog({
@@ -1767,6 +1792,11 @@ export class ConfessionService {
     low_value: number;
     deleted: number;
     failed: number;
+    alreadyPublished?: number;
+    confirmedNotPublished?: number;
+    safeToRetry?: number;
+    manualReview?: number;
+    unreconciled?: number;
   }> {
     const all = !this.useSupabase()
       ? mockStore.getConfessions()
@@ -1801,6 +1831,27 @@ export class ConfessionService {
         !c.published_at
     ).length;
 
+    const alreadyPublished = all.filter(
+      (c) => c.status === 'PUBLISHED' || c.reconciliation_status === 'ALREADY_PUBLISHED' || c.reconciliation_status === 'VERIFIED'
+    ).length;
+    const confirmedNotPublished = all.filter(
+      (c) => c.reconciliation_status === 'CONFIRMED_NOT_PUBLISHED'
+    ).length;
+    const safeToRetry = all.filter(
+      (c) =>
+        c.reconciliation_status === 'CONFIRMED_NOT_PUBLISHED' &&
+        (c.status === 'APPROVED' || c.status === 'FAILED_CONFIRMED' || c.status === 'FAILED')
+    ).length;
+    const manualReview = all.filter(
+      (c) => c.reconciliation_status === 'MANUAL_REVIEW' || c.status === 'UNKNOWN_NEEDS_REVIEW'
+    ).length;
+    const unreconciled = all.filter(
+      (c) =>
+        c.reconciliation_status === 'NOT_CHECKED' ||
+        c.reconciliation_status === 'CHECKING' ||
+        (!c.reconciliation_status && (c.status === 'FAILED' || c.status === 'UNKNOWN' || c.status === 'UNKNOWN_NEEDS_REVIEW'))
+    ).length;
+
     return {
       queue,
       scheduled,
@@ -1810,6 +1861,11 @@ export class ConfessionService {
       low_value,
       deleted,
       failed,
+      alreadyPublished,
+      confirmedNotPublished,
+      safeToRetry,
+      manualReview,
+      unreconciled,
     };
   }
 }

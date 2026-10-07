@@ -45,6 +45,11 @@ export default function ConfessionsPage() {
     low_value: number;
     deleted: number;
     failed: number;
+    alreadyPublished?: number;
+    confirmedNotPublished?: number;
+    safeToRetry?: number;
+    manualReview?: number;
+    unreconciled?: number;
   }>({
     queue: 0,
     scheduled: 0,
@@ -54,7 +59,18 @@ export default function ConfessionsPage() {
     low_value: 0,
     deleted: 0,
     failed: 0,
+    alreadyPublished: 0,
+    confirmedNotPublished: 0,
+    safeToRetry: 0,
+    manualReview: 0,
+    unreconciled: 0,
   });
+  const [reconciliationProgress, setReconciliationProgress] = useState<{
+    current: number;
+    total: number;
+    isRunning: boolean;
+  } | null>(null);
+  const [lastReconciliationReport, setLastReconciliationReport] = useState<any | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('queue');
@@ -226,19 +242,83 @@ export default function ConfessionsPage() {
 
   const handleReconcile = async () => {
     setReconciling(true);
+    setReconciliationProgress({
+      current: 0,
+      total: tabCounts.unreconciled || tabCounts.unknown || 0,
+      isRunning: true,
+    });
+
+    // Poll progress every 750ms while running
+    const progressInterval = setInterval(async () => {
+      try {
+        const pRes = await fetch('/api/confessions/reconcile');
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          if (pData.progress && pData.progress.isRunning) {
+            setReconciliationProgress(pData.progress);
+          }
+        }
+      } catch {}
+    }, 750);
+
     try {
       const res = await fetch('/api/confessions/reconcile', { method: 'POST' });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Reconciliation failed');
-      const r = data.result;
+      const r = data.report || data.result;
+      setLastReconciliationReport(r);
+      const pubCount = r.alreadyPublished ?? r.reconciledToPublished ?? 0;
+      const dupCount = r.duplicates ?? r.duplicatesFlagged ?? 0;
+      const failedCount = r.confirmedNotPublished ?? r.confirmedFailed ?? 0;
+      const unkCount = r.unknown ?? 0;
       success(
-        `Reconciliation complete: ${r.reconciledToPublished} marked Published, ${r.duplicatesFlagged} duplicates flagged, ${r.confirmedFailed} confirmed failed.`
+        `Reconciliation complete: ${pubCount} verified published, ${dupCount} duplicates, ${failedCount} confirmed failed, ${unkCount} unknown.`
       );
       await loadData();
     } catch (err: any) {
       error(err?.message || 'Reconciliation failed');
     } finally {
+      clearInterval(progressInterval);
       setReconciling(false);
+      setReconciliationProgress(null);
+    }
+  };
+
+  const handleReconcileSingle = async (id: string) => {
+    try {
+      const res = await fetch('/api/confessions/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confessionId: id, forceLiveInstagram: true }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Reconciliation failed');
+      success(`Reconciliation complete: ${data.reason}`);
+      await loadData();
+    } catch (err: any) {
+      error(err?.message || 'Reconciliation failed');
+    }
+  };
+
+  const handleResolveDuplicate = async (id: string, resolution: 'MARK_DUPLICATE' | 'ALLOW_POST' | 'CANCEL') => {
+    try {
+      const res = await fetch('/api/confessions/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'RESOLVE_DUPLICATE', confessionId: id, resolution }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Duplicate resolution failed');
+      success(
+        resolution === 'ALLOW_POST'
+          ? 'Confession approved for posting (override applied).'
+          : resolution === 'MARK_DUPLICATE'
+          ? 'Marked as duplicate.'
+          : 'Cancelled confession.'
+      );
+      await loadData();
+    } catch (err: any) {
+      error(err?.message || 'Failed to resolve duplicate');
     }
   };
 
@@ -682,36 +762,149 @@ export default function ConfessionsPage() {
           </div>
         </div>
 
-        {/* ── Reconciliation & Duplicate Protection Alert Banner ── */}
-        {(tabCounts.unknown > 0 || tabCounts.duplicates > 0) && (
-          <div className="p-4 bg-purple-50/90 border border-purple-200 rounded-2xl text-purple-900 space-y-3">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-purple-100 rounded-xl text-purple-600 shrink-0">
-                  <ShieldAlert className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="font-semibold text-sm">
-                    Duplicate Post Protection Active: {tabCounts.unknown} pending review, {tabCounts.duplicates} duplicate(s) quarantined
+        {/* ── Dynamic Duplicate Protection & Reconciliation Banner ── */}
+        {(() => {
+          const isReconciling = reconciling || Boolean(reconciliationProgress?.isRunning);
+          const hasUnknowns = (tabCounts.unknown || 0) > 0 || (tabCounts.manualReview || 0) > 0;
+          const hasUnreconciled = (tabCounts.unreconciled || 0) > 0;
+          const hasDuplicates = (tabCounts.duplicates || 0) > 0;
+
+          let badgeText = 'RECONCILIATION COMPLETE';
+          let badgeClasses = 'bg-emerald-100 text-emerald-800 border-emerald-300';
+
+          if (isReconciling) {
+            badgeText = 'RECONCILIATION RUNNING';
+            badgeClasses = 'bg-blue-100 text-blue-800 border-blue-300 animate-pulse';
+          } else if (hasUnknowns) {
+            badgeText = 'BLOCKED — UNKNOWN STATES';
+            badgeClasses = 'bg-rose-100 text-rose-800 border-rose-300';
+          } else if (hasUnreconciled) {
+            badgeText = 'RECONCILIATION REQUIRED';
+            badgeClasses = 'bg-amber-100 text-amber-800 border-amber-300';
+          }
+
+          // Show banner if unconfirmed records exist, unknowns exist, duplicates exist, reconciliation is running, or a report is available
+          const showBanner = hasUnknowns || hasUnreconciled || hasDuplicates || isReconciling || lastReconciliationReport !== null;
+          if (!showBanner) return null;
+
+          const currentCount = reconciliationProgress?.current || 0;
+          const totalTarget = reconciliationProgress?.total || (tabCounts.unreconciled || tabCounts.unknown || 1);
+          const progressPercent = totalTarget > 0 ? Math.min(100, Math.round((currentCount / totalTarget) * 100)) : 10;
+
+          return (
+            <div className="p-4 bg-purple-50/90 border border-purple-200 rounded-2xl text-purple-900 space-y-3.5 shadow-xs">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-purple-100 rounded-xl text-purple-600 shrink-0">
+                    <ShieldAlert className="w-5 h-5" />
                   </div>
-                  <div className="text-xs text-purple-700 mt-0.5">
-                    Submissions with unconfirmed Instagram state or matching previously published hashes are safely blocked from re-publishing.
+                  <div>
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <span className="font-bold text-sm tracking-tight text-purple-950">DUPLICATE PROTECTION</span>
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-black border uppercase ${badgeClasses}`}>
+                        {isReconciling && <RefreshCw className="w-2.5 h-2.5 animate-spin" />}
+                        {badgeText}
+                      </span>
+                    </div>
+                    <div className="text-xs text-purple-700 mt-0.5">
+                      Submissions are verified against live Instagram media and content hashes. Automated publishing is safely restricted to confirmed records.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 ml-auto flex-wrap">
+                  {tabCounts.safeToRetry && tabCounts.safeToRetry > 0 ? (
+                    <button
+                      onClick={() => handleRestartQueue()}
+                      disabled={restartingQueue || isReconciling}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 rounded-xl shadow-xs transition-all disabled:opacity-50"
+                      title="Only retries posts verified as CONFIRMED_NOT_PUBLISHED"
+                    >
+                      <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} />
+                      Retry Confirmed Failed ({tabCounts.safeToRetry})
+                    </button>
+                  ) : null}
+                  <button
+                    onClick={handleReconcile}
+                    disabled={isReconciling}
+                    className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-xl shadow-sm transition-all disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isReconciling ? 'animate-spin' : ''}`} />
+                    {isReconciling ? 'Reconciling…' : 'Run Full Reconciliation'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Progress UI during batch reconciliation */}
+              {isReconciling && (
+                <div className="p-3 bg-white/90 border border-purple-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between text-xs font-semibold text-purple-900">
+                    <span className="flex items-center gap-2">
+                      <RefreshCw className="w-3.5 h-3.5 text-purple-600 animate-spin" />
+                      Reconciling... {currentCount} / {totalTarget}
+                    </span>
+                    <span className="text-purple-600 font-mono">{progressPercent}%</span>
+                  </div>
+                  <div className="w-full bg-purple-100 h-2 rounded-full overflow-hidden">
+                    <div
+                      className="bg-purple-600 h-full rounded-full transition-all duration-300"
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Itemized Real Counters */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 pt-2 border-t border-purple-200/60">
+                <div className="bg-white/80 p-2.5 rounded-xl border border-purple-100 shadow-2xs">
+                  <div className="text-[10px] uppercase font-bold text-zinc-500">Already Published</div>
+                  <div className="text-base font-extrabold text-emerald-700 mt-0.5">
+                    {tabCounts.alreadyPublished ?? tabCounts.published}
+                  </div>
+                </div>
+                <div className="bg-white/80 p-2.5 rounded-xl border border-purple-100 shadow-2xs">
+                  <div className="text-[10px] uppercase font-bold text-zinc-500">Confirmed Failed</div>
+                  <div className="text-base font-extrabold text-slate-700 mt-0.5">
+                    {tabCounts.confirmedNotPublished ?? tabCounts.failed}
+                  </div>
+                </div>
+                <div className="bg-white/80 p-2.5 rounded-xl border border-purple-100 shadow-2xs">
+                  <div className="text-[10px] uppercase font-bold text-zinc-500">Duplicates</div>
+                  <div className="text-base font-extrabold text-amber-700 mt-0.5">
+                    {tabCounts.duplicates}
+                  </div>
+                </div>
+                <div className="bg-white/80 p-2.5 rounded-xl border border-purple-100 shadow-2xs">
+                  <div className="text-[10px] uppercase font-bold text-zinc-500">Unknown</div>
+                  <div className="text-base font-extrabold text-rose-700 mt-0.5">
+                    {tabCounts.unknown}
+                  </div>
+                </div>
+                <div className="bg-white/80 p-2.5 rounded-xl border border-purple-100 shadow-2xs">
+                  <div className="text-[10px] uppercase font-bold text-zinc-500">Manual Review</div>
+                  <div className="text-base font-extrabold text-purple-700 mt-0.5">
+                    {tabCounts.manualReview ?? 0}
+                  </div>
+                </div>
+                <div className="bg-white/80 p-2.5 rounded-xl border border-purple-100 shadow-2xs">
+                  <div className="text-[10px] uppercase font-bold text-zinc-500">Safe to Retry</div>
+                  <div className="text-base font-extrabold text-indigo-700 mt-0.5">
+                    {tabCounts.safeToRetry ?? 0}
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-2 ml-auto">
-                <button
-                  onClick={handleReconcile}
-                  disabled={reconciling}
-                  className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-xl shadow-sm transition-all disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${reconciling ? 'animate-spin' : ''}`} />
-                  {reconciling ? 'Reconciling…' : 'Run Full Reconciliation'}
-                </button>
-              </div>
+
+              {hasUnknowns && (
+                <div className="text-[11px] text-rose-800 bg-rose-50/80 border border-rose-200/80 p-2 rounded-lg flex items-center gap-1.5 font-medium">
+                  <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>
+                    Auto-publishing is paused for {tabCounts.unknown} item(s) in UNKNOWN state. Run reconciliation or inspect Instagram before retrying.
+                  </span>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ── Failed Alert & Quick Restart Banner ── */}
         {tabCounts.failed > 0 && (() => {
@@ -1223,27 +1416,95 @@ export default function ConfessionsPage() {
                                   <Trash2 className="w-4 h-4" />
                                 </button>
                               </>
+                            ) : activeTab === 'duplicates' ? (
+                              <>
+                                <button
+                                  onClick={() => handleResolveDuplicate(c.id, 'ALLOW_POST')}
+                                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors shadow-xs cursor-pointer"
+                                  title="Override duplicate check and approve for publishing"
+                                >
+                                  <Check className="w-3.5 h-3.5" /> Allow
+                                </button>
+                                <Link href={`/confessions/${c.id}`} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors" title="View">
+                                  <Eye className="w-4 h-4" />
+                                </Link>
+                                <button
+                                  onClick={() => handleDelete(c.id, false)}
+                                  className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                  title="Move to Deleted"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </>
+                            ) : activeTab === 'unknown' ? (
+                              <>
+                                <button
+                                  onClick={() => handleReconcileSingle(c.id)}
+                                  disabled={reconciling}
+                                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors shadow-xs cursor-pointer disabled:opacity-50"
+                                  title="Query Instagram API to verify true publication state"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5" /> Reconcile
+                                </button>
+                                <Link href={`/confessions/${c.id}`} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors" title="View">
+                                  <Eye className="w-4 h-4" />
+                                </Link>
+                                <button
+                                  onClick={() => handleDelete(c.id, false)}
+                                  className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                  title="Move to Deleted"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </>
                             ) : (
                               <>
-                                {(c.status === 'FAILED' || c.status === 'PUBLISHING') && (
+                                {/* Only allow Retry for verified failed posts — NEVER for unknown or unconfirmed */}
+                                {(c.status === 'FAILED_CONFIRMED' || (c.status === 'FAILED' && c.reconciliation_status === 'CONFIRMED_NOT_PUBLISHED')) && (
                                   <button
                                     onClick={() => handleRestartQueue([c.id])}
                                     disabled={restartingQueue}
                                     className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-50 transition-colors"
-                                    title="Restart & Retry this confession"
+                                    title="Restart & Retry this verified failed confession"
                                   >
                                     <RotateCcw className="w-4 h-4" />
+                                  </button>
+                                )}
+                                {/* If in UNKNOWN state, show Reconcile instead of Retry */}
+                                {(c.status === 'UNKNOWN' || c.status === 'UNKNOWN_NEEDS_REVIEW' || c.reconciliation_status === 'UNKNOWN' || c.reconciliation_status === 'MANUAL_REVIEW') && (
+                                  <button
+                                    onClick={() => handleReconcileSingle(c.id)}
+                                    disabled={reconciling}
+                                    className="p-1.5 rounded-lg text-purple-600 hover:bg-purple-50 transition-colors"
+                                    title="Reconcile with Instagram before retrying"
+                                  >
+                                    <RefreshCw className="w-4 h-4" />
                                   </button>
                                 )}
                                 <Link href={`/confessions/${c.id}`} className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors" title="View">
                                   <Eye className="w-4 h-4" />
                                 </Link>
-                                <button onClick={() => setSelectedForSchedule(c)} className="p-1.5 rounded-lg text-indigo-500 hover:bg-indigo-50 transition-colors" title="Schedule">
-                                  <Calendar className="w-4 h-4" />
-                                </button>
-                                <button onClick={() => setSelectedForPublish(c)} className="p-1.5 rounded-lg text-pink-500 hover:bg-pink-50 transition-colors" title="Publish Now">
-                                  <Instagram className="w-4 h-4" />
-                                </button>
+                                {(() => {
+                                  const isPublishBlocked =
+                                    ['UNKNOWN', 'MANUAL_REVIEW', 'DUPLICATE', 'ALREADY_PUBLISHED'].includes(c.reconciliation_status as any) ||
+                                    c.status === 'DUPLICATE_ALREADY_PUBLISHED' ||
+                                    c.status === 'UNKNOWN' ||
+                                    c.status === 'UNKNOWN_NEEDS_REVIEW' ||
+                                    c.status === 'PUBLISHED';
+
+                                  if (isPublishBlocked) return null;
+
+                                  return (
+                                    <>
+                                      <button onClick={() => setSelectedForSchedule(c)} className="p-1.5 rounded-lg text-indigo-500 hover:bg-indigo-50 transition-colors" title="Schedule">
+                                        <Calendar className="w-4 h-4" />
+                                      </button>
+                                      <button onClick={() => setSelectedForPublish(c)} className="p-1.5 rounded-lg text-pink-500 hover:bg-pink-50 transition-colors" title="Publish Now">
+                                        <Instagram className="w-4 h-4" />
+                                      </button>
+                                    </>
+                                  );
+                                })()}
                                 <button onClick={() => handleDelete(c.id, false)} className="p-1.5 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer" title="Move to Deleted">
                                   <Trash2 className="w-4 h-4" />
                                 </button>

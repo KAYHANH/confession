@@ -75,7 +75,7 @@ describe('Reconciliation & Duplicate Protection Engine', () => {
 
       await expect(
         confessionService.publishConfession(duplicateConf.id)
-      ).rejects.toThrow(/Duplicate blocked/);
+      ).rejects.toThrow(/Duplicate blocked|Quarantined as duplicate/i);
 
       const after = mockStore.getConfessionById(duplicateConf.id);
       expect(after?.status).toBe('DUPLICATE_ALREADY_PUBLISHED');
@@ -132,7 +132,7 @@ describe('Reconciliation & Duplicate Protection Engine', () => {
 
       const after = mockStore.getConfessionById(conf.id);
       expect(after?.status).toBe('UNKNOWN_NEEDS_REVIEW');
-      expect(after?.reconciliation_status).toBe('NEEDS_REVIEW');
+      expect(after?.reconciliation_status).toBe('UNKNOWN');
       expect(after?.retry_count).toBe(1);
     });
 
@@ -162,7 +162,7 @@ describe('Reconciliation & Duplicate Protection Engine', () => {
 
       const after = mockStore.getConfessionById(conf.id);
       expect(after?.status).toBe('FAILED_CONFIRMED');
-      expect(after?.reconciliation_status).toBe('RECONCILED');
+      expect(after?.reconciliation_status).toBe('CONFIRMED_NOT_PUBLISHED');
     });
   });
 
@@ -263,7 +263,7 @@ describe('Reconciliation & Duplicate Protection Engine', () => {
       const res = await reconciliationService.reconcileConfession(conf.id);
       expect(res.confession.status).toBe('PUBLISHED');
       expect(res.confession.instagram_media_id).toBe('ig-media-12345');
-      expect(res.confession.reconciliation_status).toBe('RECONCILED');
+      expect(res.confession.reconciliation_status).toBe('ALREADY_PUBLISHED');
     });
 
     it('reconciles a FAILED confession to DUPLICATE_ALREADY_PUBLISHED if identical text is already live', async () => {
@@ -291,7 +291,7 @@ describe('Reconciliation & Duplicate Protection Engine', () => {
       expect(res.confession.status).toBe('DUPLICATE_ALREADY_PUBLISHED');
       expect(res.confession.duplicate_of_id).toBe('conf-live-post');
       expect(res.confession.duplicate_of_row).toBe(70);
-      expect(res.confession.reconciliation_status).toBe('RECONCILED');
+      expect(res.confession.reconciliation_status).toBe('DUPLICATE');
     });
 
     it('reconciles a FAILED confession to PUBLISHED if matched in live Instagram API media', async () => {
@@ -315,7 +315,295 @@ describe('Reconciliation & Duplicate Protection Engine', () => {
       const res = await reconciliationService.reconcileConfession(conf.id);
       expect(res.confession.status).toBe('PUBLISHED');
       expect(res.confession.instagram_media_id).toBe('ig-recent-888');
-      expect(res.confession.reconciliation_status).toBe('RECONCILED');
+      expect(res.confession.reconciliation_status).toBe('ALREADY_PUBLISHED');
+    });
+  });
+
+  describe('Canonical 5-Step Decision Tree', () => {
+    it('Step 1 & 2: Identifies Authoritative DB and Stored Media IDs as ALREADY_PUBLISHED', async () => {
+      const conf = mockStore.addConfession({
+        id: 'conf-step1',
+        google_sheet_row: 101,
+        original_text: 'Authoritative database test',
+        status: 'PUBLISHED',
+        instagram_media_id: 'media-101',
+      });
+
+      const res = await reconciliationService.reconcileRecord(conf.id);
+      expect(res.newReconciliationStatus).toBe('ALREADY_PUBLISHED');
+      expect(res.newStatus).toBe('PUBLISHED');
+      expect(res.classification.checkMethod).toBe('authoritative_db_published');
+    });
+
+    it('Step 3: Correctly flags DUPLICATE strictly when matching an ALREADY PUBLISHED post', async () => {
+      const originalText = 'Late night study in the engineering hall';
+      mockStore.addConfession({
+        id: 'conf-orig',
+        google_sheet_row: 102,
+        original_text: originalText,
+        status: 'PUBLISHED',
+        instagram_media_id: 'media-102',
+      });
+
+      const duplicate = mockStore.addConfession({
+        id: 'conf-dup-cand',
+        google_sheet_row: 103,
+        original_text: '  late night study in the engineering hall  ',
+        status: 'FAILED',
+      });
+
+      const res = await reconciliationService.reconcileRecord(duplicate.id);
+      expect(res.newReconciliationStatus).toBe('DUPLICATE');
+      expect(res.newStatus).toBe('DUPLICATE_ALREADY_PUBLISHED');
+      expect(res.classification.duplicateOfId).toBe('conf-orig');
+    });
+
+    it('Step 4: Reconciles pre-publication rejections to CONFIRMED_NOT_PUBLISHED', async () => {
+      const rejectedBeforeMeta = mockStore.addConfession({
+        id: 'conf-pre-rejected',
+        google_sheet_row: 104,
+        original_text: 'Very long text that failed pagination',
+        status: 'FAILED',
+        error_message: 'This confession does not safely fit on one card without clipping. Please use Carousel format.',
+      });
+
+      const res = await reconciliationService.reconcileRecord(rejectedBeforeMeta.id);
+      expect(res.newReconciliationStatus).toBe('CONFIRMED_NOT_PUBLISHED');
+      expect(res.newStatus).toBe('FAILED_CONFIRMED');
+      expect(res.classification.checkMethod).toBe('pre_publish_rejection_error');
+    });
+
+    it('Step 5: Instagram API Feed Inspection returns UNKNOWN on network timeout', async () => {
+      const uncertainConf = mockStore.addConfession({
+        id: 'conf-ig-timeout',
+        google_sheet_row: 105,
+        original_text: 'Network timed out while checking',
+        status: 'UNKNOWN_NEEDS_REVIEW',
+        reconciliation_attempts: 0,
+      });
+
+      const res = await reconciliationService.reconcileRecord(uncertainConf.id, {
+        liveFeedResult: {
+          success: false,
+          media: [],
+          errorType: 'TIMEOUT',
+          errorMessage: 'Instagram Graph API request timed out after 12s',
+        },
+      });
+
+      expect(res.newReconciliationStatus).toBe('UNKNOWN');
+      expect(res.newStatus).toBe('UNKNOWN');
+      expect(res.classification.checkMethod).toBe('instagram_api_timeout');
+    });
+  });
+
+  describe('Pre-Publish Idempotency Gate (finalPublicationCheck)', () => {
+    it('blocks publication if already marked PUBLISHED or has media ID', async () => {
+      const pub = mockStore.addConfession({
+        id: 'conf-gate-pub',
+        google_sheet_row: 106,
+        original_text: 'Already live on IG',
+        status: 'PUBLISHED',
+        instagram_media_id: 'media-live-106',
+      });
+
+      const check = await reconciliationService.finalPublicationCheck(pub);
+      expect(check.canPublish).toBe(false);
+      expect(check.status).toBe('ALREADY_PUBLISHED');
+    });
+
+    it('blocks publication if content was published under another record while in queue', async () => {
+      const text = 'Shared confession text published by another row';
+      const hash = generateContentHash(text);
+
+      mockStore.addConfession({
+        id: 'conf-gate-live',
+        google_sheet_row: 107,
+        original_text: text,
+        status: 'PUBLISHED',
+        instagram_media_id: 'media-live-107',
+        content_hash: hash,
+        normalized_content_hash: hash,
+      });
+
+      const cand = mockStore.addConfession({
+        id: 'conf-gate-dup',
+        google_sheet_row: 108,
+        original_text: text,
+        status: 'APPROVED',
+        content_hash: hash,
+        normalized_content_hash: hash,
+      });
+
+      const check = await reconciliationService.finalPublicationCheck(cand);
+      expect(check.canPublish).toBe(false);
+      expect(check.status).toBe('DUPLICATE');
+    });
+
+    it('blocks publication if record is in UNKNOWN or MANUAL_REVIEW state', async () => {
+      const unk = mockStore.addConfession({
+        id: 'conf-gate-unk',
+        google_sheet_row: 109,
+        original_text: 'Unconfirmed record',
+        status: 'UNKNOWN_NEEDS_REVIEW',
+        reconciliation_status: 'UNKNOWN',
+      });
+
+      const check = await reconciliationService.finalPublicationCheck(unk);
+      expect(check.canPublish).toBe(false);
+      expect(check.status).toBe('UNKNOWN');
+    });
+
+    it('approves publication if record is clean and CONFIRMED_NOT_PUBLISHED', async () => {
+      const clean = mockStore.addConfession({
+        id: 'conf-gate-clean',
+        google_sheet_row: 110,
+        original_text: 'Brand new unique confession ready to go',
+        status: 'APPROVED',
+      });
+
+      const check = await reconciliationService.finalPublicationCheck(clean);
+      expect(check.canPublish).toBe(true);
+      expect(check.status).toBe('CONFIRMED_NOT_PUBLISHED');
+    });
+  });
+
+  describe('Post-Publish Failure Scenarios', () => {
+    it('guarantees idempotency via published ledger even if subsequent operations fail', async () => {
+      const conf = mockStore.addConfession({
+        id: 'conf-ledger-failover',
+        google_sheet_row: 111,
+        original_text: 'Confession published successfully to Instagram',
+        status: 'APPROVED',
+        moderation_status: 'LOW',
+        quality_status: 'HIGH_VALUE',
+        quality_decision: 'APPROVE',
+      });
+
+      vi.spyOn(instagramService, 'publishPost').mockResolvedValueOnce({
+        success: true,
+        mediaId: 'media-failover-111',
+        permalink: 'https://instagram.com/p/media-failover-111',
+      });
+
+      await confessionService.publishConfession(conf.id);
+
+      // Verify published post ledger has it recorded
+      const ledger = mockStore.getPublishedPosts();
+      const match = ledger.find((p) => p.confession_id === conf.id);
+      expect(match).toBeDefined();
+      expect(match?.instagram_media_id).toBe('media-failover-111');
+
+      // Attempting to publish again is immediately blocked by finalPublicationCheck
+      await expect(
+        confessionService.publishConfession(conf.id)
+      ).rejects.toThrow(/already marked as PUBLISHED|Already published/i);
+    });
+  });
+
+  describe('Section 35 Acceptance Test Dataset', () => {
+    it('accurately partitions 35 test records into mutually exclusive buckets summing to 35', async () => {
+      mockStore.resetToDefaults();
+
+      const candidateIds: string[] = [];
+
+      // 1. 10 Published records (found in DB / ledger)
+      for (let i = 1; i <= 10; i++) {
+        const id = `sec35-pub-${i}`;
+        candidateIds.push(id);
+        const text = `Section 35 verified publication #${i}`;
+        mockStore.addConfession({
+          id,
+          google_sheet_row: 200 + i,
+          original_text: text,
+          status: 'PUBLISHED',
+          instagram_media_id: `ig-sec35-${i}`,
+          published_at: new Date().toISOString(),
+          reconciliation_status: 'NOT_CHECKED',
+        });
+      }
+
+      // 2. 10 Confirmed Not Published records (deterministic pre-publish rejections)
+      for (let i = 1; i <= 10; i++) {
+        const id = `sec35-failed-${i}`;
+        candidateIds.push(id);
+        mockStore.addConfession({
+          id,
+          google_sheet_row: 220 + i,
+          original_text: `Section 35 pre-rejected confession #${i}`,
+          status: 'FAILED',
+          error_message: 'Pre-publication validation failed: Text exceeds maximum card length',
+          reconciliation_status: 'NOT_CHECKED',
+        });
+      }
+
+      // 3. 5 Duplicates (matching the 5 published posts from category 1)
+      for (let i = 1; i <= 5; i++) {
+        const id = `sec35-dup-${i}`;
+        candidateIds.push(id);
+        mockStore.addConfession({
+          id,
+          google_sheet_row: 240 + i,
+          original_text: `  Section 35 verified publication #${i}  `,
+          status: 'FAILED',
+          reconciliation_status: 'NOT_CHECKED',
+        });
+      }
+
+      // 4. 5 Unknown records (Instagram API returned timeout / network drop, attempts < 3)
+      for (let i = 1; i <= 5; i++) {
+        const id = `sec35-unk-${i}`;
+        candidateIds.push(id);
+        mockStore.addConfession({
+          id,
+          google_sheet_row: 260 + i,
+          original_text: `Section 35 unknown network glitch #${i}`,
+          status: 'UNKNOWN_NEEDS_REVIEW',
+          reconciliation_status: 'NOT_CHECKED',
+          reconciliation_attempts: 0,
+        });
+      }
+
+      // 5. 5 Manual Review records (attempts >= 3 without resolution)
+      for (let i = 1; i <= 5; i++) {
+        const id = `sec35-man-${i}`;
+        candidateIds.push(id);
+        mockStore.addConfession({
+          id,
+          google_sheet_row: 280 + i,
+          original_text: `Section 35 manual review required #${i}`,
+          status: 'UNKNOWN_NEEDS_REVIEW',
+          reconciliation_status: 'NOT_CHECKED',
+          reconciliation_attempts: 3,
+        });
+      }
+
+      expect(candidateIds.length).toBe(35);
+
+      // Run batch reconciliation
+      const report = await reconciliationService.reconcileBatch({
+        ids: candidateIds,
+      });
+
+      // Strict Mutually Exclusive Invariants:
+      expect(report.total).toBe(35);
+      expect(report.alreadyPublished).toBe(10);
+      expect(report.confirmedNotPublished).toBe(10);
+      expect(report.duplicates).toBe(5);
+      expect(report.unknown).toBe(5);
+      expect(report.manualReview).toBe(5);
+
+      // Exact sum equality without overlap
+      const sumOfBuckets =
+        report.alreadyPublished +
+        report.confirmedNotPublished +
+        report.duplicates +
+        report.unknown +
+        report.manualReview;
+
+      expect(sumOfBuckets).toBe(report.total);
+      expect(sumOfBuckets).toBe(35);
+      expect(report.items.length).toBe(35);
     });
   });
 });
