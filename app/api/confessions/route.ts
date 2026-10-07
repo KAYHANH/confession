@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
   try {
     const { searchParams } = new URL(request.url);
+    const tab = (searchParams.get('tab') as any) || undefined;
     const status = searchParams.get('status') as ConfessionStatus | undefined;
     const moderationStatus = searchParams.get('moderationStatus') || undefined;
     const qualityStatus = searchParams.get('qualityStatus') || undefined;
@@ -29,6 +30,7 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') || '50', 10);
 
     const result = await confessionService.getConfessions({
+      tab,
       status,
       moderationStatus,
       qualityStatus,

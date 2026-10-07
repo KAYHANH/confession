@@ -7,7 +7,8 @@ export async function POST(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
 
   try {
-    const result = await schedulingService.generateFutureSchedule({ forceRecalculate: true });
+    const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+    const result = await adaptiveSchedulingEngine.recalculateFutureQueue();
     const diagnostics = await schedulingService.getQueueDiagnostics();
 
     return NextResponse.json({

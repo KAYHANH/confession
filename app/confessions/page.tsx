@@ -33,7 +33,28 @@ import { useToast } from '@/components/ui/ToastContext';
 type TabType = 'queue' | 'scheduled' | 'published' | 'unknown' | 'duplicates' | 'low_value' | 'deleted';
 
 export default function ConfessionsPage() {
-  const [allConfessions, setAllConfessions] = useState<Confession[]>([]);
+  const [confessions, setConfessions] = useState<Confession[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [tabCounts, setTabCounts] = useState<{
+    queue: number;
+    scheduled: number;
+    published: number;
+    unknown: number;
+    duplicates: number;
+    low_value: number;
+    deleted: number;
+    failed: number;
+  }>({
+    queue: 0,
+    scheduled: 0,
+    published: 0,
+    unknown: 0,
+    duplicates: 0,
+    low_value: 0,
+    deleted: 0,
+    failed: 0,
+  });
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('queue');
@@ -52,7 +73,7 @@ export default function ConfessionsPage() {
   const [selectedForPublish, setSelectedForPublish] = useState<Confession | null>(null);
   const [selectedForSchedule, setSelectedForSchedule] = useState<Confession | null>(null);
 
-  // Auto-publish settings for ETA
+  // Auto-publish settings
   const [publishSettings, setPublishSettings] = useState<{
     interval: number;
     startHour: number;
@@ -87,40 +108,71 @@ export default function ConfessionsPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      // Fetch all confessions (high limit to get full counts)
       const params = new URLSearchParams();
+      params.set('tab', activeTab);
+      params.set('page', String(page));
+      params.set('limit', String(LIMIT));
       params.set('sortBy', 'oldest');
-      params.set('limit', '500');
+      if (search.trim()) params.set('search', search.trim());
+      if (riskFilter !== 'ALL') params.set('moderationStatus', riskFilter);
 
-      const [res, tplRes, settingsRes, cadenceRes] = await Promise.all([
-        fetch(`/api/confessions?${params.toString()}`),
-        fetch('/api/templates'),
-        fetch('/api/settings'),
-        fetch('/api/growth/cadence').catch(() => null),
+      const [countsRes, confRes, tplRes, settingsRes] = await Promise.all([
+        fetch('/api/confessions/counts').catch(() => null),
+        fetch(`/api/confessions?${params.toString()}`).catch(() => null),
+        fetch('/api/templates').catch(() => null),
+        fetch('/api/settings').catch(() => null),
       ]);
-      const [data, tpls, settings] = await Promise.all([res.json(), tplRes.json(), settingsRes.json()]);
 
-      setAllConfessions(data.confessions || []);
-      setTemplates(tpls || []);
-      if (settings) {
-        const isRandom = settings.random_gap_enabled !== false;
-        const interval = isRandom
-          ? (settings.current_random_gap_minutes ?? settings.auto_publish_interval_minutes ?? 60)
-          : (settings.auto_publish_interval_minutes ?? 180);
-        setPublishSettings({
-          interval,
-          startHour: settings.auto_publish_start_hour ?? 9,
-          endHour: settings.auto_publish_end_hour ?? 22,
-          isRandomGap: isRandom,
-          jitter: settings.anti_bot_jitter_minutes ?? 30,
-          strategyMode: settings.scheduling_strategy_mode || 'AUTO',
-        });
+      if (countsRes && countsRes.ok) {
+        try {
+          const cData = await countsRes.json();
+          if (cData.success && cData.counts) {
+            setTabCounts(cData.counts);
+          }
+        } catch {}
       }
 
-      if (cadenceRes && cadenceRes.ok) {
+      if (confRes && confRes.ok) {
         try {
-          const cData = await cadenceRes.json();
-          if (cData.success && cData.recommendation) {
+          const data = await confRes.json();
+          setConfessions(data.confessions || []);
+          setTotalCount(data.total || 0);
+          setTotalPages(data.totalPages || 1);
+        } catch {}
+      }
+
+      if (tplRes && tplRes.ok) {
+        try {
+          const tpls = await tplRes.json();
+          setTemplates(tpls || []);
+        } catch {}
+      }
+
+      if (settingsRes && settingsRes.ok) {
+        try {
+          const settings = await settingsRes.json();
+          if (settings) {
+            const isRandom = settings.random_gap_enabled !== false;
+            const interval = isRandom
+              ? (settings.current_random_gap_minutes ?? settings.auto_publish_interval_minutes ?? 60)
+              : (settings.auto_publish_interval_minutes ?? 180);
+            setPublishSettings({
+              interval,
+              startHour: settings.auto_publish_start_hour ?? 9,
+              endHour: settings.auto_publish_end_hour ?? 22,
+              isRandomGap: isRandom,
+              jitter: settings.anti_bot_jitter_minutes ?? 30,
+              strategyMode: settings.scheduling_strategy_mode || 'AUTO',
+            });
+          }
+        } catch {}
+      }
+
+      // Non-blocking fetch for cadence info
+      fetch('/api/growth/cadence')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((cData) => {
+          if (cData && cData.success && cData.recommendation) {
             setCadenceInfo({
               strategy: cData.recommendation.strategy,
               mode: cData.recommendation.mode,
@@ -131,14 +183,14 @@ export default function ConfessionsPage() {
               reason: cData.recommendation.reason,
             });
           }
-        } catch {}
-      }
+        })
+        .catch(() => {});
     } catch {
       error('Failed to load confessions');
     } finally {
       setLoading(false);
     }
-  }, [error]);
+  }, [activeTab, page, search, riskFilter, error]);
 
   const handleRepairQueue = async () => {
     setRepairingQueue(true);
@@ -198,73 +250,19 @@ export default function ConfessionsPage() {
     window.addEventListener('confessionflow:refresh', handleRefresh);
     const pollInterval = setInterval(() => {
       loadData();
-    }, 20000);
+    }, 60000);
     return () => {
       window.removeEventListener('confessionflow:refresh', handleRefresh);
       clearInterval(pollInterval);
     };
   }, [loadData]);
-  useEffect(() => { setPage(1); setSelectedIds([]); }, [activeTab, search, riskFilter]);
 
-  // ─── Section filters ──────────────────────────────────────────────────────
-  const queueConfessions = allConfessions.filter(
-    (c) =>
-      !['PUBLISHED', 'SCHEDULED', 'REJECTED', 'DELETED', 'FAILED', 'FAILED_CONFIRMED', 'FAILED_REQUIRES_ACTION', 'UNKNOWN', 'UNKNOWN_NEEDS_REVIEW', 'DUPLICATE_ALREADY_PUBLISHED', 'CANCELLED'].includes(c.status) &&
-      c.quality_status !== 'LOW_VALUE'
-  );
-  const scheduledConfessions = allConfessions.filter((c) => c.status === 'SCHEDULED');
-  const publishedConfessions = allConfessions.filter((c) => c.status === 'PUBLISHED');
-  const unknownConfessions = allConfessions.filter(
-    (c) => c.status === 'UNKNOWN' || c.status === 'UNKNOWN_NEEDS_REVIEW'
-  );
-  const duplicateConfessions = allConfessions.filter(
-    (c) => c.status === 'DUPLICATE_ALREADY_PUBLISHED'
-  );
-  const lowValueConfessions = allConfessions.filter(
-    (c) =>
-      c.status !== 'DELETED' &&
-      (c.quality_status === 'LOW_VALUE' ||
-        c.quality_decision === 'REJECT' ||
-        (c.status === 'REJECTED' && c.quality_category === 'LOW_INFORMATION'))
-  );
-  const deletedConfessions = allConfessions.filter((c) => c.status === 'DELETED');
-  const failedConfessions = allConfessions.filter(
-    (c) =>
-      (c.status === 'FAILED' || c.status === 'FAILED_CONFIRMED' || c.status === 'FAILED_REQUIRES_ACTION') &&
-      !c.instagram_media_id &&
-      !c.published_at
-  );
+  useEffect(() => {
+    setPage(1);
+    setSelectedIds([]);
+  }, [activeTab, search, riskFilter]);
 
-  // Apply search + risk filter to the active tab list
-  const applyFilters = (list: Confession[]) => {
-    let filtered = list;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      filtered = filtered.filter(
-        (c) =>
-          (c.cleaned_text || c.original_text).toLowerCase().includes(q) ||
-          c.name.toLowerCase().includes(q) ||
-          c.display_name.toLowerCase().includes(q)
-      );
-    }
-    if (riskFilter !== 'ALL') {
-      filtered = filtered.filter((c) => c.moderation_status === riskFilter);
-    }
-    return filtered;
-  };
-
-  const activeList = applyFilters(
-    activeTab === 'queue' ? queueConfessions :
-    activeTab === 'scheduled' ? scheduledConfessions :
-    activeTab === 'published' ? publishedConfessions :
-    activeTab === 'unknown' ? unknownConfessions :
-    activeTab === 'duplicates' ? duplicateConfessions :
-    activeTab === 'low_value' ? lowValueConfessions :
-    deletedConfessions
-  );
-
-  const totalPages = Math.max(1, Math.ceil(activeList.length / LIMIT));
-  const paginated = activeList.slice((page - 1) * LIMIT, page * LIMIT);
+  const paginated = confessions;
 
   // ─── ETA helpers ─────────────────────────────────────────────────────────
   const getCalendarDayDiff = (target: Date, base: Date = new Date()): number => {
@@ -277,55 +275,6 @@ export default function ConfessionsPage() {
       return Math.floor(Date.UTC(year, month, day) / 86400000);
     };
     return getDaysSinceEpoch(target) - getDaysSinceEpoch(base);
-  };
-
-  const getOrganicGap = useCallback((idx: number): number => {
-    // If user configured fixed cooldown (Fixed Cooldown + Jitter mode or MANUAL strategy)
-    if (!publishSettings.isRandomGap || publishSettings.strategyMode === 'MANUAL') {
-      const base = Math.max(15, publishSettings.interval || 180);
-      const maxJitter = publishSettings.jitter ?? 30;
-      const primes = [7, 13, 19, 23, 11, 17, 29, 31, 3, 5];
-      const j = maxJitter > 0 ? (primes[idx % primes.length] * (idx + 1)) % (maxJitter + 1) : 0;
-      return base + j;
-    }
-
-    const minGap = cadenceInfo?.gapMin ?? 30;
-    const maxGap = cadenceInfo?.gapMax ?? 75;
-    const spread = Math.max(1, maxGap - minGap);
-    const primes = [37, 53, 41, 67, 31, 59, 43, 71, 47, 61];
-    const p = primes[idx % primes.length];
-    return minGap + ((p * (idx + 1) * 7) % (spread + 1));
-  }, [cadenceInfo, publishSettings]);
-
-  const computeETA = (queueIndex: number): Date => {
-    const { startHour, endHour } = publishSettings;
-    const is24_7 = (startHour === 0 && endHour >= 24) || (startHour === endHour) || (startHour === 0 && endHour === 0);
-    let slotTime = new Date(Date.now() + 5 * 60 * 1000);
-    for (let i = 0; i <= queueIndex; i++) {
-      const stepGapMs = getOrganicGap(i) * 60 * 1000;
-      slotTime = new Date(slotTime.getTime() + stepGapMs);
-
-      if (!is24_7) {
-        let safety = 0;
-        while (safety < 48) {
-          safety++;
-          const hour = parseInt(
-            new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(slotTime), 10
-          );
-          if (hour >= startHour && hour < endHour) {
-            break;
-          }
-          if (hour >= endHour) {
-            const advanceHours = 24 - hour + startHour;
-            slotTime = new Date(slotTime.getTime() + advanceHours * 60 * 60 * 1000);
-          } else if (hour < startHour) {
-            const advanceHours = startHour - hour;
-            slotTime = new Date(slotTime.getTime() + advanceHours * 60 * 60 * 1000);
-          }
-        }
-      }
-    }
-    return slotTime;
   };
 
   const formatETA = (date: Date): string => {
@@ -399,10 +348,10 @@ export default function ConfessionsPage() {
     try {
       // Optimistically update UI so user immediately sees the post move
       if (permanent) {
-        setAllConfessions((prev) => prev.filter((c) => c.id !== id));
+        setConfessions((prev: Confession[]) => prev.filter((c: Confession) => c.id !== id));
       } else {
-        setAllConfessions((prev) =>
-          prev.map((c) => (c.id === id ? { ...c, status: 'DELETED', deleted_at: new Date().toISOString() } : c))
+        setConfessions((prev: Confession[]) =>
+          prev.map((c: Confession) => (c.id === id ? { ...c, status: 'DELETED' as const, deleted_at: new Date().toISOString() } : c))
         );
       }
 
@@ -420,8 +369,8 @@ export default function ConfessionsPage() {
   const handleRestore = async (id: string) => {
     try {
       // Optimistically restore in UI
-      setAllConfessions((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, status: 'APPROVED', deleted_at: null } : c))
+      setConfessions((prev: Confession[]) =>
+        prev.map((c: Confession) => (c.id === id ? { ...c, status: 'APPROVED' as const, deleted_at: null } : c))
       );
 
       const res = await fetch(`/api/confessions/${encodeURIComponent(id)}/restore`, { method: 'POST' });
@@ -439,7 +388,7 @@ export default function ConfessionsPage() {
 
   const handleRestartQueue = async (targetIds?: string[]) => {
     const isSingle = Boolean(targetIds && targetIds.length === 1);
-    const count = targetIds ? targetIds.length : failedConfessions.length;
+    const count = targetIds ? targetIds.length : tabCounts.failed;
     if (!isSingle && count > 0 && !confirm(`Restart queue for ${count} failed confession(s)? Rejected and already published posts will NOT be touched.`)) {
       return;
     }
@@ -553,41 +502,41 @@ export default function ConfessionsPage() {
       id: 'queue',
       label: 'Upload Queue',
       icon: <ListTodo className="w-4 h-4" />,
-      count: queueConfessions.length,
+      count: tabCounts.queue,
       color: 'indigo',
     },
     {
       id: 'scheduled',
       label: 'Scheduled',
       icon: <Clock className="w-4 h-4" />,
-      count: scheduledConfessions.length,
+      count: tabCounts.scheduled,
       color: 'amber',
     },
     {
       id: 'published',
       label: 'Published',
       icon: <CheckCircle2 className="w-4 h-4" />,
-      count: publishedConfessions.length,
+      count: tabCounts.published,
       color: 'emerald',
     },
-    ...(unknownConfessions.length > 0
+    ...(tabCounts.unknown > 0
       ? [
           {
             id: 'unknown' as TabType,
             label: 'Requires Review',
             icon: <AlertTriangle className="w-4 h-4" />,
-            count: unknownConfessions.length,
+            count: tabCounts.unknown,
             color: 'purple',
           },
         ]
       : []),
-    ...(duplicateConfessions.length > 0
+    ...(tabCounts.duplicates > 0
       ? [
           {
             id: 'duplicates' as TabType,
             label: 'Duplicates',
             icon: <ShieldAlert className="w-4 h-4" />,
-            count: duplicateConfessions.length,
+            count: tabCounts.duplicates,
             color: 'orange',
           },
         ]
@@ -596,14 +545,14 @@ export default function ConfessionsPage() {
       id: 'low_value',
       label: 'Low Value',
       icon: <ShieldAlert className="w-4 h-4" />,
-      count: lowValueConfessions.length,
+      count: tabCounts.low_value,
       color: 'slate',
     },
     {
       id: 'deleted',
       label: 'Deleted',
       icon: <Trash2 className="w-4 h-4" />,
-      count: deletedConfessions.length,
+      count: tabCounts.deleted,
       color: 'rose',
     },
   ];
@@ -683,15 +632,15 @@ export default function ConfessionsPage() {
           <div>
             <h1 className="text-2xl font-bold text-zinc-900">Confessions</h1>
             <p className="text-sm text-zinc-500 mt-0.5">
-              {allConfessions.filter(c => c.status !== 'DELETED').length} active · {queueConfessions.length} queued · {publishedConfessions.length} published
-              {lowValueConfessions.length > 0 && (
-                <span className="ml-2 font-semibold text-slate-600">· {lowValueConfessions.length} low value</span>
+              {tabCounts.queue + tabCounts.scheduled + tabCounts.unknown + tabCounts.duplicates + tabCounts.failed} active · {tabCounts.queue} queued · {tabCounts.published} published
+              {tabCounts.low_value > 0 && (
+                <span className="ml-2 font-semibold text-slate-600">· {tabCounts.low_value} low value</span>
               )}
-              {deletedConfessions.length > 0 && (
-                <span className="ml-2 font-semibold text-zinc-500">· {deletedConfessions.length} deleted</span>
+              {tabCounts.deleted > 0 && (
+                <span className="ml-2 font-semibold text-zinc-500">· {tabCounts.deleted} deleted</span>
               )}
-              {failedConfessions.length > 0 && (
-                <span className="ml-2 font-semibold text-rose-600">· {failedConfessions.length} failed</span>
+              {tabCounts.failed > 0 && (
+                <span className="ml-2 font-semibold text-rose-600">· {tabCounts.failed} failed</span>
               )}
             </p>
           </div>
@@ -709,7 +658,7 @@ export default function ConfessionsPage() {
               onClick={() => handleRestartQueue()}
               disabled={restartingQueue}
               className={`flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-xl shadow-sm transition-all disabled:opacity-50 ${
-                failedConfessions.length > 0
+                tabCounts.failed > 0
                   ? 'text-white bg-rose-600 hover:bg-rose-700'
                   : 'text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100'
               }`}
@@ -718,8 +667,8 @@ export default function ConfessionsPage() {
               <RotateCcw className={`w-4 h-4 ${restartingQueue ? 'animate-spin' : ''}`} />
               {restartingQueue
                 ? 'Restarting…'
-                : failedConfessions.length > 0
-                ? `Restart Failed Queue (${failedConfessions.length})`
+                : tabCounts.failed > 0
+                ? `Restart Failed Queue (${tabCounts.failed})`
                 : 'Restart Queue'}
             </button>
             <button
@@ -734,7 +683,7 @@ export default function ConfessionsPage() {
         </div>
 
         {/* ── Reconciliation & Duplicate Protection Alert Banner ── */}
-        {(unknownConfessions.length > 0 || duplicateConfessions.length > 0) && (
+        {(tabCounts.unknown > 0 || tabCounts.duplicates > 0) && (
           <div className="p-4 bg-purple-50/90 border border-purple-200 rounded-2xl text-purple-900 space-y-3">
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-3">
@@ -743,7 +692,7 @@ export default function ConfessionsPage() {
                 </div>
                 <div>
                   <div className="font-semibold text-sm">
-                    Duplicate Post Protection Active: {unknownConfessions.length} pending review, {duplicateConfessions.length} duplicate(s) quarantined
+                    Duplicate Post Protection Active: {tabCounts.unknown} pending review, {tabCounts.duplicates} duplicate(s) quarantined
                   </div>
                   <div className="text-xs text-purple-700 mt-0.5">
                     Submissions with unconfirmed Instagram state or matching previously published hashes are safely blocked from re-publishing.
@@ -765,8 +714,8 @@ export default function ConfessionsPage() {
         )}
 
         {/* ── Failed Alert & Quick Restart Banner ── */}
-        {failedConfessions.length > 0 && (() => {
-          const sampleErr = failedConfessions.find((c) => c.error_message)?.error_message;
+        {tabCounts.failed > 0 && (() => {
+          const sampleErr = confessions.find((c) => c.error_message)?.error_message;
           const isMissingCreds = sampleErr?.toLowerCase().includes('credentials are not configured');
           const isExpiredToken = sampleErr?.toLowerCase().includes('expired') || sampleErr?.toLowerCase().includes('code 190');
           const isRateLimit = sampleErr?.toLowerCase().includes('limit') || sampleErr?.toLowerCase().includes('quota');
@@ -780,7 +729,7 @@ export default function ConfessionsPage() {
                   </div>
                   <div>
                     <div className="font-semibold text-sm">
-                      {failedConfessions.length} confession{failedConfessions.length > 1 ? 's' : ''} failed to publish
+                      {tabCounts.failed} confession{tabCounts.failed > 1 ? 's' : ''} failed to publish
                     </div>
                     <div className="text-xs text-rose-700 mt-0.5">
                       Click <strong>Restart Failed Queue</strong> to re-attempt publishing. Rejected posts and already published posts will strictly <strong>never</strong> be re-uploaded.
@@ -802,7 +751,7 @@ export default function ConfessionsPage() {
                     className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm transition-all disabled:opacity-50"
                   >
                     <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} />
-                    {restartingQueue ? 'Restarting Queue…' : `Restart Failed Queue (${failedConfessions.length})`}
+                    {restartingQueue ? 'Restarting Queue…' : `Restart Failed Queue (${tabCounts.failed})`}
                   </button>
                 </div>
               </div>
@@ -1034,7 +983,7 @@ export default function ConfessionsPage() {
                 </thead>
                 <tbody className="divide-y divide-zinc-100 font-medium">
                   {paginated.map((c) => {
-                    const qIdx = activeTab === 'queue' ? queueConfessions.findIndex((q) => q.id === c.id) : -1;
+                    const qIdx = activeTab === 'queue' ? confessions.findIndex((q) => q.id === c.id) : -1;
 
                     return (
                       <tr key={c.id} className="hover:bg-zinc-50/60 transition-colors">
@@ -1170,29 +1119,33 @@ export default function ConfessionsPage() {
                                   Unstick / Reset
                                 </button>
                               </div>
-                            ) : qIdx >= 0 ? (
+                            ) : c.scheduled_at ? (
                               <div className="text-[11px]">
                                 <div className="text-indigo-600 font-semibold">
-                                   {c.scheduled_at ? formatETA(new Date(c.scheduled_at)) : formatETA(computeETA(qIdx))}
-                                 </div>
+                                  {formatETA(new Date(c.scheduled_at))}
+                                </div>
                                 <div className="mt-0.5 flex flex-col gap-0.5">
                                   {(() => {
-                                    const isFixed = !publishSettings.isRandomGap || publishSettings.strategyMode === 'MANUAL';
-                                    const isGrowth = !isFixed && cadenceInfo?.mode === 'growth_optimized';
-                                    const actualGap = c.scheduling_gap_minutes || getOrganicGap(qIdx);
+                                    const prov = c.scheduling_provenance;
+                                    const isFixed = prov?.strategy_source === 'CONFIGURED' || (!publishSettings.isRandomGap || publishSettings.strategyMode === 'MANUAL');
+                                    const isGrowth = prov?.strategy_source === 'LEARNED' || (!isFixed && cadenceInfo?.mode === 'growth_optimized');
+                                    const isExp = prov?.strategy_source === 'EXPERIMENT';
+                                    const actualGap = c.scheduling_gap_minutes || (cadenceInfo?.gapMin ?? 45);
                                     const gapHours = Math.floor(actualGap / 60);
                                     const gapMins = actualGap % 60;
                                     const gapLabel = gapHours > 0 ? (gapMins > 0 ? `${gapHours}h ${gapMins}m` : `${gapHours}h`) : `${gapMins}m`;
                                     const badgeLabel = isFixed
                                       ? `Fixed cooldown · ${gapLabel}`
+                                      : isExp
+                                      ? `Experiment · ${gapLabel}`
                                       : isGrowth
                                       ? `Growth optimized · ${gapLabel}`
-                                      : `Random fallback · ${gapLabel}`;
-                                    const explanation = c.why_this_time || (isFixed
+                                      : `Baseline exploration · ${gapLabel}`;
+                                    const explanation = c.why_this_time || prov?.reason || (isFixed
                                       ? `Fixed cooldown (${publishSettings.interval}m base + jitter)`
                                       : isGrowth
                                       ? `Growth optimized · ${gapLabel} (${cadenceInfo?.reason || 'Empirical peak reach window'})`
-                                      : `Random fallback · ${gapLabel} (Safe exploratory gap spacing)`);
+                                      : `Baseline exploration · ${gapLabel} (Safe exploratory gap spacing)`);
 
                                     return (
                                       <>
@@ -1202,11 +1155,13 @@ export default function ConfessionsPage() {
                                               ? 'bg-blue-50 text-blue-700 border-blue-200'
                                               : isGrowth
                                               ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                              : isExp
+                                              ? 'bg-amber-50 text-amber-700 border-amber-200'
                                               : 'bg-zinc-100 text-zinc-600 border-zinc-200'
                                           }`}
                                           title={explanation}
                                         >
-                                          <Sparkles className={`w-2.5 h-2.5 ${isFixed ? 'text-blue-500' : 'text-purple-500'}`} />
+                                          <Sparkles className={`w-2.5 h-2.5 ${isFixed ? 'text-blue-500' : isGrowth ? 'text-purple-500' : 'text-zinc-400'}`} />
                                           {badgeLabel}
                                         </span>
                                         <span className="text-[8px] text-zinc-400 pl-0.5 cursor-help" title={explanation}>
@@ -1217,7 +1172,11 @@ export default function ConfessionsPage() {
                                   })()}
                                 </div>
                               </div>
-                            ) : <span className="text-zinc-300 text-[11px]">—</span>
+                            ) : (
+                              <div className="text-[11px] text-zinc-400 italic">
+                                Pending schedule slot
+                              </div>
+                            )
                           )}
                         </td>
 
@@ -1303,7 +1262,7 @@ export default function ConfessionsPage() {
             {totalPages > 1 && (
               <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-100 bg-zinc-50/50">
                 <p className="text-xs text-zinc-500">
-                  Showing {(page - 1) * LIMIT + 1}–{Math.min(page * LIMIT, activeList.length)} of {activeList.length}
+                  Showing {(page - 1) * LIMIT + 1}–{Math.min(page * LIMIT, totalCount)} of {totalCount}
                 </p>
                 <div className="flex gap-1">
                   <button

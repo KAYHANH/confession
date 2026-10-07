@@ -228,57 +228,11 @@ export class ScheduleValidationService {
 
   /**
    * Repairs stale, overlapping, or past scheduled confessions in the queue
+   * Canonical delegation to AdaptiveSchedulingEngine
    */
   public async repairStaleQueue(): Promise<StaleQueueRepairResult> {
-    const allConfessions = mockStore.getConfessions();
-    const scheduled = allConfessions
-      .filter((c) => c.status === 'SCHEDULED' && c.scheduled_at)
-      .sort((a, b) => new Date(a.scheduled_at!).getTime() - new Date(b.scheduled_at!).getTime());
-
-    const now = new Date();
-    const repaired: StaleQueueRepairResult['repairedConfessions'] = [];
-    const settings = mockStore.getSettings();
-    const minCooldown = Math.max(
-      30,
-      (settings as any).min_post_spacing_minutes ??
-        settings.auto_publish_interval_minutes ??
-        settings.min_gap_minutes ??
-        45
-    );
-
-    let currentCursor = new Date(now.getTime() + 10 * 60000); // 10 mins from now
-
-    for (const conf of scheduled) {
-      const scheduledDate = new Date(conf.scheduled_at!);
-      // If scheduled in the past or too close to current cursor
-      if (scheduledDate.getTime() < currentCursor.getTime()) {
-        const newTime = new Date(currentCursor.getTime()).toISOString();
-        mockStore.updateConfession(conf.id, {
-          scheduled_at: newTime,
-        });
-
-        repaired.push({
-          id: conf.id,
-          rowNumber: conf.google_sheet_row || 0,
-          previousScheduledAt: conf.scheduled_at,
-          newScheduledAt: newTime,
-          gapMinutes: minCooldown,
-          strategy: 'ADMIN_OVERRIDE',
-        });
-
-        // Advance cursor by minCooldown
-        currentCursor = new Date(currentCursor.getTime() + minCooldown * 60000);
-      } else {
-        currentCursor = new Date(scheduledDate.getTime() + minCooldown * 60000);
-      }
-    }
-
-    return {
-      repairedCount: repaired.length,
-      repairedConfessions: repaired,
-      strategy: 'ADMIN_OVERRIDE',
-      reason: `Repaired ${repaired.length} stale or collided scheduled confession(s) with deterministic spacing (${minCooldown}m).`,
-    };
+    const { adaptiveSchedulingEngine } = await import('./adaptiveSchedulingEngine');
+    return await adaptiveSchedulingEngine.repairQueue();
   }
 }
 

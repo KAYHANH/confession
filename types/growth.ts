@@ -933,3 +933,46 @@ export interface BacktestSimulationResult {
   summary: string;
 }
 
+export type CanonicalStrategySource = 'CONFIGURED' | 'BASELINE' | 'LEARNED' | 'EXPERIMENT';
+
+export interface CanonicalSchedulingStrategy {
+  source: CanonicalStrategySource;
+  strategy_name: string;
+  daily_posts: number;
+  gap_range: { min: number; max: number };
+  gap_minutes_recommended: number;
+  preferred_windows: Array<{ start: string; end: string; label: string }>;
+  confidence: number;
+  sample_size: number;
+  reason: string;
+  is_learned: boolean;
+  label: string;
+}
+
+export type SchedulingReasonType =
+  | 'ACTIVE_WINDOW_ROLLOVER'
+  | 'NORMAL_CADENCE'
+  | 'SATURATION_HOLD'
+  | 'LEARNED_PEAK_WINDOW'
+  | 'MANUAL_CONFIG'
+  | 'QUEUE_ORDER_REPAIR';
+
+export interface SchedulingProvenance {
+  reason_type: SchedulingReasonType;
+  reason: string;
+  strategy_source: CanonicalStrategySource;
+  gap_minutes: number;
+  confidence: number;
+  sample_size: number;
+  evaluated_at: string;
+}
+
+export interface ScheduleValidationReport {
+  total: number;
+  valid: number;
+  invalid: number;
+  past: number;
+  outside_active_hours: number;
+  repaired: number;
+}
+

@@ -64,6 +64,7 @@ export interface Confession {
   predicted_performance_score?: number | null;
   post_saturation_score?: number | null;
   why_this_time?: string | null;
+  scheduling_provenance?: any | null;
   // Confession Quality Gate Metadata
   quality_status?: QualityStatus;
   quality_score?: number | null;

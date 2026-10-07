@@ -19,6 +19,7 @@ import {
   HelpCircle,
   ArrowUpRight,
   ShieldCheck,
+  ShieldAlert,
   ChevronRight,
   Filter,
   Activity,
@@ -1056,10 +1057,17 @@ export default function GrowthIntelligencePage() {
                 </div>
 
                 <div className="flex items-center gap-2 text-xs">
-                  <span className="px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                    Saturation Guard Active
-                  </span>
+                  {cadenceRec?.mode === 'growth_optimized' && (cadenceRec?.evidenceCount ?? 0) >= 10 ? (
+                    <span className="px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold flex items-center gap-1.5">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                      Saturation Guard Active
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-1 rounded-xl bg-zinc-100 text-zinc-600 border border-zinc-200 font-semibold flex items-center gap-1.5">
+                      <ShieldAlert className="w-3.5 h-3.5 text-zinc-500" />
+                      Saturation Guard: Baseline Exploration (N={cadenceRec?.evidenceCount ?? 0})
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -1076,34 +1084,54 @@ export default function GrowthIntelligencePage() {
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-100">
-                  <span className="text-zinc-500 block text-[11px] font-semibold uppercase">Optimal Spacing Gap</span>
+                  <span className="text-zinc-500 block text-[11px] font-semibold uppercase">
+                    {cadenceRec?.mode === 'growth_optimized' && (cadenceRec?.evidenceCount ?? 0) >= 10
+                      ? 'Optimal Spacing Gap'
+                      : 'Baseline Spacing Gap'}
+                  </span>
                   <div className="text-lg font-bold text-indigo-700 mt-0.5">
                     {cadenceRec?.recommendedGapRangeMinutes
                       ? `${cadenceRec.recommendedGapRangeMinutes.min}m – ${cadenceRec.recommendedGapRangeMinutes.max}m`
-                      : '60m – 90m'}
+                      : '30m – 75m'}
                   </div>
                   <span className="text-[10px] text-zinc-500 block mt-1">
-                    Mode: {cadenceRec?.mode === 'growth_optimized' ? 'Growth optimized' : 'Baseline exploration'}
+                    Mode: {cadenceRec?.mode === 'growth_optimized' && (cadenceRec?.evidenceCount ?? 0) >= 10 ? 'Growth optimized' : 'Baseline exploration'}
                   </span>
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-100">
-                  <span className="text-zinc-500 block text-[11px] font-semibold uppercase">Peak Reach Window</span>
+                  <span className="text-zinc-500 block text-[11px] font-semibold uppercase">
+                    {cadenceRec?.mode === 'growth_optimized' && (cadenceRec?.evidenceCount ?? 0) >= 10
+                      ? 'Peak Reach Window'
+                      : 'Configured Active Window'}
+                  </span>
                   <div className="text-lg font-bold text-purple-700 mt-0.5">
-                    {cadenceRec?.postingStrategySummary?.bestWindow || '19:00 – 21:00'}
+                    {cadenceRec?.mode === 'growth_optimized' && (cadenceRec?.evidenceCount ?? 0) >= 10
+                      ? (cadenceRec?.postingStrategySummary?.bestWindow || '19:00 – 21:00')
+                      : '09:00 – 22:00'}
                   </div>
                   <span className="text-[10px] text-zinc-500 block mt-1">
-                    Best hour: {cadenceRec?.peakHoursSummary?.bestHour !== undefined ? `${cadenceRec.peakHoursSummary.bestHour}:00` : '19:00'}
+                    {cadenceRec?.mode === 'growth_optimized' && (cadenceRec?.evidenceCount ?? 0) >= 10
+                      ? `Best hour: ${cadenceRec?.peakHoursSummary?.bestHour !== undefined ? `${cadenceRec.peakHoursSummary.bestHour}:00` : '19:00'}`
+                      : 'Awaiting empirical post data'}
                   </span>
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-100">
-                  <span className="text-zinc-500 block text-[11px] font-semibold uppercase">Primary Format &amp; Category</span>
+                  <span className="text-zinc-500 block text-[11px] font-semibold uppercase">
+                    {cadenceRec?.mode === 'growth_optimized' && (cadenceRec?.evidenceCount ?? 0) >= 10
+                      ? 'Primary Format & Category'
+                      : 'Exploration Format & Category'}
+                  </span>
                   <div className="text-lg font-bold text-emerald-700 mt-0.5">
-                    {cadenceRec?.postingStrategySummary?.bestFormat || 'CAROUSEL'}
+                    {cadenceRec?.mode === 'growth_optimized' && (cadenceRec?.evidenceCount ?? 0) >= 10
+                      ? (cadenceRec?.postingStrategySummary?.bestFormat || 'CAROUSEL')
+                      : 'Any (Exploration)'}
                   </div>
                   <span className="text-[10px] text-zinc-500 block mt-1 truncate">
-                    Top cat: {cadenceRec?.postingStrategySummary?.bestCategory || 'Relationship'}
+                    {cadenceRec?.mode === 'growth_optimized' && (cadenceRec?.evidenceCount ?? 0) >= 10
+                      ? `Top cat: ${cadenceRec?.postingStrategySummary?.bestCategory || 'Relationship'}`
+                      : 'Top cat: General (Awaiting Data)'}
                   </span>
                 </div>
               </div>
@@ -1376,40 +1404,61 @@ export default function GrowthIntelligencePage() {
 
               {/* Best Performing Learned Patterns Grid */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
-                <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
-                  <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Top Category</span>
-                  <span className="text-sm font-bold text-indigo-950 mt-1 block capitalize">
-                    {learningOverview?.summary?.best_performing_category || 'General'}
-                  </span>
-                </div>
+                {(() => {
+                  const hasSufficientLearning =
+                    (learningOverview?.summary?.total_posts_analyzed ?? 0) >= 10 &&
+                    learningOverview?.summary?.confidence !== 'CALCULATING' &&
+                    learningOverview?.summary?.confidence !== 'LOW';
 
-                <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
-                  <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Top Format</span>
-                  <span className="text-sm font-bold text-indigo-950 mt-1 block">
-                    {learningOverview?.summary?.best_performing_format || 'IMAGE'}
-                  </span>
-                </div>
+                  return (
+                    <>
+                      <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
+                        <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Top Category</span>
+                        <span className="text-sm font-bold text-indigo-950 mt-1 block capitalize">
+                          {hasSufficientLearning
+                            ? (learningOverview?.summary?.best_performing_category || 'General')
+                            : 'Awaiting Data (N < 10)'}
+                        </span>
+                      </div>
 
-                <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
-                  <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Publish Clock Window</span>
-                  <span className="text-sm font-bold text-indigo-950 mt-1 block">
-                    {learningOverview?.summary?.best_observed_window || '20:00 - 21:00'}
-                  </span>
-                </div>
+                      <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
+                        <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Top Format</span>
+                        <span className="text-sm font-bold text-indigo-950 mt-1 block">
+                          {hasSufficientLearning
+                            ? (learningOverview?.summary?.best_performing_format || 'IMAGE')
+                            : 'Awaiting Data (N < 10)'}
+                        </span>
+                      </div>
 
-                <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
-                  <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Post Growth Elapsed</span>
-                  <span className="text-sm font-bold text-indigo-950 mt-1 block">
-                    {learningOverview?.summary?.best_observed_post_growth_window || '30–60m'}
-                  </span>
-                </div>
+                      <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
+                        <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Publish Clock Window</span>
+                        <span className="text-sm font-bold text-indigo-950 mt-1 block">
+                          {hasSufficientLearning
+                            ? (learningOverview?.summary?.best_observed_window || '20:00 - 21:00')
+                            : 'Awaiting Data (N < 10)'}
+                        </span>
+                      </div>
 
-                <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
-                  <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Best Cadence Gap</span>
-                  <span className="text-sm font-bold text-indigo-950 mt-1 block">
-                    {learningOverview?.summary?.best_observed_cadence || '60–90m'}
-                  </span>
-                </div>
+                      <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
+                        <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Post Growth Elapsed</span>
+                        <span className="text-sm font-bold text-indigo-950 mt-1 block">
+                          {hasSufficientLearning
+                            ? (learningOverview?.summary?.best_observed_post_growth_window || '30–60m')
+                            : 'Awaiting Data (N < 10)'}
+                        </span>
+                      </div>
+
+                      <div className="p-3.5 rounded-xl bg-indigo-50/60 border border-indigo-100">
+                        <span className="text-indigo-600 font-semibold text-[10px] uppercase block">Best Cadence Gap</span>
+                        <span className="text-sm font-bold text-indigo-950 mt-1 block">
+                          {hasSufficientLearning
+                            ? (learningOverview?.summary?.best_observed_cadence || '60–90m')
+                            : 'Awaiting Data (N < 10)'}
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
 
               {/* Disclaimer */}

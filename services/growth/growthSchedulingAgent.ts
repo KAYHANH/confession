@@ -68,31 +68,38 @@ export class GrowthSchedulingAgent {
     reason: string = 'Fallback baseline scheduling applied.'
   ): GroqSchedulingRecommendation {
     const now = new Date();
-    // Default safe next publish in 60 minutes
-    const nextPublish = new Date(now.getTime() + 60 * 60000).toISOString();
+    const settings = mockStore.getSettings();
+    const startHour = settings.auto_publish_start_hour ?? 9;
+    const endHour = settings.auto_publish_end_hour ?? 22;
+    const minGap = settings.min_gap_minutes ?? 30;
+    const maxGap = settings.max_gap_minutes ?? 75;
+    const targetDaily = settings.target_daily_posts ?? 4;
+
+    // Default safe next publish in minGap minutes
+    const nextPublish = new Date(now.getTime() + minGap * 60000).toISOString();
 
     return {
       strategy: 'BASELINE_EXPLORATION',
       recommended_format: 'IMAGE',
       recommended_category_preference: undefined,
       recommended_publish_window: {
-        start: '19:00',
-        end: '21:00',
+        start: `${String(startHour).padStart(2, '0')}:00`,
+        end: `${String(endHour).padStart(2, '0')}:00`,
       },
       recommended_gap_minutes: {
-        min: 60,
-        max: 90,
+        min: minGap,
+        max: maxGap,
       },
       recommended_posts_per_3h: 1,
-      recommended_daily_posts: 4,
+      recommended_daily_posts: targetDaily,
       recommended_next_publish_at: nextPublish,
-      wait_before_publishing_minutes: 60,
+      wait_before_publishing_minutes: minGap,
       confidence: 'LOW',
       evidence_count: evidenceCount,
       reason,
       alternative: {
         format: 'CAROUSEL',
-        window: '21:00 - 22:00',
+        window: `${String(startHour).padStart(2, '0')}:00 - ${String(endHour).padStart(2, '0')}:00`,
       },
       exploration: {
         enabled: true,

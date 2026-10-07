@@ -134,6 +134,7 @@ export class ConfessionService {
    * Get all confessions with filtering, search, and pagination
    */
   public async getConfessions(options: {
+    tab?: 'queue' | 'scheduled' | 'published' | 'unknown' | 'duplicates' | 'low_value' | 'deleted' | 'failed';
     status?: ConfessionStatus;
     moderationStatus?: string;
     qualityStatus?: string;
@@ -143,13 +144,7 @@ export class ConfessionService {
     page?: number;
     limit?: number;
   } = {}): Promise<{ confessions: Confession[]; total: number; page: number; totalPages: number }> {
-    const { status, moderationStatus, qualityStatus, search, templateId, sortBy = 'newest', page = 1, limit = 50 } = options;
-
-    if (process.env.NODE_ENV !== 'test') {
-      try {
-        await this.autoHealStuckConfessions();
-      } catch {}
-    }
+    const { tab, status, moderationStatus, qualityStatus, search, templateId, sortBy = 'newest', page = 1, limit = 50 } = options;
 
     // Real Supabase query if configured
     if (this.useSupabase()) {
@@ -158,8 +153,12 @@ export class ConfessionService {
         let query = supabase.from('confessions').select('*', { count: 'exact' });
 
         // Handle soft-delete workaround: DELETED rows are stored as REJECTED + __DELETED__ marker
-        if (status === 'DELETED') {
+        if (status === 'DELETED' || tab === 'deleted') {
           query = query.eq('status', 'REJECTED').like('error_message', '__DELETED__%');
+        } else if (tab === 'scheduled' || status === 'SCHEDULED') {
+          query = query.eq('status', 'SCHEDULED');
+        } else if (tab === 'published' || status === 'PUBLISHED') {
+          query = query.eq('status', 'PUBLISHED');
         } else if (status) {
           if (status === 'REJECTED') {
             query = query.eq('status', 'REJECTED').not('error_message', 'like', '__DELETED__%');
@@ -195,6 +194,39 @@ export class ConfessionService {
 
     // Default & Fallback: Read from mockStore
     let list = mockStore.getConfessions();
+
+    if (tab === 'queue') {
+      list = list.filter(
+        (c) =>
+          !['PUBLISHED', 'SCHEDULED', 'REJECTED', 'DELETED', 'FAILED', 'FAILED_CONFIRMED', 'FAILED_REQUIRES_ACTION', 'UNKNOWN', 'UNKNOWN_NEEDS_REVIEW', 'DUPLICATE_ALREADY_PUBLISHED', 'CANCELLED'].includes(c.status) &&
+          c.quality_status !== 'LOW_VALUE'
+      );
+    } else if (tab === 'scheduled') {
+      list = list.filter((c) => c.status === 'SCHEDULED');
+    } else if (tab === 'published') {
+      list = list.filter((c) => c.status === 'PUBLISHED');
+    } else if (tab === 'unknown') {
+      list = list.filter((c) => c.status === 'UNKNOWN' || c.status === 'UNKNOWN_NEEDS_REVIEW');
+    } else if (tab === 'duplicates') {
+      list = list.filter((c) => c.status === 'DUPLICATE_ALREADY_PUBLISHED');
+    } else if (tab === 'low_value') {
+      list = list.filter(
+        (c) =>
+          c.status !== 'DELETED' &&
+          (c.quality_status === 'LOW_VALUE' ||
+            c.quality_decision === 'REJECT' ||
+            (c.status === 'REJECTED' && c.quality_category === 'LOW_INFORMATION'))
+      );
+    } else if (tab === 'deleted') {
+      list = list.filter((c) => c.status === 'DELETED');
+    } else if (tab === 'failed') {
+      list = list.filter(
+        (c) =>
+          (c.status === 'FAILED' || c.status === 'FAILED_CONFIRMED' || c.status === 'FAILED_REQUIRES_ACTION') &&
+          !c.instagram_media_id &&
+          !c.published_at
+      );
+    }
 
     if (status) {
       list = list.filter((c) => c.status === status);
@@ -789,10 +821,8 @@ export class ConfessionService {
       throw new Error('Only approved or ready-for-review confessions can be scheduled');
     }
 
-    const updated = await this.updateConfession(id, {
-      status: 'SCHEDULED',
-      scheduled_at: scheduledAtIso,
-    });
+    const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+    const updated = await adaptiveSchedulingEngine.scheduleNextCandidate(confession, { forceTime: scheduledAtIso });
 
     const sheetConfig = mockStore.getGoogleSheetConfig();
     if (updated.google_sheet_row) {
@@ -1722,6 +1752,64 @@ export class ConfessionService {
       failed: all.filter((c) => c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION').length,
       publishedToday,
       maxDailyPosts: settings.max_daily_posts || 8,
+    };
+  }
+
+  /**
+   * Fast tab counts for /confessions page tabs without downloading full entity payloads
+   */
+  public async getTabCounts(): Promise<{
+    queue: number;
+    scheduled: number;
+    published: number;
+    unknown: number;
+    duplicates: number;
+    low_value: number;
+    deleted: number;
+    failed: number;
+  }> {
+    const all = !this.useSupabase()
+      ? mockStore.getConfessions()
+      : (await this.getConfessions({ limit: 1000 })).confessions;
+
+    const queue = all.filter(
+      (c) =>
+        !['PUBLISHED', 'SCHEDULED', 'REJECTED', 'DELETED', 'FAILED', 'FAILED_CONFIRMED', 'FAILED_REQUIRES_ACTION', 'UNKNOWN', 'UNKNOWN_NEEDS_REVIEW', 'DUPLICATE_ALREADY_PUBLISHED', 'CANCELLED'].includes(c.status) &&
+        c.quality_status !== 'LOW_VALUE'
+    ).length;
+
+    const scheduled = all.filter((c) => c.status === 'SCHEDULED').length;
+    const published = all.filter((c) => c.status === 'PUBLISHED').length;
+    const unknown = all.filter(
+      (c) => c.status === 'UNKNOWN' || c.status === 'UNKNOWN_NEEDS_REVIEW'
+    ).length;
+    const duplicates = all.filter(
+      (c) => c.status === 'DUPLICATE_ALREADY_PUBLISHED'
+    ).length;
+    const low_value = all.filter(
+      (c) =>
+        c.status !== 'DELETED' &&
+        (c.quality_status === 'LOW_VALUE' ||
+          c.quality_decision === 'REJECT' ||
+          (c.status === 'REJECTED' && c.quality_category === 'LOW_INFORMATION'))
+    ).length;
+    const deleted = all.filter((c) => c.status === 'DELETED').length;
+    const failed = all.filter(
+      (c) =>
+        (c.status === 'FAILED' || c.status === 'FAILED_CONFIRMED' || c.status === 'FAILED_REQUIRES_ACTION') &&
+        !c.instagram_media_id &&
+        !c.published_at
+    ).length;
+
+    return {
+      queue,
+      scheduled,
+      published,
+      unknown,
+      duplicates,
+      low_value,
+      deleted,
+      failed,
     };
   }
 }

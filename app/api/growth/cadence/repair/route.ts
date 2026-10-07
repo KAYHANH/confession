@@ -7,7 +7,8 @@ export async function POST(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
 
   try {
-    const result = await schedulingService.repairStaleQueue();
+    const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+    const result = await adaptiveSchedulingEngine.repairQueue();
     return NextResponse.json({
       success: true,
       result,

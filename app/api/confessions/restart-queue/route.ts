@@ -20,7 +20,8 @@ export async function POST(request: NextRequest) {
     // Recalculate schedule timings for restarted items
     if (result.restartedCount > 0) {
       try {
-        await schedulingService.generateFutureSchedule({ forceRecalculate: true });
+        const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+        await adaptiveSchedulingEngine.recalculateFutureQueue();
       } catch (schedErr) {
         console.warn('[RestartQueue] Future schedule recalculation warning:', schedErr);
       }
