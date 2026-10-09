@@ -26,6 +26,7 @@ import {
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Confession, Template } from '@/types';
+import { BackgroundJob } from '@/types/jobs';
 import { PublishModal } from '@/components/confessions/PublishModal';
 import { ScheduleModal } from '@/components/confessions/ScheduleModal';
 import { useToast } from '@/components/ui/ToastContext';
@@ -118,11 +119,29 @@ export default function ConfessionsPage() {
   } | null>(null);
   const [repairingQueue, setRepairingQueue] = useState(false);
   const [recalculatingQueue, setRecalculatingQueue] = useState(false);
+  const [activeJob, setActiveJob] = useState<BackgroundJob | null>(null);
+  const [isCancellingJob, setIsCancellingJob] = useState(false);
 
   const { success, error } = useToast();
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs: number = 10000): Promise<Response> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      return res;
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  const loadData = useCallback(async (isSilent = false) => {
+    if (!isSilent) setLoading(true);
     try {
       const params = new URLSearchParams();
       params.set('tab', activeTab);
@@ -133,10 +152,10 @@ export default function ConfessionsPage() {
       if (riskFilter !== 'ALL') params.set('moderationStatus', riskFilter);
 
       const [countsRes, confRes, tplRes, settingsRes] = await Promise.all([
-        fetch('/api/confessions/counts').catch(() => null),
-        fetch(`/api/confessions?${params.toString()}`).catch(() => null),
-        fetch('/api/templates').catch(() => null),
-        fetch('/api/settings').catch(() => null),
+        fetchWithTimeout('/api/confessions/counts', {}, 8000).catch(() => null),
+        fetchWithTimeout(`/api/confessions?${params.toString()}`, {}, 8000).catch(() => null),
+        fetchWithTimeout('/api/templates', {}, 8000).catch(() => null),
+        fetchWithTimeout('/api/settings', {}, 8000).catch(() => null),
       ]);
 
       if (countsRes && countsRes.ok) {
@@ -185,7 +204,7 @@ export default function ConfessionsPage() {
       }
 
       // Non-blocking fetch for cadence info
-      fetch('/api/growth/cadence')
+      fetchWithTimeout('/api/growth/cadence', {}, 8000)
         .then((r) => (r.ok ? r.json() : null))
         .then((cData) => {
           if (cData && cData.success && cData.recommendation) {
@@ -202,20 +221,66 @@ export default function ConfessionsPage() {
         })
         .catch(() => {});
     } catch {
-      error('Failed to load confessions');
+      if (!isSilent) error('Failed to load confessions');
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
     }
   }, [activeTab, page, search, riskFilter, error]);
 
+  // Check for active background job on mount
+  useEffect(() => {
+    fetchWithTimeout('/api/jobs/active', {}, 4000)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.success && data?.activeJob) {
+          setActiveJob(data.activeJob);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Dedicated background job poller: polls ONLY /api/jobs/:id every 2s without reloading page
+  useEffect(() => {
+    if (!activeJob || (activeJob.status !== 'RUNNING' && activeJob.status !== 'QUEUED')) {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetchWithTimeout(`/api/jobs/${activeJob.id}`, {}, 5000);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data?.success && data?.job) {
+          setActiveJob(data.job);
+          if (data.job.status === 'COMPLETED') {
+            success(data.job.message || 'Operation completed successfully!');
+            loadData(true);
+          } else if (data.job.status === 'FAILED') {
+            error(data.job.error || 'Operation failed');
+            loadData(true);
+          } else if (data.job.status === 'CANCELLED') {
+            success('Operation was cancelled.');
+            loadData(true);
+          }
+        }
+      } catch {}
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [activeJob?.id, activeJob?.status, loadData, success, error]);
+
   const handleRepairQueue = async () => {
+    if (activeJob && (activeJob.status === 'RUNNING' || activeJob.status === 'QUEUED')) {
+      error('A background operation is already in progress.');
+      return;
+    }
     setRepairingQueue(true);
     try {
-      const res = await fetch('/api/growth/cadence/repair', { method: 'POST' });
+      const res = await fetchWithTimeout('/api/growth/cadence/repair', { method: 'POST' }, 10000);
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Queue repair failed');
-      success(`Queue repaired: ${data.result?.repairedCount ?? 0} stale posts rescheduled using ${data.result?.strategy || 'Adaptive Cadence'}`);
-      await loadData();
+      if (!res.ok || !data.success) throw new Error(data?.error?.message || data?.error || 'Queue repair failed');
+      success('Queue repair started in background.');
+      if (data.job) setActiveJob(data.job);
     } catch (err: any) {
       error(err?.message || 'Failed to repair queue');
     } finally {
@@ -224,13 +289,17 @@ export default function ConfessionsPage() {
   };
 
   const handleRecalculateSchedule = async () => {
+    if (activeJob && (activeJob.status === 'RUNNING' || activeJob.status === 'QUEUED')) {
+      error('A background operation is already in progress.');
+      return;
+    }
     setRecalculatingQueue(true);
     try {
-      const res = await fetch('/api/growth/cadence/recalculate', { method: 'POST' });
+      const res = await fetchWithTimeout('/api/growth/cadence/recalculate', { method: 'POST' }, 10000);
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Recalculation failed');
-      success(`Schedule recalculated: ${data.result?.newlyScheduledCount ?? 0} slots aligned to Growth Strategy`);
-      await loadData();
+      if (!res.ok || !data.success) throw new Error(data?.error?.message || data?.error || 'Recalculation failed');
+      success('Schedule recalculation started in background.');
+      if (data.job) setActiveJob(data.job);
     } catch (err: any) {
       error(err?.message || 'Failed to recalculate schedule');
     } finally {
@@ -241,60 +310,57 @@ export default function ConfessionsPage() {
   const [reconciling, setReconciling] = useState(false);
 
   const handleReconcile = async () => {
+    if (activeJob && (activeJob.status === 'RUNNING' || activeJob.status === 'QUEUED')) {
+      error('A background operation is already in progress.');
+      return;
+    }
     setReconciling(true);
-    setReconciliationProgress({
-      current: 0,
-      total: tabCounts.unreconciled || tabCounts.unknown || 0,
-      isRunning: true,
-    });
-
-    // Poll progress every 750ms while running
-    const progressInterval = setInterval(async () => {
-      try {
-        const pRes = await fetch('/api/confessions/reconcile');
-        if (pRes.ok) {
-          const pData = await pRes.json();
-          if (pData.progress && pData.progress.isRunning) {
-            setReconciliationProgress(pData.progress);
-          }
-        }
-      } catch {}
-    }, 750);
-
     try {
-      const res = await fetch('/api/confessions/reconcile', { method: 'POST' });
+      const res = await fetchWithTimeout('/api/confessions/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ forceLiveInstagram: true }),
+      }, 10000);
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Reconciliation failed');
-      const r = data.report || data.result;
-      setLastReconciliationReport(r);
-      const pubCount = r.alreadyPublished ?? r.reconciledToPublished ?? 0;
-      const dupCount = r.duplicates ?? r.duplicatesFlagged ?? 0;
-      const failedCount = r.confirmedNotPublished ?? r.confirmedFailed ?? 0;
-      const unkCount = r.unknown ?? 0;
-      success(
-        `Reconciliation complete: ${pubCount} verified published, ${dupCount} duplicates, ${failedCount} confirmed failed, ${unkCount} unknown.`
-      );
-      await loadData();
+      if (!res.ok || !data.success) throw new Error(data?.error?.message || data?.error || 'Reconciliation failed');
+      success('Reconciliation started in background.');
+      if (data.job) setActiveJob(data.job);
     } catch (err: any) {
       error(err?.message || 'Reconciliation failed');
     } finally {
-      clearInterval(progressInterval);
       setReconciling(false);
-      setReconciliationProgress(null);
+    }
+  };
+
+  const handleCancelJob = async () => {
+    if (!activeJob) return;
+    setIsCancellingJob(true);
+    try {
+      const res = await fetchWithTimeout(`/api/jobs/${activeJob.id}/cancel`, { method: 'POST' }, 5000);
+      const data = await res.json();
+      if (data?.success && data?.job) {
+        setActiveJob(data.job);
+        success(`Job #${activeJob.id} cancelled.`);
+        loadData(true);
+      }
+    } catch (err: any) {
+      error(err?.message || 'Failed to cancel job');
+    } finally {
+      setIsCancellingJob(false);
     }
   };
 
   const handleReconcileSingle = async (id: string) => {
     try {
-      const res = await fetch('/api/confessions/reconcile', {
+      const res = await fetchWithTimeout('/api/confessions/reconcile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ confessionId: id, forceLiveInstagram: true }),
-      });
+      }, 10000);
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Reconciliation failed');
       success(`Reconciliation complete: ${data.reason}`);
-      await loadData();
+      loadData(true);
     } catch (err: any) {
       error(err?.message || 'Reconciliation failed');
     }
@@ -392,14 +458,15 @@ export default function ConfessionsPage() {
     if (!confirm(`Approve ${selectedIds.length} confession(s)?`)) return;
     setBulkProcessing(true);
     try {
-      await fetch('/api/confessions/bulk', {
+      const res = await fetchWithTimeout('/api/confessions/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'approve', ids: selectedIds }),
-      });
+      }, 10000);
+      if (!res.ok) throw new Error('Bulk approve failed');
       success(`${selectedIds.length} approved`);
       setSelectedIds([]);
-      loadData();
+      loadData(true);
     } catch { error('Bulk approve failed'); }
     finally { setBulkProcessing(false); }
   };
@@ -408,14 +475,15 @@ export default function ConfessionsPage() {
     if (!confirm(`Reject ${selectedIds.length} confession(s)?`)) return;
     setBulkProcessing(true);
     try {
-      await fetch('/api/confessions/bulk', {
+      const res = await fetchWithTimeout('/api/confessions/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'reject', ids: selectedIds }),
-      });
+      }, 10000);
+      if (!res.ok) throw new Error('Bulk reject failed');
       success(`${selectedIds.length} rejected`);
       setSelectedIds([]);
-      loadData();
+      loadData(true);
     } catch { error('Bulk reject failed'); }
     finally { setBulkProcessing(false); }
   };
@@ -435,14 +503,14 @@ export default function ConfessionsPage() {
         );
       }
 
-      const res = await fetch(`/api/confessions/${encodeURIComponent(id)}${permanent ? '?permanent=true' : ''}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`/api/confessions/${encodeURIComponent(id)}${permanent ? '?permanent=true' : ''}`, { method: 'DELETE' }, 10000);
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Delete failed');
       success(permanent ? 'Permanently deleted' : 'Moved to Deleted (queue timings updated)');
-      loadData();
+      loadData(true);
     } catch (err: any) {
       error(err?.message || 'Delete failed');
-      loadData();
+      loadData(true);
     }
   };
 
@@ -453,39 +521,46 @@ export default function ConfessionsPage() {
         prev.map((c: Confession) => (c.id === id ? { ...c, status: 'APPROVED' as const, deleted_at: null } : c))
       );
 
-      const res = await fetch(`/api/confessions/${encodeURIComponent(id)}/restore`, { method: 'POST' });
+      const res = await fetchWithTimeout(`/api/confessions/${encodeURIComponent(id)}/restore`, { method: 'POST' }, 10000);
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Restore failed');
       success('Confession restored to queue (timings updated)');
-      loadData();
+      loadData(true);
     } catch (err: any) {
       error(err?.message || 'Restore failed');
-      loadData();
+      loadData(true);
     }
   };
 
   const [restartingQueue, setRestartingQueue] = useState(false);
 
   const handleRestartQueue = async (targetIds?: string[]) => {
+    if (activeJob && (activeJob.status === 'RUNNING' || activeJob.status === 'QUEUED')) {
+      error('A background operation is already in progress.');
+      return;
+    }
     const isSingle = Boolean(targetIds && targetIds.length === 1);
-    const count = targetIds ? targetIds.length : tabCounts.failed;
-    if (!isSingle && count > 0 && !confirm(`Restart queue for ${count} failed confession(s)? Rejected and already published posts will NOT be touched.`)) {
+    const count = targetIds ? targetIds.length : (tabCounts.safeToRetry ?? tabCounts.failed);
+    if (!isSingle && count > 0 && !confirm(`Restart queue for ${count} eligible failed confession(s)? Records will be safely recalculated into future slots via Adaptive Scheduling without auto-publishing.`)) {
       return;
     }
     setRestartingQueue(true);
     try {
-      const res = await fetch('/api/confessions/restart-queue', {
+      const res = await fetchWithTimeout('/api/confessions/restart-queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: targetIds, triggerPublish: true }),
-      });
+        body: JSON.stringify({ ids: targetIds, triggerPublish: false }),
+      }, 10000);
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to restart queue');
+        throw new Error(data?.error?.message || data?.error || 'Failed to restart queue');
       }
-      success(data.message || `Restarted ${data.restartedCount} confessions`);
+      success(data.message || `Queue restart queued in background.`);
+      if (data.job) {
+        setActiveJob(data.job);
+      }
       setSelectedIds([]);
-      await loadData();
+      loadData(true);
     } catch (err: any) {
       error(err?.message || 'Failed to restart queue');
     } finally {
@@ -501,16 +576,16 @@ export default function ConfessionsPage() {
     if (!confirm(`Restore ${selectedIds.length} confession(s) back to queue? Queue schedule will recalculate automatically.`)) return;
     setBulkProcessing(true);
     try {
-      const res = await fetch('/api/confessions/bulk', {
+      const res = await fetchWithTimeout('/api/confessions/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'restore', ids: selectedIds }),
-      });
+      }, 10000);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Bulk restore failed');
       success(`${selectedIds.length} restored to queue (timings updated)`);
       setSelectedIds([]);
-      loadData();
+      loadData(true);
     } catch (err: any) {
       error(err?.message || 'Bulk restore failed');
     } finally {
@@ -522,16 +597,16 @@ export default function ConfessionsPage() {
     if (!confirm(`Permanently delete ${selectedIds.length} confession(s)? They will NEVER return or re-import from Google Sheets.`)) return;
     setBulkProcessing(true);
     try {
-      const res = await fetch('/api/confessions/bulk', {
+      const res = await fetchWithTimeout('/api/confessions/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'permanent_delete', ids: selectedIds }),
-      });
+      }, 10000);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Bulk permanent delete failed');
       success(`${selectedIds.length} permanently deleted`);
       setSelectedIds([]);
-      loadData();
+      loadData(true);
     } catch (err: any) {
       error(err?.message || 'Bulk permanent delete failed');
     } finally {
@@ -543,16 +618,16 @@ export default function ConfessionsPage() {
     if (!confirm(`Move ${selectedIds.length} confession(s) to Deleted? Queue timings will recalculate automatically.`)) return;
     setBulkProcessing(true);
     try {
-      const res = await fetch('/api/confessions/bulk', {
+      const res = await fetchWithTimeout('/api/confessions/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'delete', ids: selectedIds }),
-      });
+      }, 10000);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Bulk delete failed');
       success(`${selectedIds.length} moved to Deleted (queue timings updated)`);
       setSelectedIds([]);
-      loadData();
+      loadData(true);
     } catch (err: any) {
       error(err?.message || 'Bulk delete failed');
     } finally {
@@ -703,6 +778,12 @@ export default function ConfessionsPage() {
     );
   };
 
+  const isJobBusy = Boolean(activeJob && (activeJob.status === 'RUNNING' || activeJob.status === 'QUEUED'));
+  const isJobRestarting = restartingQueue || (isJobBusy && (activeJob?.type === 'QUEUE_RESTART' || activeJob?.type === 'RETRY_FAILED'));
+  const isJobReconciling = reconciling || (isJobBusy && activeJob?.type === 'RECONCILIATION');
+  const isJobRecalculating = recalculatingQueue || (isJobBusy && activeJob?.type === 'SCHEDULE_RECALCULATE');
+  const isJobRepairing = repairingQueue || (isJobBusy && activeJob?.type === 'QUEUE_REPAIR');
+
   return (
     <DashboardLayout>
       <div className="p-6 max-w-7xl mx-auto space-y-6">
@@ -727,16 +808,16 @@ export default function ConfessionsPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={handleReconcile}
-              disabled={reconciling}
+              disabled={isJobReconciling || isJobBusy}
               className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-xl hover:bg-purple-100 transition-all disabled:opacity-50 shadow-xs"
               title="Reconcile failed, unknown, and candidate posts against live Instagram API to prevent duplicates"
             >
-              <RefreshCw className={`w-4 h-4 ${reconciling ? 'animate-spin' : ''}`} />
-              {reconciling ? 'Reconciling…' : 'Reconcile with Instagram'}
+              <RefreshCw className={`w-4 h-4 ${isJobReconciling ? 'animate-spin' : ''}`} />
+              {isJobReconciling ? 'Reconciling…' : 'Reconcile with Instagram'}
             </button>
             <button
               onClick={() => handleRestartQueue()}
-              disabled={restartingQueue}
+              disabled={isJobRestarting || isJobBusy}
               className={`flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-xl shadow-sm transition-all disabled:opacity-50 ${
                 tabCounts.failed > 0
                   ? 'text-white bg-rose-600 hover:bg-rose-700'
@@ -744,15 +825,15 @@ export default function ConfessionsPage() {
               }`}
               title="Restart queue for failed confessions (never touches rejected or published posts)"
             >
-              <RotateCcw className={`w-4 h-4 ${restartingQueue ? 'animate-spin' : ''}`} />
-              {restartingQueue
+              <RotateCcw className={`w-4 h-4 ${isJobRestarting ? 'animate-spin' : ''}`} />
+              {isJobRestarting
                 ? 'Restarting…'
                 : tabCounts.failed > 0
                 ? `Restart Failed Queue (${tabCounts.failed})`
                 : 'Restart Queue'}
             </button>
             <button
-              onClick={loadData}
+              onClick={() => loadData(false)}
               disabled={loading}
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-zinc-700 bg-white border border-zinc-200 rounded-xl hover:bg-zinc-50 transition-colors"
             >
@@ -761,6 +842,71 @@ export default function ConfessionsPage() {
             </button>
           </div>
         </div>
+
+        {/* ── Active Background Job Progress Banner ── */}
+        {activeJob && (activeJob.status === 'RUNNING' || activeJob.status === 'QUEUED') && (
+          <div className="p-4 bg-indigo-50/95 border border-indigo-200 rounded-2xl shadow-xs text-indigo-950 space-y-3">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-indigo-100 rounded-xl text-indigo-600 shrink-0">
+                  <RefreshCw className="w-5 h-5 animate-spin" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-sm tracking-tight text-indigo-950">
+                      {activeJob.type === 'QUEUE_RESTART' && 'Queue Restart Running in Background'}
+                      {activeJob.type === 'SCHEDULE_RECALCULATE' && 'Schedule Recalculation Running in Background'}
+                      {activeJob.type === 'QUEUE_REPAIR' && 'Queue Repair Running in Background'}
+                      {activeJob.type === 'RECONCILIATION' && 'Live Instagram Reconciliation Running in Background'}
+                      {activeJob.type === 'RETRY_FAILED' && 'Retrying Eligible Records in Background'}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-200 text-indigo-800 border border-indigo-300">
+                      {activeJob.status}
+                    </span>
+                    <span className="text-xs text-indigo-500 font-mono">
+                      #{activeJob.id}
+                    </span>
+                  </div>
+                  <div className="text-xs text-indigo-700 mt-0.5">
+                    {activeJob.current_step || activeJob.message || 'Processing background operation asynchronously without blocking UI...'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 ml-auto">
+                <div className="text-right">
+                  <div className="text-xs font-bold text-indigo-900">
+                    {activeJob.processed} / {activeJob.total} processed
+                  </div>
+                  <div className="text-[11px] text-indigo-600">
+                    {activeJob.success_count} success · {activeJob.skipped_count} skipped {activeJob.failed_count > 0 ? `· ${activeJob.failed_count} failed` : ''}
+                  </div>
+                </div>
+                <button
+                  onClick={handleCancelJob}
+                  disabled={isCancellingJob}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100 transition-colors disabled:opacity-50"
+                  title="Cancel background job"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  {isCancellingJob ? 'Cancelling…' : 'Cancel Job'}
+                </button>
+              </div>
+            </div>
+
+            {/* Progress Bar */}
+            {activeJob.total > 0 && (
+              <div className="w-full bg-indigo-100 h-2 rounded-full overflow-hidden">
+                <div
+                  className="bg-indigo-600 h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${Math.min(100, Math.round((activeJob.processed / activeJob.total) * 100))}%`,
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── Dynamic Duplicate Protection & Reconciliation Banner ── */}
         {(() => {
@@ -816,21 +962,21 @@ export default function ConfessionsPage() {
                   {tabCounts.safeToRetry && tabCounts.safeToRetry > 0 ? (
                     <button
                       onClick={() => handleRestartQueue()}
-                      disabled={restartingQueue || isReconciling}
+                      disabled={isJobRestarting || isJobBusy}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 rounded-xl shadow-xs transition-all disabled:opacity-50"
                       title="Only retries posts verified as CONFIRMED_NOT_PUBLISHED"
                     >
-                      <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} />
-                      Retry Confirmed Failed ({tabCounts.safeToRetry})
+                      <RotateCcw className={`w-3.5 h-3.5 ${isJobRestarting ? 'animate-spin' : ''}`} />
+                      {isJobRestarting ? 'Restarting…' : `Retry Confirmed Failed (${tabCounts.safeToRetry})`}
                     </button>
                   ) : null}
                   <button
                     onClick={handleReconcile}
-                    disabled={isReconciling}
+                    disabled={isJobReconciling || isJobBusy}
                     className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-xl shadow-sm transition-all disabled:opacity-50"
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isReconciling ? 'animate-spin' : ''}`} />
-                    {isReconciling ? 'Reconciling…' : 'Run Full Reconciliation'}
+                    <RefreshCw className={`w-3.5 h-3.5 ${isJobReconciling ? 'animate-spin' : ''}`} />
+                    {isJobReconciling ? 'Reconciling…' : 'Run Full Reconciliation'}
                   </button>
                 </div>
               </div>
@@ -855,7 +1001,7 @@ export default function ConfessionsPage() {
               )}
 
               {/* Itemized Real Counters */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 pt-2 border-t border-purple-200/60">
+              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2 pt-2 border-t border-purple-200/60">
                 <div className="bg-white/80 p-2.5 rounded-xl border border-purple-100 shadow-2xs">
                   <div className="text-[10px] uppercase font-bold text-zinc-500">Already Published</div>
                   <div className="text-base font-extrabold text-emerald-700 mt-0.5">
@@ -890,6 +1036,12 @@ export default function ConfessionsPage() {
                   <div className="text-[10px] uppercase font-bold text-zinc-500">Safe to Retry</div>
                   <div className="text-base font-extrabold text-indigo-700 mt-0.5">
                     {tabCounts.safeToRetry ?? 0}
+                  </div>
+                </div>
+                <div className="bg-white/80 p-2.5 rounded-xl border border-purple-100 shadow-2xs">
+                  <div className="text-[10px] uppercase font-bold text-zinc-500">Blocked / Policy</div>
+                  <div className="text-base font-extrabold text-amber-600 mt-0.5" title="Failed records not eligible for auto-retry (max attempts reached or blocked by policy)">
+                    {Math.max(0, (tabCounts.confirmedNotPublished ?? tabCounts.failed ?? 0) - (tabCounts.safeToRetry ?? 0))}
                   </div>
                 </div>
               </div>
@@ -940,11 +1092,11 @@ export default function ConfessionsPage() {
                   </Link>
                   <button
                     onClick={() => handleRestartQueue()}
-                    disabled={restartingQueue}
+                    disabled={isJobRestarting || isJobBusy}
                     className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm transition-all disabled:opacity-50"
                   >
-                    <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} />
-                    {restartingQueue ? 'Restarting Queue…' : `Restart Failed Queue (${tabCounts.failed})`}
+                    <RotateCcw className={`w-3.5 h-3.5 ${isJobRestarting ? 'animate-spin' : ''}`} />
+                    {isJobRestarting ? 'Restarting Queue…' : `Restart Failed Queue (${tabCounts.failed})`}
                   </button>
                 </div>
               </div>
@@ -1028,12 +1180,12 @@ export default function ConfessionsPage() {
           {activeTab === 'queue' && (
             <button
               onClick={() => handleRestartQueue()}
-              disabled={restartingQueue}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-xl hover:bg-indigo-100 transition-colors shadow-sm"
+              disabled={isJobRestarting || isJobBusy}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-xl hover:bg-indigo-100 transition-colors shadow-sm disabled:opacity-50"
               title="Restart queue for failed confessions (never touches rejected or published posts)"
             >
-              <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} />
-              {restartingQueue ? 'Restarting…' : 'Restart Queue'}
+              <RotateCcw className={`w-3.5 h-3.5 ${isJobRestarting ? 'animate-spin' : ''}`} />
+              {isJobRestarting ? 'Restarting…' : 'Restart Queue'}
             </button>
           )}
 
@@ -1041,22 +1193,22 @@ export default function ConfessionsPage() {
             <>
               <button
                 onClick={handleRepairQueue}
-                disabled={repairingQueue}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition-colors shadow-sm cursor-pointer"
+                disabled={isJobRepairing || isJobBusy}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition-colors shadow-sm cursor-pointer disabled:opacity-50"
                 title="Repair past-due scheduled posts starting from now without arbitrary shifts"
               >
-                <Wrench className={`w-3.5 h-3.5 ${repairingQueue ? 'animate-spin' : ''}`} />
-                {repairingQueue ? 'Repairing…' : 'Repair Queue'}
+                <Wrench className={`w-3.5 h-3.5 ${isJobRepairing ? 'animate-spin' : ''}`} />
+                {isJobRepairing ? 'Repairing…' : 'Repair Queue'}
               </button>
 
               <button
                 onClick={handleRecalculateSchedule}
-                disabled={recalculatingQueue}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-xl hover:bg-purple-100 transition-colors shadow-sm cursor-pointer"
+                disabled={isJobRecalculating || isJobBusy}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-xl hover:bg-purple-100 transition-colors shadow-sm cursor-pointer disabled:opacity-50"
                 title="Recalculate queue timestamps using Growth Intelligence cadence strategy"
               >
-                <Zap className={`w-3.5 h-3.5 ${recalculatingQueue ? 'animate-spin' : ''}`} />
-                {recalculatingQueue ? 'Recalculating…' : 'Recalculate Schedule'}
+                <Zap className={`w-3.5 h-3.5 ${isJobRecalculating ? 'animate-spin' : ''}`} />
+                {isJobRecalculating ? 'Recalculating…' : 'Recalculate Schedule'}
               </button>
             </>
           )}
@@ -1090,16 +1242,16 @@ export default function ConfessionsPage() {
                 <>
                   <button
                     onClick={handleBulkRestore}
-                    disabled={bulkProcessing}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
+                    disabled={bulkProcessing || isJobRestarting || isJobBusy}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50"
                     title="Restore selected confessions to queue"
                   >
                     <Undo2 className="w-3.5 h-3.5" /> Restore Selected
                   </button>
                   <button
                     onClick={handleBulkPermanentDelete}
-                    disabled={bulkProcessing}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors shadow-sm"
+                    disabled={bulkProcessing || isJobRestarting || isJobBusy}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors shadow-sm disabled:opacity-50"
                     title="Permanently purge selected confessions"
                   >
                     <Trash2 className="w-3.5 h-3.5" /> Permanently Delete
@@ -1107,16 +1259,16 @@ export default function ConfessionsPage() {
                 </>
               ) : (
                 <>
-                  <button onClick={handleBulkApprove} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
+                  <button onClick={handleBulkApprove} disabled={bulkProcessing || isJobRestarting || isJobBusy} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50">
                     <Check className="w-3.5 h-3.5" /> Approve All
                   </button>
-                  <button onClick={handleBulkRetry} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors" title="Restart and retry selected failed confessions">
-                    <RotateCcw className={`w-3.5 h-3.5 ${restartingQueue ? 'animate-spin' : ''}`} /> Retry Selected
+                  <button onClick={handleBulkRetry} disabled={bulkProcessing || isJobRestarting || isJobBusy} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50" title="Restart and retry selected failed confessions">
+                    <RotateCcw className={`w-3.5 h-3.5 ${isJobRestarting ? 'animate-spin' : ''}`} /> Retry Selected
                   </button>
-                  <button onClick={handleBulkReject} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-zinc-700 text-white rounded-lg hover:bg-zinc-800 transition-colors">
+                  <button onClick={handleBulkReject} disabled={bulkProcessing || isJobRestarting || isJobBusy} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-zinc-700 text-white rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50">
                     <X className="w-3.5 h-3.5" /> Reject All
                   </button>
-                  <button onClick={handleBulkSoftDelete} disabled={bulkProcessing || restartingQueue} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors">
+                  <button onClick={handleBulkSoftDelete} disabled={bulkProcessing || isJobRestarting || isJobBusy} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors disabled:opacity-50">
                     <Trash2 className="w-3.5 h-3.5" /> Move to Deleted
                   </button>
                 </>
@@ -1126,7 +1278,7 @@ export default function ConfessionsPage() {
         </div>
 
         {/* ── Table ── */}
-        {loading ? (
+        {loading && confessions.length === 0 ? (
           <div className="flex justify-center py-20">
             <RefreshCw className="w-6 h-6 animate-spin text-zinc-400" />
           </div>

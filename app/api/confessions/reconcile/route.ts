@@ -32,16 +32,32 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const report = await reconciliationService.reconcileBatch({
+    if (body.sync === true) {
+      const report = await reconciliationService.reconcileBatch({
+        ids,
+        forceLiveInstagram,
+      });
+
+      return NextResponse.json({
+        success: true,
+        report,
+        result: report, // backwards-compatible alias
+      });
+    }
+
+    const { backgroundJobService } = await import('@/services/backgroundJobService');
+    const job = await backgroundJobService.startReconciliationJob({
       ids,
       forceLiveInstagram,
     });
 
     return NextResponse.json({
       success: true,
-      report,
-      result: report, // backwards-compatible alias
-    });
+      jobId: job.id,
+      status: job.status,
+      message: 'Reconciliation started in background.',
+      job,
+    }, { status: 202 });
   } catch (error: any) {
     console.error('[ReconciliationAPI] Error during reconciliation:', error);
     return NextResponse.json(

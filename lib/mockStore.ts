@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { Confession, Template, ActivityLog, GoogleSheetConfig, InstagramAccountConfig, SystemSettings, PublishedPost } from '@/types';
+import { BackgroundJob } from '@/types/jobs';
 import { FALLBACK_INSTAGRAM_ACCOUNT_ID, FALLBACK_INSTAGRAM_ACCESS_TOKEN } from '@/lib/config';
 
 const DATA_FILE = path.join(process.cwd(), '.mock_data.json');
@@ -14,6 +15,7 @@ export interface MockDatabase {
   instagram: InstagramAccountConfig;
   settings: SystemSettings;
   deletedRowNumbers?: number[];
+  jobs?: BackgroundJob[];
 }
 
 const DEFAULT_TEMPLATES: Template[] = [
@@ -274,6 +276,9 @@ class MockStore {
         if (!Array.isArray(parsed.deletedRowNumbers)) {
           parsed.deletedRowNumbers = [];
         }
+        if (!Array.isArray(parsed.jobs)) {
+          parsed.jobs = [];
+        }
         return parsed;
       }
     } catch (_e) {
@@ -284,6 +289,7 @@ class MockStore {
     return {
       confessions: [...DEFAULT_CONFESSIONS],
       templates: [...DEFAULT_TEMPLATES],
+      jobs: [],
       activityLogs: [
         {
           id: 'log-1',
@@ -720,8 +726,61 @@ class MockStore {
         status: (process.env.INSTAGRAM_ACCOUNT_ID && process.env.INSTAGRAM_ACCESS_TOKEN) ? 'ACTIVE' : 'DISCONNECTED',
       },
       settings: { ...DEFAULT_SETTINGS },
+      jobs: [],
     };
     this.save();
+  }
+
+  // ─── Background Jobs ────────────────────────────────────────────────────────
+
+  public getJobs(): BackgroundJob[] {
+    this.ensureFresh();
+    return this.data.jobs || [];
+  }
+
+  public getJobById(id: string): BackgroundJob | undefined {
+    this.ensureFresh();
+    return (this.data.jobs || []).find((j) => j.id === id);
+  }
+
+  public addJob(job: BackgroundJob): BackgroundJob {
+    this.ensureFresh();
+    if (!this.data.jobs) {
+      this.data.jobs = [];
+    }
+    this.data.jobs.unshift(job);
+    // Keep max 50 recent jobs in history
+    if (this.data.jobs.length > 50) {
+      this.data.jobs = this.data.jobs.slice(0, 50);
+    }
+    this.save();
+    return job;
+  }
+
+  public updateJob(id: string, updates: Partial<BackgroundJob>): BackgroundJob | null {
+    this.ensureFresh();
+    if (!this.data.jobs) return null;
+    const idx = this.data.jobs.findIndex((j) => j.id === id);
+    if (idx === -1) return null;
+
+    this.data.jobs[idx] = {
+      ...this.data.jobs[idx],
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
+    this.save();
+    return this.data.jobs[idx];
+  }
+
+  public getActiveJob(types?: string[]): BackgroundJob | null {
+    this.ensureFresh();
+    const active = (this.data.jobs || []).find((j) => {
+      const isActiveStatus = j.status === 'RUNNING' || j.status === 'QUEUED';
+      if (!isActiveStatus) return false;
+      if (types && types.length > 0) return types.includes(j.type);
+      return true;
+    });
+    return active || null;
   }
 }
 

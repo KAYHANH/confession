@@ -589,10 +589,7 @@ export class AdaptiveSchedulingEngine {
             scheduled_at: null,
             scheduling_reason: `Held in approved queue: Exceeds ${rollingHorizonHours}h rolling horizon.`,
           };
-          mockStore.updateConfession(rem.id, updateHold);
-          try {
-            await confessionService.updateConfession(rem.id, updateHold);
-          } catch {}
+          await confessionService.updateConfession(rem.id, updateHold);
         }
         break;
       }
@@ -631,10 +628,7 @@ export class AdaptiveSchedulingEngine {
         scheduling_provenance: provenance,
       };
 
-      mockStore.updateConfession(c.id, updatePayload);
-      try {
-        await confessionService.updateConfession(c.id, updatePayload);
-      } catch {}
+      await confessionService.updateConfession(c.id, updatePayload);
 
       scheduledTimes.push(scheduledAtIso);
       repairedItems.push({

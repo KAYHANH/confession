@@ -1,55 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth';
-import { confessionService } from '@/services/confessionService';
-import { schedulingService } from '@/services/schedulingService';
-import { mockStore } from '@/lib/mockStore';
+import { backgroundJobService } from '@/services/backgroundJobService';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuth(request);
   if (auth instanceof NextResponse) return auth;
+
   try {
     const body = await request.json().catch(() => ({}));
-    const { ids, triggerPublish = true } = body;
+    const { ids } = body;
 
-    const result = await confessionService.restartFailedQueue(
-      Array.isArray(ids) && ids.length > 0 ? ids : undefined
-    );
+    const targetIds = Array.isArray(ids) && ids.length > 0 ? ids : undefined;
 
-    // Recalculate schedule timings for restarted items
-    if (result.restartedCount > 0) {
-      try {
-        const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
-        await adaptiveSchedulingEngine.recalculateFutureQueue();
-      } catch (schedErr) {
-        console.warn('[RestartQueue] Future schedule recalculation warning:', schedErr);
-      }
-    }
-    const settings = mockStore.getSettings();
-    const shouldPublish = triggerPublish && (settings.auto_publish || settings.publishing_mode === 'AUTO_PUBLISH');
-
-    if (shouldPublish && result.restartedCount > 0) {
-      setTimeout(() => {
-        schedulingService.processAutoPublishCycle(true).catch((err) => {
-          console.error('[RestartQueue] Background auto-publish trigger error:', err?.message || err);
-        });
-      }, 500);
-    }
+    // Start background job immediately
+    const job = await backgroundJobService.startQueueRestartJob({ targetIds });
 
     return NextResponse.json({
       success: true,
-      restartedCount: result.restartedCount,
-      restartedIds: result.restartedIds,
-      skippedRejected: result.skippedRejected,
-      skippedPublished: result.skippedPublished,
-      message: `Successfully restarted ${result.restartedCount} failed confession(s). ${result.skippedRejected} rejected and ${result.skippedPublished} published confessions were strictly protected.`,
-    });
+      jobId: job.id,
+      status: job.status,
+      message: 'Queue restart started in background. Posts are being requeued safely without publishing.',
+      job,
+    }, { status: 202 });
   } catch (error: any) {
-    console.error('[RestartQueue] Error restarting queue:', error);
+    console.error('[RestartQueue] Error starting background queue restart:', error);
     return NextResponse.json(
-      { success: false, error: error?.message || 'Failed to restart queue' },
-      { status: 500 }
+      {
+        success: false,
+        error: {
+          code: 'QUEUE_RESTART_FAILED',
+          message: error?.message || 'Failed to start queue restart',
+        },
+      },
+      { status: error?.message?.includes('already in progress') ? 409 : 500 }
     );
   }
 }

@@ -29,6 +29,10 @@ export function startBackgroundRunner() {
 
   console.log('🚀 [BackgroundRunner] Initializing 24/7 background scheduler...');
   logInstagramStartupDiagnostics();
+  try {
+    const { backgroundJobService } = require('./backgroundJobService');
+    backgroundJobService.cleanupStalledJobs();
+  } catch {}
 
   const getTargetUrl = () => {
     return (

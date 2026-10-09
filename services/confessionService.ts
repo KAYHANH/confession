@@ -290,7 +290,7 @@ export class ConfessionService {
     if (!cleanId) return null;
 
     // 1. Check mockStore first (fast, reliable)
-    const localConf = mockStore.getConfessionById(cleanId);
+    const localConf = mockStore.getConfessionById(cleanId) || mockStore.getConfessions().find((c) => c.id === cleanId);
     if (localConf) return localConf;
 
     // 2. Try Supabase if configured

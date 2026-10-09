@@ -1,23 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth';
-import { schedulingService } from '@/services/schedulingService';
+import { backgroundJobService } from '@/services/backgroundJobService';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuth(request);
   if (auth instanceof NextResponse) return auth;
 
   try {
-    const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
-    const result = await adaptiveSchedulingEngine.repairQueue();
+    const job = await backgroundJobService.startRepairQueueJob();
+
     return NextResponse.json({
       success: true,
-      result,
-    });
+      jobId: job.id,
+      status: job.status,
+      message: 'Queue repair started in background.',
+      job,
+    }, { status: 202 });
   } catch (err: any) {
-    console.error('[API Cadence Repair] Failed to repair stale queue:', err);
+    console.error('[API Cadence Repair] Failed to start queue repair:', err);
     return NextResponse.json(
-      { success: false, error: err?.message || 'Failed to repair stale queue' },
-      { status: 500 }
+      {
+        success: false,
+        error: {
+          code: 'QUEUE_REPAIR_FAILED',
+          message: err?.message || 'Failed to start queue repair',
+        },
+      },
+      { status: err?.message?.includes('already in progress') ? 409 : 500 }
     );
   }
 }
