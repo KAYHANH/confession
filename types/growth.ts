@@ -435,6 +435,8 @@ export interface SchedulerRecommendation {
   evidenceCount: number;
   reason: string;
   explorationAllowed: boolean;
+  timeWindow?: string;
+  provenance?: 'CONFIGURED' | 'BASELINE' | 'EXPERIMENTAL' | 'LEARNED';
   formatCadenceMap?: Record<string, { minGap: number; maxGap: number; reason: string }>;
   categoryCadenceMap?: Record<string, { minGap: number; maxGap: number; reason: string }>;
   viralCooldownPolicy?: {

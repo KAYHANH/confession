@@ -348,3 +348,74 @@ export interface DashboardStats {
   publishedToday: number;
   maxDailyPosts: number;
 }
+
+export type CounterCategory =
+  | 'MUTUALLY_EXCLUSIVE_PARTITION'
+  | 'OPERATIONAL_PIPELINE'
+  | 'OVERLAPPING_METRIC';
+
+export interface StatusCountItem {
+  name: string;
+  key: string;
+  count: number;
+  definition: string;
+  type: CounterCategory;
+  queryFilter: string;
+}
+
+export interface AuthoritativeCounts {
+  timestamp: string;
+  formattedTimestamp: string;
+  accountScope: string;
+  totalRecords: number;
+  exclusiveSum: number;
+  isReconciled: boolean;
+
+  exclusivePartitions: {
+    needsReview: number;
+    approvedUnscheduled: number;
+    scheduled: number;
+    publishing: number;
+    published: number;
+    confirmedFailed: number;
+    unknown: number;
+    duplicate: number;
+    lowValue: number;
+    deleted: number;
+  };
+
+  pipeline: {
+    active: number;
+    queued: number;
+    scheduled: number;
+    published: number;
+  };
+
+  overlappingMetrics: {
+    totalQualityFlagged: number;
+    alreadyPublishedVerified: number;
+    confirmedNotPublished: number;
+    safeToRetry: number;
+    blockedByPolicy: number;
+    manualReviewRequired: number;
+    unreconciled: number;
+  };
+
+  // Backwards-compatible flat accessors for existing consumers
+  queue: number;
+  scheduled: number;
+  published: number;
+  unknown: number;
+  duplicates: number;
+  low_value: number;
+  deleted: number;
+  failed: number;
+  alreadyPublished: number;
+  confirmedNotPublished: number;
+  safeToRetry: number;
+  manualReview: number;
+  unreconciled: number;
+  blockedByPolicy: number;
+
+  diagnostics: StatusCountItem[];
+}

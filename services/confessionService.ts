@@ -1,4 +1,4 @@
-import { Confession, ConfessionStatus, DashboardStats, SystemSettings } from '@/types';
+import { Confession, ConfessionStatus, DashboardStats, SystemSettings, AuthoritativeCounts, StatusCountItem } from '@/types';
 import { mockStore } from '@/lib/mockStore';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { aiService } from './aiService';
@@ -87,6 +87,128 @@ export class ConfessionService {
     if (current === next) return true;
     const allowed = ALLOWED_TRANSITIONS[current] || [];
     return allowed.includes(next);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mutually Exclusive Status Partition Predicates
+  // ---------------------------------------------------------------------------
+
+  public isDeleted(c: Confession): boolean {
+    return (
+      c.status === 'DELETED' ||
+      (typeof c.error_message === 'string' && c.error_message.startsWith('__DELETED__:')) ||
+      Boolean(c.deleted_at)
+    );
+  }
+
+  public isPublished(c: Confession): boolean {
+    return !this.isDeleted(c) && (c.status === 'PUBLISHED' || Boolean(c.instagram_media_id) || Boolean(c.published_at));
+  }
+
+  public isDuplicate(c: Confession): boolean {
+    return (
+      !this.isDeleted(c) &&
+      !this.isPublished(c) &&
+      (c.status === 'DUPLICATE_ALREADY_PUBLISHED' || c.reconciliation_status === 'DUPLICATE')
+    );
+  }
+
+  public isUnknown(c: Confession): boolean {
+    return (
+      !this.isDeleted(c) &&
+      !this.isPublished(c) &&
+      !this.isDuplicate(c) &&
+      (c.status === 'UNKNOWN' || c.status === 'UNKNOWN_NEEDS_REVIEW')
+    );
+  }
+
+  public isPublishing(c: Confession): boolean {
+    return (
+      !this.isDeleted(c) &&
+      !this.isPublished(c) &&
+      !this.isDuplicate(c) &&
+      !this.isUnknown(c) &&
+      c.status === 'PUBLISHING'
+    );
+  }
+
+  public isConfirmedFailed(c: Confession): boolean {
+    return (
+      !this.isDeleted(c) &&
+      !this.isPublished(c) &&
+      !this.isDuplicate(c) &&
+      !this.isUnknown(c) &&
+      !this.isPublishing(c) &&
+      (c.status === 'FAILED' || c.status === 'FAILED_CONFIRMED' || c.status === 'FAILED_REQUIRES_ACTION')
+    );
+  }
+
+  public isLowValue(c: Confession): boolean {
+    return (
+      !this.isDeleted(c) &&
+      !this.isPublished(c) &&
+      !this.isDuplicate(c) &&
+      !this.isUnknown(c) &&
+      !this.isPublishing(c) &&
+      !this.isConfirmedFailed(c) &&
+      (c.quality_status === 'LOW_VALUE' ||
+        c.quality_decision === 'REJECT' ||
+        c.status === 'REJECTED')
+    );
+  }
+
+  public isScheduled(c: Confession): boolean {
+    return (
+      !this.isDeleted(c) &&
+      !this.isPublished(c) &&
+      !this.isDuplicate(c) &&
+      !this.isUnknown(c) &&
+      !this.isPublishing(c) &&
+      !this.isConfirmedFailed(c) &&
+      !this.isLowValue(c) &&
+      (c.status === 'SCHEDULED' || (c.status === 'APPROVED' && Boolean(c.scheduled_at)))
+    );
+  }
+
+  public isApprovedUnscheduled(c: Confession): boolean {
+    return (
+      !this.isDeleted(c) &&
+      !this.isPublished(c) &&
+      !this.isDuplicate(c) &&
+      !this.isUnknown(c) &&
+      !this.isPublishing(c) &&
+      !this.isConfirmedFailed(c) &&
+      !this.isLowValue(c) &&
+      !this.isScheduled(c) &&
+      (c.status === 'APPROVED' && !c.scheduled_at)
+    );
+  }
+
+  public isNeedsReview(c: Confession): boolean {
+    return (
+      !this.isDeleted(c) &&
+      !this.isPublished(c) &&
+      !this.isDuplicate(c) &&
+      !this.isUnknown(c) &&
+      !this.isPublishing(c) &&
+      !this.isConfirmedFailed(c) &&
+      !this.isLowValue(c) &&
+      !this.isScheduled(c) &&
+      !this.isApprovedUnscheduled(c)
+    );
+  }
+
+  public isSafeToRetry(c: Confession): boolean {
+    return (
+      c.reconciliation_status === 'CONFIRMED_NOT_PUBLISHED' &&
+      !this.isPublished(c) &&
+      !this.isDuplicate(c) &&
+      !this.isUnknown(c) &&
+      !this.isDeleted(c) &&
+      c.quality_status !== 'LOW_VALUE' &&
+      (c.retry_count || 0) < 3 &&
+      (c.status === 'APPROVED' || c.status === 'FAILED' || c.status === 'FAILED_CONFIRMED')
+    );
   }
 
   /**
@@ -197,36 +319,21 @@ export class ConfessionService {
     let list = mockStore.getConfessions();
 
     if (tab === 'queue') {
-      list = list.filter(
-        (c) =>
-          !['PUBLISHED', 'SCHEDULED', 'REJECTED', 'DELETED', 'FAILED', 'FAILED_CONFIRMED', 'FAILED_REQUIRES_ACTION', 'UNKNOWN', 'UNKNOWN_NEEDS_REVIEW', 'DUPLICATE_ALREADY_PUBLISHED', 'CANCELLED'].includes(c.status) &&
-          c.quality_status !== 'LOW_VALUE'
-      );
+      list = list.filter((c) => this.isNeedsReview(c) || this.isApprovedUnscheduled(c));
     } else if (tab === 'scheduled') {
-      list = list.filter((c) => c.status === 'SCHEDULED');
+      list = list.filter((c) => this.isScheduled(c));
     } else if (tab === 'published') {
-      list = list.filter((c) => c.status === 'PUBLISHED');
+      list = list.filter((c) => this.isPublished(c));
     } else if (tab === 'unknown') {
-      list = list.filter((c) => c.status === 'UNKNOWN' || c.status === 'UNKNOWN_NEEDS_REVIEW');
+      list = list.filter((c) => this.isUnknown(c));
     } else if (tab === 'duplicates') {
-      list = list.filter((c) => c.status === 'DUPLICATE_ALREADY_PUBLISHED');
+      list = list.filter((c) => this.isDuplicate(c));
     } else if (tab === 'low_value') {
-      list = list.filter(
-        (c) =>
-          c.status !== 'DELETED' &&
-          (c.quality_status === 'LOW_VALUE' ||
-            c.quality_decision === 'REJECT' ||
-            (c.status === 'REJECTED' && c.quality_category === 'LOW_INFORMATION'))
-      );
+      list = list.filter((c) => this.isLowValue(c));
     } else if (tab === 'deleted') {
-      list = list.filter((c) => c.status === 'DELETED');
+      list = list.filter((c) => this.isDeleted(c));
     } else if (tab === 'failed') {
-      list = list.filter(
-        (c) =>
-          (c.status === 'FAILED' || c.status === 'FAILED_CONFIRMED' || c.status === 'FAILED_REQUIRES_ACTION') &&
-          !c.instagram_media_id &&
-          !c.published_at
-      );
+      list = list.filter((c) => this.isConfirmedFailed(c));
     }
 
     if (status) {
@@ -1786,12 +1893,314 @@ export class ConfessionService {
   }
 
   /**
+   * Authoritative Counting Engine:
+   * Single source of truth for dashboard, tabs, and reconciliation protection.
+   * Every record in the database is partitioned into EXACTLY ONE mutually exclusive status.
+   * exclusiveSum strictly equals totalRecords in scope.
+   */
+  public async getAuthoritativeCounts(): Promise<AuthoritativeCounts> {
+    const all = !this.useSupabase()
+      ? mockStore.getConfessions()
+      : (await this.getConfessions({ limit: 5000 })).confessions;
+
+    const totalRecords = all.length;
+
+    let deleted = 0;
+    let published = 0;
+    let duplicate = 0;
+    let unknown = 0;
+    let publishing = 0;
+    let confirmedFailed = 0;
+    let lowValue = 0;
+    let scheduled = 0;
+    let approvedUnscheduled = 0;
+    let needsReview = 0;
+
+    for (const c of all) {
+      if (this.isDeleted(c)) deleted++;
+      else if (this.isPublished(c)) published++;
+      else if (this.isDuplicate(c)) duplicate++;
+      else if (this.isUnknown(c)) unknown++;
+      else if (this.isPublishing(c)) publishing++;
+      else if (this.isConfirmedFailed(c)) confirmedFailed++;
+      else if (this.isLowValue(c)) lowValue++;
+      else if (this.isScheduled(c)) scheduled++;
+      else if (this.isApprovedUnscheduled(c)) approvedUnscheduled++;
+      else if (this.isNeedsReview(c)) needsReview++;
+    }
+
+    const exclusiveSum =
+      deleted +
+      published +
+      duplicate +
+      unknown +
+      publishing +
+      confirmedFailed +
+      lowValue +
+      scheduled +
+      approvedUnscheduled +
+      needsReview;
+
+    const isReconciled = exclusiveSum === totalRecords;
+
+    // Operational Pipeline
+    const queued = needsReview + approvedUnscheduled;
+    const active = queued + scheduled + publishing;
+
+    // Overlapping & Cross-Cutting Verification Metrics
+    const totalQualityFlagged = all.filter((c) => c.quality_status === 'LOW_VALUE').length;
+    const alreadyPublishedVerified = all.filter(
+      (c) =>
+        c.status === 'PUBLISHED' ||
+        Boolean(c.instagram_media_id) ||
+        Boolean(c.published_at) ||
+        c.reconciliation_status === 'ALREADY_PUBLISHED' ||
+        c.reconciliation_status === 'VERIFIED'
+    ).length;
+
+    const confirmedNotPublished = all.filter(
+      (c) => c.reconciliation_status === 'CONFIRMED_NOT_PUBLISHED'
+    ).length;
+
+    const safeToRetry = all.filter((c) => this.isSafeToRetry(c)).length;
+
+    const blockedByPolicy = all.filter(
+      (c) =>
+        (this.isConfirmedFailed(c) || c.reconciliation_status === 'CONFIRMED_NOT_PUBLISHED') &&
+        !this.isSafeToRetry(c)
+    ).length;
+
+    const manualReviewRequired = all.filter(
+      (c) => c.reconciliation_status === 'MANUAL_REVIEW' || c.status === 'UNKNOWN_NEEDS_REVIEW'
+    ).length;
+
+    const unreconciled = all.filter(
+      (c) =>
+        c.reconciliation_status === 'NOT_CHECKED' ||
+        c.reconciliation_status === 'CHECKING' ||
+        (!c.reconciliation_status && (c.status === 'FAILED' || c.status === 'UNKNOWN' || c.status === 'UNKNOWN_NEEDS_REVIEW'))
+    ).length;
+
+    const now = new Date();
+    const timestamp = now.toISOString();
+    const formattedTimestamp = now.toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    });
+
+    const settings = mockStore.getSettings();
+    const accountScope = settings.instagram_handle || '@_hpsconfession_';
+
+    const diagnostics: StatusCountItem[] = [
+      {
+        name: 'Needs Review',
+        key: 'needsReview',
+        count: needsReview,
+        definition: 'Imported or newly submitted confessions awaiting moderation or approval.',
+        type: 'MUTUALLY_EXCLUSIVE_PARTITION',
+        queryFilter: "status in ['READY_FOR_REVIEW', 'NEW', 'IMPORTED', 'PROCESSING'] && quality != LOW_VALUE && !deleted",
+      },
+      {
+        name: 'Approved / Unscheduled',
+        key: 'approvedUnscheduled',
+        count: approvedUnscheduled,
+        definition: 'Approved confessions held in buffer waiting for future calendar slot allocation.',
+        type: 'MUTUALLY_EXCLUSIVE_PARTITION',
+        queryFilter: "status == 'APPROVED' && scheduled_at == null && !deleted",
+      },
+      {
+        name: 'Scheduled',
+        key: 'scheduled',
+        count: scheduled,
+        definition: 'Approved confessions with a confirmed future calendar publishing timeslot.',
+        type: 'MUTUALLY_EXCLUSIVE_PARTITION',
+        queryFilter: "(status == 'SCHEDULED' || (status == 'APPROVED' && scheduled_at != null)) && !deleted",
+      },
+      {
+        name: 'Publishing',
+        key: 'publishing',
+        count: publishing,
+        definition: 'In-flight publishing operation currently communicating with Instagram API.',
+        type: 'MUTUALLY_EXCLUSIVE_PARTITION',
+        queryFilter: "status == 'PUBLISHING' && !deleted",
+      },
+      {
+        name: 'Published',
+        key: 'published',
+        count: published,
+        definition: 'Confirmed live on Instagram feed with verified media ID / published timestamp.',
+        type: 'MUTUALLY_EXCLUSIVE_PARTITION',
+        queryFilter: "status == 'PUBLISHED' || instagram_media_id != null || published_at != null",
+      },
+      {
+        name: 'Confirmed Failed',
+        key: 'confirmedFailed',
+        count: confirmedFailed,
+        definition: 'Publishing attempt failed with verified API error, confirmed absent from Instagram.',
+        type: 'MUTUALLY_EXCLUSIVE_PARTITION',
+        queryFilter: "status in ['FAILED', 'FAILED_CONFIRMED', 'FAILED_REQUIRES_ACTION'] && !published && !deleted",
+      },
+      {
+        name: 'Unknown / Quarantined',
+        key: 'unknown',
+        count: unknown,
+        definition: 'Ambiguous in-flight state or timeout quarantined until verified against Instagram.',
+        type: 'MUTUALLY_EXCLUSIVE_PARTITION',
+        queryFilter: "status in ['UNKNOWN', 'UNKNOWN_NEEDS_REVIEW'] && !deleted",
+      },
+      {
+        name: 'Duplicate Quarantined',
+        key: 'duplicate',
+        count: duplicate,
+        definition: 'Quarantined duplicate confession matching an already published post.',
+        type: 'MUTUALLY_EXCLUSIVE_PARTITION',
+        queryFilter: "status == 'DUPLICATE_ALREADY_PUBLISHED' || reconciliation_status == 'DUPLICATE'",
+      },
+      {
+        name: 'Low Value (Backlog)',
+        key: 'lowValue',
+        count: lowValue,
+        definition: 'Submissions held or rejected for low information / quality failure (not deleted, not published).',
+        type: 'MUTUALLY_EXCLUSIVE_PARTITION',
+        queryFilter: "quality_status == 'LOW_VALUE' || quality_decision == 'REJECT' || status == 'REJECTED' (non-deleted, unpublished)",
+      },
+      {
+        name: 'Deleted',
+        key: 'deleted',
+        count: deleted,
+        definition: 'Soft-deleted or purged from Google Sheets. Quarantined from queue and sync re-import.',
+        type: 'MUTUALLY_EXCLUSIVE_PARTITION',
+        queryFilter: "status == 'DELETED' || error_message like '__DELETED__%' || deleted_at != null",
+      },
+      {
+        name: 'Active Pipeline',
+        key: 'active',
+        count: active,
+        definition: 'Operational pipeline: Needs Review + Approved Unscheduled + Scheduled + Publishing.',
+        type: 'OPERATIONAL_PIPELINE',
+        queryFilter: 'queued + scheduled + publishing',
+      },
+      {
+        name: 'Upload Queue',
+        key: 'queued',
+        count: queued,
+        definition: 'All unscheduled confessions in upload queue: Needs Review + Approved Unscheduled.',
+        type: 'OPERATIONAL_PIPELINE',
+        queryFilter: 'needsReview + approvedUnscheduled',
+      },
+      {
+        name: 'Quality Flagged (All States)',
+        key: 'totalQualityFlagged',
+        count: totalQualityFlagged,
+        definition: 'Total records flagged as Low Value across all lifecycle states (includes deleted and published).',
+        type: 'OVERLAPPING_METRIC',
+        queryFilter: "quality_status == 'LOW_VALUE' (across all statuses)",
+      },
+      {
+        name: 'Confirmed Absent from IG',
+        key: 'confirmedNotPublished',
+        count: confirmedNotPublished,
+        definition: 'Records verified by Instagram API reconciliation to NOT exist on Instagram.',
+        type: 'OVERLAPPING_METRIC',
+        queryFilter: "reconciliation_status == 'CONFIRMED_NOT_PUBLISHED'",
+      },
+      {
+        name: 'Safe to Retry',
+        key: 'safeToRetry',
+        count: safeToRetry,
+        definition: 'Verified absent from IG, approved or failed, not deleted, not duplicate, retries < 3.',
+        type: 'OVERLAPPING_METRIC',
+        queryFilter: "reconciliation_status == 'CONFIRMED_NOT_PUBLISHED' && eligible_for_retry",
+      },
+      {
+        name: 'Blocked by Policy',
+        key: 'blockedByPolicy',
+        count: blockedByPolicy,
+        definition: 'Failed or reconciled records blocked from auto-retry by safety policy or missing approval.',
+        type: 'OVERLAPPING_METRIC',
+        queryFilter: "confirmedNotPublished - safeToRetry (or failed without safe retry criteria)",
+      },
+    ];
+
+    return {
+      timestamp,
+      formattedTimestamp,
+      accountScope,
+      totalRecords,
+      exclusiveSum,
+      isReconciled,
+
+      exclusivePartitions: {
+        needsReview,
+        approvedUnscheduled,
+        scheduled,
+        publishing,
+        published,
+        confirmedFailed,
+        unknown,
+        duplicate,
+        lowValue,
+        deleted,
+      },
+
+      pipeline: {
+        active,
+        queued,
+        scheduled,
+        published,
+      },
+
+      overlappingMetrics: {
+        totalQualityFlagged,
+        alreadyPublishedVerified,
+        confirmedNotPublished,
+        safeToRetry,
+        blockedByPolicy,
+        manualReviewRequired,
+        unreconciled,
+      },
+
+      // Backwards-compatible legacy keys
+      queue: queued,
+      scheduled,
+      published,
+      unknown,
+      duplicates: duplicate,
+      low_value: lowValue,
+      deleted,
+      failed: confirmedFailed,
+      alreadyPublished: alreadyPublishedVerified,
+      confirmedNotPublished,
+      safeToRetry,
+      manualReview: manualReviewRequired,
+      unreconciled,
+      blockedByPolicy,
+
+      diagnostics,
+    };
+  }
+
+  /**
+   * Fast tab counts for /confessions page tabs
+   */
+  public async getTabCounts(): Promise<AuthoritativeCounts> {
+    return this.getAuthoritativeCounts();
+  }
+
+  /**
    * Calculate dashboard stats
    */
   public async getDashboardStats(): Promise<DashboardStats> {
+    const counts = await this.getAuthoritativeCounts();
     const all = !this.useSupabase()
       ? mockStore.getConfessions()
-      : (await this.getConfessions({ limit: 1000 })).confessions;
+      : (await this.getConfessions({ limit: 5000 })).confessions;
 
     const todayStr = new Date().toISOString().slice(0, 10);
     const publishedToday = all.filter(
@@ -1801,104 +2210,15 @@ export class ConfessionService {
     const settings = mockStore.getSettings();
 
     return {
-      total: all.filter((c) => c.status !== 'DELETED').length,
-      pendingReview: all.filter((c) => c.status === 'READY_FOR_REVIEW').length,
-      approved: all.filter((c) => c.status === 'APPROVED').length,
-      scheduled: all.filter((c) => c.status === 'SCHEDULED').length,
-      published: all.filter((c) => c.status === 'PUBLISHED').length,
-      rejected: all.filter((c) => c.status === 'REJECTED').length,
-      failed: all.filter((c) => c.status === 'FAILED' || c.status === 'FAILED_REQUIRES_ACTION').length,
+      total: counts.totalRecords - counts.exclusivePartitions.deleted,
+      pendingReview: counts.exclusivePartitions.needsReview,
+      approved: counts.exclusivePartitions.approvedUnscheduled,
+      scheduled: counts.exclusivePartitions.scheduled,
+      published: counts.exclusivePartitions.published,
+      rejected: counts.exclusivePartitions.lowValue,
+      failed: counts.exclusivePartitions.confirmedFailed,
       publishedToday,
       maxDailyPosts: settings.max_daily_posts || 8,
-    };
-  }
-
-  /**
-   * Fast tab counts for /confessions page tabs without downloading full entity payloads
-   */
-  public async getTabCounts(): Promise<{
-    queue: number;
-    scheduled: number;
-    published: number;
-    unknown: number;
-    duplicates: number;
-    low_value: number;
-    deleted: number;
-    failed: number;
-    alreadyPublished?: number;
-    confirmedNotPublished?: number;
-    safeToRetry?: number;
-    manualReview?: number;
-    unreconciled?: number;
-  }> {
-    const all = !this.useSupabase()
-      ? mockStore.getConfessions()
-      : (await this.getConfessions({ limit: 1000 })).confessions;
-
-    const queue = all.filter(
-      (c) =>
-        !['PUBLISHED', 'SCHEDULED', 'REJECTED', 'DELETED', 'FAILED', 'FAILED_CONFIRMED', 'FAILED_REQUIRES_ACTION', 'UNKNOWN', 'UNKNOWN_NEEDS_REVIEW', 'DUPLICATE_ALREADY_PUBLISHED', 'CANCELLED'].includes(c.status) &&
-        c.quality_status !== 'LOW_VALUE'
-    ).length;
-
-    const scheduled = all.filter((c) => c.status === 'SCHEDULED').length;
-    const published = all.filter((c) => c.status === 'PUBLISHED').length;
-    const unknown = all.filter(
-      (c) => c.status === 'UNKNOWN' || c.status === 'UNKNOWN_NEEDS_REVIEW'
-    ).length;
-    const duplicates = all.filter(
-      (c) => c.status === 'DUPLICATE_ALREADY_PUBLISHED'
-    ).length;
-    const low_value = all.filter(
-      (c) =>
-        c.status !== 'DELETED' &&
-        (c.quality_status === 'LOW_VALUE' ||
-          c.quality_decision === 'REJECT' ||
-          (c.status === 'REJECTED' && c.quality_category === 'LOW_INFORMATION'))
-    ).length;
-    const deleted = all.filter((c) => c.status === 'DELETED').length;
-    const failed = all.filter(
-      (c) =>
-        (c.status === 'FAILED' || c.status === 'FAILED_CONFIRMED' || c.status === 'FAILED_REQUIRES_ACTION') &&
-        !c.instagram_media_id &&
-        !c.published_at
-    ).length;
-
-    const alreadyPublished = all.filter(
-      (c) => c.status === 'PUBLISHED' || c.reconciliation_status === 'ALREADY_PUBLISHED' || c.reconciliation_status === 'VERIFIED'
-    ).length;
-    const confirmedNotPublished = all.filter(
-      (c) => c.reconciliation_status === 'CONFIRMED_NOT_PUBLISHED'
-    ).length;
-    const safeToRetry = all.filter(
-      (c) =>
-        c.reconciliation_status === 'CONFIRMED_NOT_PUBLISHED' &&
-        (c.status === 'APPROVED' || c.status === 'FAILED_CONFIRMED' || c.status === 'FAILED')
-    ).length;
-    const manualReview = all.filter(
-      (c) => c.reconciliation_status === 'MANUAL_REVIEW' || c.status === 'UNKNOWN_NEEDS_REVIEW'
-    ).length;
-    const unreconciled = all.filter(
-      (c) =>
-        c.reconciliation_status === 'NOT_CHECKED' ||
-        c.reconciliation_status === 'CHECKING' ||
-        (!c.reconciliation_status && (c.status === 'FAILED' || c.status === 'UNKNOWN' || c.status === 'UNKNOWN_NEEDS_REVIEW'))
-    ).length;
-
-    return {
-      queue,
-      scheduled,
-      published,
-      unknown,
-      duplicates,
-      low_value,
-      deleted,
-      failed,
-      alreadyPublished,
-      confirmedNotPublished,
-      safeToRetry,
-      manualReview,
-      unreconciled,
     };
   }
 }
