@@ -449,6 +449,63 @@ class BackgroundJobService {
       completed_at: new Date().toISOString(),
     });
   }
+
+  // ---------------------------------------------------------------------------
+  // 5. Asynchronous Sheet Sync Job Worker
+  // ---------------------------------------------------------------------------
+
+  public async startSheetSyncJob(): Promise<BackgroundJob> {
+    const job = this.createJob('SHEET_SYNC');
+
+    setTimeout(() => {
+      this.runSheetSyncWorker(job.id).catch((err) => {
+        console.error(`[BackgroundJobService] Unhandled error in sheet sync job #${job.id}:`, err);
+        mockStore.updateJob(job.id, {
+          status: 'FAILED',
+          error: err?.message || 'Sheet sync failed',
+          completed_at: new Date().toISOString(),
+        });
+      });
+    }, 10);
+
+    return job;
+  }
+
+  private async runSheetSyncWorker(jobId: string): Promise<void> {
+    if (this.isCancelled(jobId)) return;
+    mockStore.updateJob(jobId, {
+      status: 'RUNNING',
+      started_at: new Date().toISOString(),
+      current_step: 'Reading Google Sheet...',
+      message: 'Scanning Google Sheet submissions and reconciling publication states...',
+    });
+
+    const { sheetSyncService } = await import('@/services/sheetSyncService');
+    const report = await sheetSyncService.syncGoogleSheet({
+      onProgress: (stepMessage, current, total) => {
+        if (this.isCancelled(jobId)) return;
+        mockStore.updateJob(jobId, {
+          current_step: stepMessage,
+          message: stepMessage,
+          total: total || report?.totalRowsExamined || 0,
+          processed: current,
+        });
+      },
+    });
+
+    mockStore.updateJob(jobId, {
+      status: 'COMPLETED',
+      total: report.totalRowsExamined,
+      processed: report.totalRowsExamined,
+      success_count: report.newRowsImported + report.existingRecordsUpdated,
+      skipped_count: report.duplicatesDetected,
+      failed_count: report.sheetUpdatesFailed,
+      current_step: 'Completed',
+      message: `Full Google Sheets Sync Complete: ${report.newRowsImported} imported, ${report.existingRecordsUpdated} updated, ${report.alreadyPublishedVerified} verified published, ${report.sheetUpdatesSuccessful} sheet cells updated.`,
+      result: report,
+      completed_at: new Date().toISOString(),
+    });
+  }
 }
 
 export const backgroundJobService = new BackgroundJobService();

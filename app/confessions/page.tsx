@@ -946,6 +946,7 @@ export default function ConfessionsPage() {
                       {activeJob.type === 'QUEUE_REPAIR' && 'Queue Repair Running in Background'}
                       {activeJob.type === 'RECONCILIATION' && 'Live Instagram Reconciliation Running in Background'}
                       {activeJob.type === 'RETRY_FAILED' && 'Retrying Eligible Records in Background'}
+                      {activeJob.type === 'SHEET_SYNC' && 'Full Google Sheets Synchronization Running in Background'}
                     </span>
                     <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-200 text-indigo-800 border border-indigo-300">
                       {activeJob.status}

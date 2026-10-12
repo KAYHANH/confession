@@ -236,6 +236,8 @@ export interface ColumnMapping {
   instagramUrlColumn: string;
   processedAtColumn: string;
   errorColumn: string;
+  idColumn?: string;
+  scheduledAtColumn?: string;
 }
 
 export interface GoogleSheetConfig {
@@ -418,4 +420,47 @@ export interface AuthoritativeCounts {
   blockedByPolicy: number;
 
   diagnostics: StatusCountItem[];
+}
+
+export type SheetSyncActionTaken =
+  | 'IMPORTED'
+  | 'STATUS_CORRECTED'
+  | 'PUBLICATION_VERIFIED'
+  | 'QUARANTINED_DUPLICATE'
+  | 'MARKED_DELETED'
+  | 'UNCHANGED';
+
+export interface SheetSyncItem {
+  rowNumber: number;
+  confessionId?: string;
+  submitter?: string;
+  textPreview: string;
+  sheetStatusBefore: string;
+  sheetStatusAfter: string;
+  dbStatus: string;
+  actionTaken: SheetSyncActionTaken;
+  evidence?: string;
+}
+
+export interface SheetSyncReport {
+  totalRowsExamined: number;
+  newRowsImported: number;
+  existingRecordsUpdated: number;
+  alreadyPublishedVerified: number;
+  queuedRecords: number;
+  scheduledRecords: number;
+  confirmedFailedRecords: number;
+  unknownRecords: number;
+  duplicatesDetected: number;
+  lowValueOrReviewRecords: number;
+  deletedRecords: number;
+  sheetUpdatesSuccessful: number;
+  sheetUpdatesFailed: number;
+  errors: string[];
+  reconciliationItems: SheetSyncItem[];
+  completedAt: string;
+  durationMs: number;
+  imported?: number;
+  processed?: number;
+  deleted?: number;
 }

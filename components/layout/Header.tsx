@@ -4,6 +4,8 @@ import React, { useState } from 'react';
 import { RefreshCw, Clock, Sparkles, LogOut } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useToast } from '../ui/ToastContext';
+import { SheetSyncReportModal } from '../sheets/SheetSyncReportModal';
+import { SheetSyncReport } from '@/types';
 
 interface HeaderProps {
   title?: string;
@@ -15,8 +17,11 @@ export function Header({ title, subtitle }: HeaderProps) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [sheetStatus, setSheetStatus] = useState<{ isLive: boolean }>({ isLive: false });
+  const [spreadsheetId, setSpreadsheetId] = useState<string>('');
   const [autoPublishActive, setAutoPublishActive] = useState(false);
-  const { success, error } = useToast();
+  const [syncReport, setSyncReport] = useState<SheetSyncReport | null>(null);
+  const [isReportOpen, setIsReportOpen] = useState(false);
+  const { success, error, info } = useToast();
 
   React.useEffect(() => {
     const checkStatus = () => {
@@ -25,6 +30,9 @@ export function Header({ title, subtitle }: HeaderProps) {
         .then((data) => {
           const isConfigured = Boolean(data.spreadsheet_id && !data.spreadsheet_id.startsWith('mock'));
           setSheetStatus({ isLive: isConfigured });
+          if (data.spreadsheet_id) {
+            setSpreadsheetId(data.spreadsheet_id);
+          }
         })
         .catch(() => {});
 
@@ -45,17 +53,56 @@ export function Header({ title, subtitle }: HeaderProps) {
   const handleSyncNow = async () => {
     setIsSyncing(true);
     try {
-      const res = await fetch('/api/sheets/sync', { method: 'POST' });
+      const res = await fetch('/api/sheets/sync?async=true', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Sync failed');
       }
-      success(data.message || 'Google Sheet synced successfully!');
-      window.dispatchEvent(new CustomEvent('confessionflow:refresh'));
+
+      if (data.jobId) {
+        info('Google Sheets sync started in background...');
+        // Poll job status until completion
+        const pollJob = async () => {
+          try {
+            const jobRes = await fetch(`/api/jobs/${data.jobId}`);
+            if (!jobRes.ok) throw new Error('Failed to check background job status');
+            const jobData = await jobRes.json();
+            const job = jobData.job;
+
+            if (job.status === 'COMPLETED') {
+              setIsSyncing(false);
+              if (job.result) {
+                setSyncReport(job.result);
+                setIsReportOpen(true);
+              }
+              success(job.message || 'Google Sheets synchronized successfully!');
+              window.dispatchEvent(new CustomEvent('confessionflow:refresh'));
+            } else if (job.status === 'FAILED' || job.status === 'CANCELLED') {
+              setIsSyncing(false);
+              error(job.error || job.message || 'Synchronization failed.');
+              window.dispatchEvent(new CustomEvent('confessionflow:refresh'));
+            } else {
+              setTimeout(pollJob, 1000);
+            }
+          } catch (pollErr: any) {
+            setIsSyncing(false);
+            error(pollErr?.message || 'Error tracking sync job');
+          }
+        };
+        setTimeout(pollJob, 800);
+      } else {
+        // Synchronous fallback
+        setIsSyncing(false);
+        if (data.reconciliationItems) {
+          setSyncReport(data);
+          setIsReportOpen(true);
+        }
+        success(data.message || 'Google Sheet synced successfully!');
+        window.dispatchEvent(new CustomEvent('confessionflow:refresh'));
+      }
     } catch (err: any) {
-      error(err?.message || 'Sync failed. Please verify sheet settings.');
-    } finally {
       setIsSyncing(false);
+      error(err?.message || 'Sync failed. Please verify sheet settings.');
     }
   };
 
@@ -133,6 +180,14 @@ export function Header({ title, subtitle }: HeaderProps) {
           <span className="hidden sm:inline">{isLoggingOut ? 'Signing out...' : 'Sign Out'}</span>
         </button>
       </div>
+
+      {/* Full Google Sheets Synchronization Report Modal */}
+      <SheetSyncReportModal
+        report={syncReport}
+        isOpen={isReportOpen}
+        onClose={() => setIsReportOpen(false)}
+        spreadsheetId={spreadsheetId}
+      />
     </header>
   );
 }

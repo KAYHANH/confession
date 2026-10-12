@@ -16,6 +16,7 @@ export interface MockDatabase {
   settings: SystemSettings;
   deletedRowNumbers?: number[];
   jobs?: BackgroundJob[];
+  mockSheetRows?: Record<number, any>;
 }
 
 const DEFAULT_TEMPLATES: Template[] = [
@@ -268,6 +269,9 @@ class MockStore {
         if (!Array.isArray(parsed.jobs)) {
           parsed.jobs = [];
         }
+        if (!parsed.mockSheetRows || typeof parsed.mockSheetRows !== 'object') {
+          parsed.mockSheetRows = {};
+        }
         return parsed;
       }
     } catch (_e) {
@@ -321,6 +325,7 @@ class MockStore {
           : 'ACTIVE',
       },
       settings: { ...DEFAULT_SETTINGS },
+      mockSheetRows: {},
     };
   }
 
@@ -711,6 +716,7 @@ class MockStore {
       },
       settings: { ...DEFAULT_SETTINGS },
       jobs: [],
+      mockSheetRows: {},
     };
     this.save();
   }
@@ -765,6 +771,37 @@ class MockStore {
       return true;
     });
     return active || null;
+  }
+
+  // ─── Mock Sheet Rows (Bidirectional Sheet Sync Support) ───────────────────
+
+  public getMockSheetRows(): Record<number, any> {
+    this.ensureFresh();
+    return this.data.mockSheetRows || {};
+  }
+
+  public updateMockSheetRow(rowNumber: number, updates: any) {
+    this.ensureFresh();
+    if (!this.data.mockSheetRows) {
+      this.data.mockSheetRows = {};
+    }
+    this.data.mockSheetRows[rowNumber] = {
+      ...(this.data.mockSheetRows[rowNumber] || {}),
+      ...updates,
+    };
+    this.save();
+  }
+
+  public setMockSheetRows(rows: Record<number, any>) {
+    this.ensureFresh();
+    this.data.mockSheetRows = { ...rows };
+    this.save();
+  }
+
+  public clearMockSheetRows() {
+    this.ensureFresh();
+    this.data.mockSheetRows = {};
+    this.save();
   }
 }
 

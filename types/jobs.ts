@@ -3,7 +3,8 @@ export type JobType =
   | 'SCHEDULE_RECALCULATE'
   | 'QUEUE_REPAIR'
   | 'RECONCILIATION'
-  | 'RETRY_FAILED';
+  | 'RETRY_FAILED'
+  | 'SHEET_SYNC';
 
 export type JobStatus =
   | 'QUEUED'
