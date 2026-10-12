@@ -75,9 +75,11 @@ export default function DashboardPage() {
     }, 20000);
     const onRefresh = () => loadDashboardData();
     window.addEventListener('confessionflow:refresh', onRefresh);
+    window.addEventListener('confessionflow:settings_updated', onRefresh);
     return () => {
       clearInterval(pollInterval);
       window.removeEventListener('confessionflow:refresh', onRefresh);
+      window.removeEventListener('confessionflow:settings_updated', onRefresh);
     };
   }, [loadDashboardData]);
 

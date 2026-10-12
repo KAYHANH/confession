@@ -40,8 +40,13 @@ function SettingsContent() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [settingsVersion, setSettingsVersion] = useState<number>(1);
   const [realtimeStatus, setRealtimeStatus] = useState<'SUBSCRIBED' | 'CONNECTED' | 'ERROR' | 'TIMED_OUT' | 'CLOSED'>('SUBSCRIBED');
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
 
   // References for debouncing & optimistic rollback
+  const settingsVersionRef = useRef<number>(settingsVersion);
+  useEffect(() => {
+    settingsVersionRef.current = settingsVersion;
+  }, [settingsVersion]);
   const previousSettingsRef = useRef<SystemSettings | null>(null);
   const pendingUpdatesRef = useRef<Partial<SystemSettings>>({});
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -160,6 +165,12 @@ function SettingsContent() {
 
     setSaveStatus('SAVING');
     setSaveError(null);
+    setSaveWarning(null);
+
+    // Intermediate warning guard: 3.5s
+    const warningTimer = setTimeout(() => {
+      setSaveWarning('Save is taking longer than expected...');
+    }, 3500);
 
     // Timeout guard: 8 seconds maximum to prevent hanging forever
     const timeoutId = setTimeout(() => {
@@ -172,16 +183,18 @@ function SettingsContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...updatesToSave,
-          expected_version: settingsVersion,
+          expected_version: settingsVersionRef.current,
         }),
         signal: abortController.signal,
       });
 
+      clearTimeout(warningTimer);
       clearTimeout(timeoutId);
+      setSaveWarning(null);
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        if (res.status === 409) {
+        if (res.status === 409 || data?.error?.code === 'SETTINGS_VERSION_CONFLICT') {
           info('Settings were updated in another session. Reloading latest values...');
           await loadAllSettings();
           return;
@@ -193,20 +206,28 @@ function SettingsContent() {
       setGeneralSettings(canonical);
       previousSettingsRef.current = canonical;
       pendingUpdatesRef.current = {};
-      const newVersion = data.version || canonical.settings_version || (settingsVersion + 1);
+      const newVersion = data.version || canonical.settings_version || (settingsVersionRef.current + 1);
       setSettingsVersion(newVersion);
+      settingsVersionRef.current = newVersion;
       setSaveStatus('SAVED');
       setLastSavedAt(new Date());
 
-      // Broadcast update to other tabs/windows
+      // Broadcast update to other tabs/windows via BroadcastChannel AND localStorage
       try {
         const channel = new BroadcastChannel('confessionflow_settings');
         channel.postMessage({ type: 'SETTINGS_UPDATED', version: newVersion });
         channel.close();
       } catch {}
+      try {
+        localStorage.setItem('confessionflow_settings_version', String(newVersion));
+      } catch {}
+
+      window.dispatchEvent(new CustomEvent('confessionflow:settings_updated', { detail: { version: newVersion } }));
       window.dispatchEvent(new CustomEvent('confessionflow:refresh'));
     } catch (err: any) {
+      clearTimeout(warningTimer);
       clearTimeout(timeoutId);
+      setSaveWarning(null);
       if (err.name === 'AbortError') {
         const timeoutMsg = 'Save timed out after 8s — previous settings retained';
         setSaveError(timeoutMsg);
@@ -310,7 +331,7 @@ function SettingsContent() {
     if (tabParam) setActiveTab(tabParam);
   }, [searchParams]);
 
-  // Real-time synchronization (Supabase Realtime + Multi-Tab BroadcastChannel)
+  // Real-time synchronization (Supabase Realtime + Multi-Tab BroadcastChannel + Storage Events)
   useEffect(() => {
     const handleRemoteRefresh = () => {
       loadAllSettings();
@@ -318,13 +339,23 @@ function SettingsContent() {
     window.addEventListener('confessionflow:settings_updated', handleRemoteRefresh);
     window.addEventListener('confessionflow:refresh', handleRemoteRefresh);
 
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === 'confessionflow_settings_version') {
+        const incomingVersion = Number(event.newValue);
+        if (isNaN(incomingVersion) || incomingVersion > settingsVersionRef.current) {
+          loadAllSettings();
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
     let channel: BroadcastChannel | null = null;
     try {
       channel = new BroadcastChannel('confessionflow_settings');
       channel.onmessage = (event) => {
         if (event.data?.type === 'SETTINGS_UPDATED') {
           // If incoming version is newer than current, reload immediately
-          if (!event.data.version || event.data.version > settingsVersion) {
+          if (!event.data.version || event.data.version > settingsVersionRef.current) {
             loadAllSettings();
           }
         }
@@ -333,6 +364,7 @@ function SettingsContent() {
 
     // Supabase Realtime Channel
     let supabaseChannel: any = null;
+    let hadError = false;
     try {
       const isConfigured =
         typeof window !== 'undefined' &&
@@ -353,14 +385,22 @@ function SettingsContent() {
           .subscribe((status) => {
             if (status === 'SUBSCRIBED') {
               setRealtimeStatus('SUBSCRIBED');
+              if (hadError) {
+                // Reconnect recovery: refetch canonical settings
+                loadAllSettings();
+                hadError = false;
+              }
             } else if (status === 'CHANNEL_ERROR') {
+              hadError = true;
               setRealtimeStatus('ERROR');
               // Fallback refetch if realtime disconnects/errors
               loadAllSettings();
             } else if (status === 'TIMED_OUT') {
+              hadError = true;
               setRealtimeStatus('TIMED_OUT');
               loadAllSettings();
             } else if (status === 'CLOSED') {
+              hadError = true;
               setRealtimeStatus('CLOSED');
             }
           });
@@ -375,6 +415,7 @@ function SettingsContent() {
     return () => {
       window.removeEventListener('confessionflow:settings_updated', handleRemoteRefresh);
       window.removeEventListener('confessionflow:refresh', handleRemoteRefresh);
+      window.removeEventListener('storage', handleStorage);
       channel?.close();
       if (supabaseChannel) {
         try {
@@ -382,7 +423,7 @@ function SettingsContent() {
         } catch {}
       }
     };
-  }, [loadAllSettings, settingsVersion]);
+  }, [loadAllSettings]);
 
   // Google Sheets Handlers
   const handleTestSheetConnection = async () => {
@@ -562,7 +603,7 @@ function SettingsContent() {
               {saveStatus === 'SAVING' && (
                 <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
                   <RefreshCw className="w-3 h-3 animate-spin" />
-                  Saving...
+                  {saveWarning || 'Saving...'}
                 </span>
               )}
               {saveStatus === 'SAVED' && (
@@ -578,13 +619,18 @@ function SettingsContent() {
                 </span>
               )}
               {saveStatus === 'SAVE_FAILED' && (
-                <button
-                  onClick={() => executeSave()}
-                  className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 cursor-pointer"
-                >
-                  <AlertTriangle className="w-3 h-3" />
-                  ⚠ Save failed — Retry
-                </button>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-rose-600">
+                    ✕ Save failed — reverted
+                  </span>
+                  <button
+                    onClick={() => executeSave()}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 cursor-pointer"
+                  >
+                    <AlertTriangle className="w-3 h-3" />
+                    Retry
+                  </button>
+                </div>
               )}
             </div>
 
@@ -1530,11 +1576,13 @@ function SettingsContent() {
                         className="w-full mt-1.5 px-2 py-1.5 rounded-md border border-zinc-200 text-xs font-medium bg-white focus:outline-none focus:ring-1 focus:ring-purple-400"
                       >
                         <option value="AUTO">AUTO (Growth Adaptive)</option>
+                        <option value="AUTO_GROWTH">AUTO_GROWTH (Growth Intelligence Max Reach)</option>
                         <option value="BASELINE">BASELINE (Exploration)</option>
                         <option value="MANUAL">MANUAL (Admin Override)</option>
+                        <option value="EXPERIMENT">EXPERIMENT (A/B Testing Cadence)</option>
                       </select>
                       <span className="text-[9px] text-zinc-400 mt-1 block">
-                        AUTO allows Growth Intelligence to decide.
+                        AUTO/AUTO_GROWTH allows Growth Intelligence to decide within limits.
                       </span>
                     </div>
                   </div>
@@ -1685,7 +1733,7 @@ function SettingsContent() {
                         .map((t) => t.trim())
                         .filter(Boolean)
                         .map((t) => (t.startsWith('#') ? t : `#${t}`));
-                      setGeneralSettings({ ...generalSettings, default_hashtags: tags });
+                      updateSettingField('default_hashtags', tags);
                     }}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-medium"
                   />

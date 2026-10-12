@@ -41,8 +41,9 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
 
-    // 1. Validate payload
-    const validation = settingsService.validateSettings(body);
+    // 1. Normalize and Validate payload
+    const { normalized, originalKey, originalValue } = settingsService.normalizePayload(body);
+    const validation = settingsService.validateSettings(normalized);
     if (!validation.isValid) {
       return NextResponse.json(
         {
@@ -67,17 +68,17 @@ export async function POST(request: NextRequest) {
     // 2. Persist atomically with write verification
     let updateResult;
     try {
-      updateResult = await settingsService.updateSettings(body, {
+      updateResult = await settingsService.updateSettings(normalized, {
         author: 'admin',
         expectedVersion,
       });
     } catch (updateErr: any) {
-      if (updateErr?.code === 'CONFLICT') {
+      if (updateErr?.code === 'SETTINGS_VERSION_CONFLICT' || updateErr?.code === 'CONFLICT') {
         return NextResponse.json(
           {
             success: false,
             error: {
-              code: 'CONFLICT',
+              code: 'SETTINGS_VERSION_CONFLICT',
               message: updateErr.message,
               currentVersion: updateErr.currentVersion,
             },
@@ -89,9 +90,9 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Cascade branding/moderation updates to existing unpublished confessions
-    const syncResult = await confessionService.syncSettingsToConfessions(body);
+    const syncResult = await confessionService.syncSettingsToConfessions(normalized);
 
-    return NextResponse.json({
+    const responsePayload: any = {
       success: true,
       settings: updateResult.settings,
       version: updateResult.version,
@@ -102,7 +103,16 @@ export async function POST(request: NextRequest) {
       // Backward compatibility fields
       ...updateResult.settings,
       auto_publish_enabled: updateResult.settings.auto_publish,
-    });
+    };
+
+    if (originalKey !== undefined) {
+      responsePayload.setting = {
+        key: originalKey,
+        value: originalValue,
+      };
+    }
+
+    return NextResponse.json(responsePayload);
   } catch (error: any) {
     console.error('[API Settings] Failed to persist settings:', error);
     return NextResponse.json(

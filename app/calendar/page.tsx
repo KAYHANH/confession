@@ -38,6 +38,13 @@ export default function CalendarPage() {
 
   useEffect(() => {
     loadCalendarData();
+    const handleRefresh = () => loadCalendarData();
+    window.addEventListener('confessionflow:refresh', handleRefresh);
+    window.addEventListener('confessionflow:settings_updated', handleRefresh);
+    return () => {
+      window.removeEventListener('confessionflow:refresh', handleRefresh);
+      window.removeEventListener('confessionflow:settings_updated', handleRefresh);
+    };
   }, [loadCalendarData]);
 
   const handleCancelSchedule = async (id: string) => {

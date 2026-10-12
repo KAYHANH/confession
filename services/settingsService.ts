@@ -25,7 +25,14 @@ export interface SettingsValidationResult {
 
 export interface SettingsUpdateResult {
   success: boolean;
-  settings: SystemSettings;
+  setting?: {
+    key: string;
+    value: any;
+  };
+  settings: SystemSettings & {
+    active_hours_start: string;
+    active_hours_end: string;
+  };
   version: number;
   updatedAt: string;
   changedFields: string[];
@@ -44,11 +51,154 @@ export class SettingsService {
   }
 
   /**
+   * Normalizes incoming payloads supporting either object maps or { key, value } formats,
+   * converting aliases (ACTIVE_HOURS_START, '10:00', maxDailyPosts) to canonical SystemSettings fields.
+   */
+  public normalizePayload(input: any): {
+    normalized: Partial<SystemSettings>;
+    originalKey?: string;
+    originalValue?: any;
+  } {
+    if (!input || typeof input !== 'object') {
+      return { normalized: {} };
+    }
+
+    const normalized: Partial<SystemSettings> = {};
+    let originalKey: string | undefined;
+    let originalValue: any | undefined;
+
+    // Handle { key: 'ACTIVE_HOURS_START', value: '10:00' } pattern
+    if (input.key !== undefined && input.value !== undefined) {
+      originalKey = String(input.key);
+      originalValue = input.value;
+      const keyUpper = originalKey.toUpperCase().replace(/[- ]/g, '_');
+
+      switch (keyUpper) {
+        case 'ACTIVE_HOURS_START':
+        case 'ACTIVE_HOURS_START_HOUR':
+        case 'START_HOUR': {
+          const val =
+            typeof input.value === 'string' && input.value.includes(':')
+              ? parseInt(input.value.split(':')[0], 10)
+              : parseInt(input.value, 10);
+          normalized.auto_publish_start_hour = val;
+          break;
+        }
+        case 'ACTIVE_HOURS_END':
+        case 'ACTIVE_HOURS_END_HOUR':
+        case 'END_HOUR': {
+          const val =
+            typeof input.value === 'string' && input.value.includes(':')
+              ? parseInt(input.value.split(':')[0], 10)
+              : parseInt(input.value, 10);
+          normalized.auto_publish_end_hour = val;
+          break;
+        }
+        case 'ACCOUNT_TIMEZONE':
+        case 'TIMEZONE': {
+          normalized.timezone = String(input.value);
+          break;
+        }
+        case 'TARGET_DAILY_POSTS':
+        case 'TARGET_POSTS': {
+          normalized.target_daily_posts = parseInt(input.value, 10);
+          break;
+        }
+        case 'MAX_DAILY_POSTS':
+        case 'MAX_POSTS': {
+          normalized.max_daily_posts = parseInt(input.value, 10);
+          break;
+        }
+        case 'MIN_DAILY_POSTS':
+        case 'MIN_POSTS': {
+          normalized.min_daily_posts = parseInt(input.value, 10);
+          break;
+        }
+        case 'MIN_GAP':
+        case 'MIN_GAP_MINUTES': {
+          normalized.min_gap_minutes = parseInt(input.value, 10);
+          break;
+        }
+        case 'MAX_GAP':
+        case 'MAX_GAP_MINUTES': {
+          normalized.max_gap_minutes = parseInt(input.value, 10);
+          break;
+        }
+        case 'STRATEGY_AUTHORITY_MODE':
+        case 'AUTHORITY_MODE':
+        case 'SCHEDULING_STRATEGY_MODE': {
+          normalized.scheduling_strategy_mode = input.value;
+          break;
+        }
+        case 'AUTO_PUBLISH':
+        case 'AUTO_PUBLISH_ENABLED': {
+          const b = input.value === true || input.value === 'true' || input.value === 1 || input.value === '1';
+          normalized.auto_publish = b;
+          normalized.auto_publish_enabled = b;
+          break;
+        }
+        case 'OVERNIGHT_REST': {
+          if (input.value === false || input.value === 'false') {
+            normalized.auto_publish_start_hour = 0;
+            normalized.auto_publish_end_hour = 24;
+          } else {
+            normalized.auto_publish_start_hour = 9;
+            normalized.auto_publish_end_hour = 22;
+          }
+          break;
+        }
+        default: {
+          (normalized as any)[input.key] = input.value;
+          break;
+        }
+      }
+      return { normalized, originalKey, originalValue };
+    }
+
+    // Handle dictionary maps: e.g. { activeHoursStart: '10:00', maxDailyPosts: 3 }
+    for (const [k, v] of Object.entries(input)) {
+      if (k === 'expected_version' || k === 'expectedVersion' || v === undefined) continue;
+
+      const kUpper = k.toUpperCase().replace(/[- ]/g, '_');
+      if (kUpper === 'ACTIVE_HOURS_START' || k === 'activeHoursStart') {
+        const val = typeof v === 'string' && v.includes(':') ? parseInt(v.split(':')[0], 10) : parseInt(v as any, 10);
+        normalized.auto_publish_start_hour = val;
+      } else if (kUpper === 'ACTIVE_HOURS_END' || k === 'activeHoursEnd') {
+        const val = typeof v === 'string' && v.includes(':') ? parseInt(v.split(':')[0], 10) : parseInt(v as any, 10);
+        normalized.auto_publish_end_hour = val;
+      } else if (kUpper === 'ACCOUNT_TIMEZONE' || k === 'timezone') {
+        normalized.timezone = String(v);
+      } else if (kUpper === 'TARGET_DAILY_POSTS' || k === 'targetDailyPosts') {
+        normalized.target_daily_posts = parseInt(v as any, 10);
+      } else if (kUpper === 'MAX_DAILY_POSTS' || k === 'maxDailyPosts') {
+        normalized.max_daily_posts = parseInt(v as any, 10);
+      } else if (kUpper === 'MIN_DAILY_POSTS' || k === 'minDailyPosts') {
+        normalized.min_daily_posts = parseInt(v as any, 10);
+      } else if (kUpper === 'MIN_GAP' || k === 'minGap' || k === 'minGapMinutes') {
+        normalized.min_gap_minutes = parseInt(v as any, 10);
+      } else if (kUpper === 'MAX_GAP' || k === 'maxGap' || k === 'maxGapMinutes') {
+        normalized.max_gap_minutes = parseInt(v as any, 10);
+      } else if (kUpper === 'STRATEGY_AUTHORITY_MODE' || k === 'authorityMode' || k === 'schedulingStrategyMode') {
+        normalized.scheduling_strategy_mode = v as any;
+      } else if (kUpper === 'AUTO_PUBLISH' || k === 'autoPublish' || k === 'autoPublishEnabled') {
+        const b = v === true || v === 'true' || v === 1 || v === '1';
+        normalized.auto_publish = b;
+        normalized.auto_publish_enabled = b;
+      } else {
+        (normalized as any)[k] = v;
+      }
+    }
+
+    return { normalized, originalKey, originalValue };
+  }
+
+  /**
    * Validate settings payload against strict business and operational rules.
    */
   public validateSettings(updates: Partial<SystemSettings>): SettingsValidationResult {
+    const { normalized } = this.normalizePayload(updates);
     const errors: string[] = [];
-    const validated: Partial<SystemSettings> = { ...updates };
+    const validated: Partial<SystemSettings> = { ...normalized };
 
     // 1. Timezone validation
     if (updates.timezone !== undefined) {
@@ -196,18 +346,28 @@ export class SettingsService {
   /**
    * Synchronous getter for subsystems requiring immediate local access
    */
-  public getSettingsSync(): SystemSettings {
+  public getSettingsSync(): SystemSettings & {
+    active_hours_start: string;
+    active_hours_end: string;
+  } {
     const raw = mockStore.getSettings();
+    const startHour = raw.auto_publish_start_hour ?? 9;
+    const endHour = raw.auto_publish_end_hour ?? 22;
     return {
       ...raw,
       auto_publish_enabled: raw.auto_publish,
+      active_hours_start: `${String(startHour).padStart(2, '0')}:00`,
+      active_hours_end: `${String(endHour).padStart(2, '0')}:00`,
     };
   }
 
   /**
    * Asynchronous canonical getter
    */
-  public async getSettings(): Promise<SystemSettings> {
+  public async getSettings(): Promise<SystemSettings & {
+    active_hours_start: string;
+    active_hours_end: string;
+  }> {
     return this.getSettingsSync();
   }
 
@@ -229,12 +389,14 @@ export class SettingsService {
       expectedVersion?: number;
     }
   ): Promise<SettingsUpdateResult> {
+    const { normalized, originalKey, originalValue } = this.normalizePayload(updates);
+
     // 1. Validate
-    const validation = this.validateSettings(updates);
+    const validation = this.validateSettings(normalized);
     if (!validation.isValid) {
       throw new Error(`Settings validation failed: ${validation.errors.join('; ')}`);
     }
-    const cleanUpdates = validation.validated || updates;
+    const cleanUpdates = validation.validated || normalized;
 
     // 2. Load current settings & check conflict
     const current = this.getSettingsSync();
@@ -244,7 +406,7 @@ export class SettingsService {
       const err = new Error(
         `Conflict: settings were updated in another session (current version ${currentVersion}, expected ${context.expectedVersion}). Please reload.`
       );
-      (err as any).code = 'CONFLICT';
+      (err as any).code = 'SETTINGS_VERSION_CONFLICT';
       (err as any).currentVersion = currentVersion;
       throw err;
     }
@@ -337,26 +499,31 @@ export class SettingsService {
       }
     }
 
-    // 8. Log the mutation with change details
+    // 8. Log the mutation with change details (Requirement 25)
     for (const field of changedFields) {
+      const oldVal = (current as any)[field];
+      const newVal = (verified as any)[field];
       mockStore.addLog({
         action: 'SETTINGS_UPDATED',
         entity_type: 'settings',
         entity_id: field,
         metadata: {
+          admin: context?.author || 'admin',
           author: context?.author || 'admin',
-          field,
-          old_value: (current as any)[field],
-          new_value: (verified as any)[field],
-          version: nextVersion,
+          setting: field,
+          old_value: oldVal,
+          new_value: newVal,
           timestamp: updatedAtIso,
+          source: 'web_ui',
+          version: nextVersion,
         },
       });
     }
 
     return {
       success: true,
-      settings: verified,
+      setting: originalKey !== undefined ? { key: originalKey, value: originalValue } : undefined,
+      settings: this.getSettingsSync(),
       version: nextVersion,
       updatedAt: updatedAtIso,
       changedFields,

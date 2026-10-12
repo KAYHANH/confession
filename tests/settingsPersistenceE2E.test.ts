@@ -241,4 +241,134 @@ describe('ConfessionFlow - Authoritative Settings Persistence & Real-time Synchr
       expect(after.brand_name).toBe(initialBrand);
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Test 7: Payload Normalization & Canonical Key-Value Format
+  // --------------------------------------------------------------------------
+  describe('Payload Normalization & Key-Value Format', () => {
+    it('normalizes single key/value payloads with string timestamps e.g. ACTIVE_HOURS_START = "10:00"', async () => {
+      const res = await settingsService.updateSettings({
+        key: 'ACTIVE_HOURS_START',
+        value: '10:00',
+      } as any);
+
+      expect(res.success).toBe(true);
+      expect(res.setting?.key).toBe('ACTIVE_HOURS_START');
+      expect(res.setting?.value).toBe('10:00');
+      expect(res.settings.auto_publish_start_hour).toBe(10);
+      expect(res.settings.active_hours_start).toBe('10:00');
+    });
+
+    it('normalizes ACTIVE_HOURS_END = "20:00"', async () => {
+      const res = await settingsService.updateSettings({
+        key: 'ACTIVE_HOURS_END',
+        value: '20:00',
+      } as any);
+
+      expect(res.success).toBe(true);
+      expect(res.setting?.key).toBe('ACTIVE_HOURS_END');
+      expect(res.setting?.value).toBe('20:00');
+      expect(res.settings.auto_publish_end_hour).toBe(20);
+      expect(res.settings.active_hours_end).toBe('20:00');
+    });
+
+    it('throws SETTINGS_VERSION_CONFLICT with currentVersion on version mismatch', async () => {
+      const current = await settingsService.getSettings();
+      const currentVersion = current.settings_version || 1;
+
+      try {
+        await settingsService.updateSettings(
+          { key: 'MAX_DAILY_POSTS', value: 4 } as any,
+          { expectedVersion: currentVersion + 10 }
+        );
+        expect.unreachable('Should have thrown conflict error');
+      } catch (err: any) {
+        expect(err.code).toBe('SETTINGS_VERSION_CONFLICT');
+        expect(err.currentVersion).toBe(currentVersion);
+      }
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Test 8: Full Settings Test Matrix (Requirement 29)
+  // --------------------------------------------------------------------------
+  describe('Full Settings Matrix (Requirement 29: Every Setting Tested)', () => {
+    it('persists and validates ACTIVE_HOURS_START and ACTIVE_HOURS_END', async () => {
+      const res = await settingsService.updateSettings({
+        auto_publish_start_hour: 10,
+        auto_publish_end_hour: 20,
+      });
+      expect(res.settings.auto_publish_start_hour).toBe(10);
+      expect(res.settings.auto_publish_end_hour).toBe(20);
+      expect(res.settings.active_hours_start).toBe('10:00');
+      expect(res.settings.active_hours_end).toBe('20:00');
+    });
+
+    it('persists and validates TARGET_DAILY_POSTS and MAX_DAILY_POSTS', async () => {
+      const res = await settingsService.updateSettings({
+        min_daily_posts: 1,
+        target_daily_posts: 3,
+        max_daily_posts: 5,
+      });
+      expect(res.settings.target_daily_posts).toBe(3);
+      expect(res.settings.max_daily_posts).toBe(5);
+    });
+
+    it('persists and validates MIN_GAP and MAX_GAP', async () => {
+      const res = await settingsService.updateSettings({
+        min_gap_minutes: 30,
+        max_gap_minutes: 75,
+      });
+      expect(res.settings.min_gap_minutes).toBe(30);
+      expect(res.settings.max_gap_minutes).toBe(75);
+    });
+
+    it('persists and validates TIMEZONE', async () => {
+      const res = await settingsService.updateSettings({
+        timezone: 'Asia/Kolkata',
+      });
+      expect(res.settings.timezone).toBe('Asia/Kolkata');
+    });
+
+    it('persists and validates OVERNIGHT_REST toggle', async () => {
+      // Overnight rest disabled (24/7)
+      const res1 = await settingsService.updateSettings({
+        key: 'OVERNIGHT_REST',
+        value: false,
+      } as any);
+      expect(res1.settings.auto_publish_start_hour).toBe(0);
+      expect(res1.settings.auto_publish_end_hour).toBe(24);
+
+      // Overnight rest enabled (standard 9 to 22)
+      const res2 = await settingsService.updateSettings({
+        key: 'OVERNIGHT_REST',
+        value: true,
+      } as any);
+      expect(res2.settings.auto_publish_start_hour).toBe(9);
+      expect(res2.settings.auto_publish_end_hour).toBe(22);
+    });
+
+    it('persists and validates STRATEGY_AUTHORITY_MODE across all supported modes', async () => {
+      for (const mode of ['AUTO', 'AUTO_GROWTH', 'BASELINE', 'MANUAL', 'EXPERIMENT'] as const) {
+        const res = await settingsService.updateSettings({
+          scheduling_strategy_mode: mode,
+        });
+        expect(res.settings.scheduling_strategy_mode).toBe(mode);
+      }
+    });
+
+    it('persists and validates AUTO_PUBLISH and syncs publishing_mode bidirectionally', async () => {
+      const resOff = await settingsService.updateSettings({
+        auto_publish: false,
+      });
+      expect(resOff.settings.auto_publish).toBe(false);
+      expect(resOff.settings.publishing_mode).toBe('MANUAL_APPROVAL');
+
+      const resOn = await settingsService.updateSettings({
+        auto_publish: true,
+      });
+      expect(resOn.settings.auto_publish).toBe(true);
+      expect(resOn.settings.publishing_mode).toBe('AUTO_PUBLISH');
+    });
+  });
 });
