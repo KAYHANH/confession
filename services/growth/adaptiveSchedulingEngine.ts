@@ -632,19 +632,22 @@ export class AdaptiveSchedulingEngine {
     const now = new Date();
     const nowMs = now.getTime();
 
-    // Auto-approve eligible READY_FOR_REVIEW items only if manual approval is disabled or explicitly requested
+    // Auto-approve eligible READY_FOR_REVIEW items only if manual approval is disabled, auto-publish is active, or explicitly requested
     const isAutoApprove =
       options?.includeReadyForReview === true ||
+      settings.publishing_mode === 'AUTO_PUBLISH' ||
+      settings.publishing_mode === 'AUTO_APPROVAL' ||
       (settings.require_approval === false && settings.publishing_mode !== 'MANUAL_APPROVAL');
 
     const allConfessions = mockStore.getConfessions();
 
     if (isAutoApprove) {
+      const isQualityGateActive = settings.enable_quality_gate !== false;
       const eligibleReady = allConfessions.filter(
         (c) =>
           c.status === 'READY_FOR_REVIEW' &&
           (c.moderation_status === 'LOW' || (c.moderation_status as any) === 'SAFE' || !c.moderation_status) &&
-          c.quality_status !== 'LOW_VALUE' &&
+          (!isQualityGateActive || c.quality_override === true || (c.quality_status !== 'LOW_VALUE' && c.quality_status !== 'NEEDS_REVIEW')) &&
           !c.published_at &&
           !c.instagram_media_id &&
           !['UNKNOWN', 'MANUAL_REVIEW', 'DUPLICATE', 'ALREADY_PUBLISHED'].includes(c.reconciliation_status as any)

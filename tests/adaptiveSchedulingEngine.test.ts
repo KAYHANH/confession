@@ -405,6 +405,130 @@ describe('AdaptiveSchedulingEngine - Canonical Scheduling Authority', () => {
       expect(autoItem.scheduled_at).not.toBeNull();
     });
 
+    it('should auto-approve safe low-risk items in AUTO_PUBLISH mode even if require_approval was default true', async () => {
+      const mockConfessions: Confession[] = [
+        {
+          id: 'auto-safe-1',
+          google_sheet_row: 2,
+          google_sheet_id: 'sheet',
+          google_sheet_name: 'Sheet1',
+          name: 'Anonymous',
+          original_text: 'Safe confession in 24/7 auto publish',
+          cleaned_text: 'Safe confession in 24/7 auto publish',
+          display_name: 'Anonymous',
+          is_anonymous: true,
+          status: 'READY_FOR_REVIEW',
+          moderation_status: 'LOW',
+          moderation_reason: null,
+          quality_status: 'HIGH_VALUE',
+          ai_processed: true,
+          template_id: 't-1',
+          generated_image_url: null,
+          generated_image_path: null,
+          caption: null,
+          hashtags: [],
+          scheduled_at: null,
+          published_at: null,
+          instagram_media_id: null,
+          instagram_permalink: null,
+          retry_count: 0,
+          error_message: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        {
+          id: 'auto-high-risk',
+          google_sheet_row: 3,
+          google_sheet_id: 'sheet',
+          google_sheet_name: 'Sheet1',
+          name: 'Anonymous',
+          original_text: 'High risk confession content',
+          cleaned_text: 'High risk confession content',
+          display_name: 'Anonymous',
+          is_anonymous: true,
+          status: 'READY_FOR_REVIEW',
+          moderation_status: 'HIGH',
+          moderation_reason: 'Safety flag',
+          quality_status: 'HIGH_VALUE',
+          ai_processed: true,
+          template_id: 't-1',
+          generated_image_url: null,
+          generated_image_path: null,
+          caption: null,
+          hashtags: [],
+          scheduled_at: null,
+          published_at: null,
+          instagram_media_id: null,
+          instagram_permalink: null,
+          retry_count: 0,
+          error_message: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        {
+          id: 'auto-low-value',
+          google_sheet_row: 4,
+          google_sheet_id: 'sheet',
+          google_sheet_name: 'Sheet1',
+          name: 'Anonymous',
+          original_text: 'ok lol',
+          cleaned_text: 'ok lol',
+          display_name: 'Anonymous',
+          is_anonymous: true,
+          status: 'READY_FOR_REVIEW',
+          moderation_status: 'LOW',
+          moderation_reason: null,
+          quality_status: 'LOW_VALUE',
+          ai_processed: true,
+          template_id: 't-1',
+          generated_image_url: null,
+          generated_image_path: null,
+          caption: null,
+          hashtags: [],
+          scheduled_at: null,
+          published_at: null,
+          instagram_media_id: null,
+          instagram_permalink: null,
+          retry_count: 0,
+          error_message: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ];
+
+      vi.spyOn(mockStore, 'getConfessions').mockReturnValue(mockConfessions);
+      vi.spyOn(mockStore, 'updateConfession').mockImplementation((id, updates) => {
+        const item = mockConfessions.find((c) => c.id === id);
+        if (item) Object.assign(item, updates);
+        return item || null;
+      });
+      vi.spyOn(mockStore, 'getSettings').mockReturnValue({
+        ...mockStore.getSettings(),
+        auto_publish: true,
+        publishing_mode: 'AUTO_PUBLISH',
+        require_approval: true, // Default before user explicitly toggles
+        auto_publish_start_hour: 9,
+        auto_publish_end_hour: 22,
+        timezone: 'Asia/Kolkata',
+      });
+
+      const updated = await adaptiveSchedulingEngine.recalculateFutureQueue();
+
+      const safeItem = mockConfessions.find((c) => c.id === 'auto-safe-1')!;
+      const highRiskItem = mockConfessions.find((c) => c.id === 'auto-high-risk')!;
+      const lowValItem = mockConfessions.find((c) => c.id === 'auto-low-value')!;
+
+      // Safe item MUST be automatically scheduled
+      expect(safeItem.status).toBe('SCHEDULED');
+      expect(safeItem.scheduled_at).not.toBeNull();
+
+      // High-risk and low-value items MUST NOT be auto-approved
+      expect(highRiskItem.status).toBe('READY_FOR_REVIEW');
+      expect(highRiskItem.scheduled_at).toBeNull();
+      expect(lowValItem.status).toBe('READY_FOR_REVIEW');
+      expect(lowValItem.scheduled_at).toBeNull();
+    });
+
     it('validateFutureSchedules returns complete diagnostic breakdown and enforces active hours invariant', async () => {
       // Create a slot valid at 11:00 AM IST tomorrow
       // 11:00 IST = 05:30 UTC

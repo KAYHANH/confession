@@ -1299,6 +1299,7 @@ function SettingsContent() {
                         auto_publish: enabled,
                         auto_publish_enabled: enabled,
                         publishing_mode: enabled ? 'AUTO_PUBLISH' : 'MANUAL_APPROVAL',
+                        require_approval: !enabled,
                       }, true);
                     }}
                     className="sr-only peer"
@@ -1319,6 +1320,7 @@ function SettingsContent() {
                         publishing_mode: mode,
                         auto_publish: isAuto,
                         auto_publish_enabled: isAuto,
+                        require_approval: mode === 'MANUAL_APPROVAL',
                       }, true);
                     }}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-semibold bg-white"
@@ -1327,6 +1329,36 @@ function SettingsContent() {
                     <option value="AUTO_APPROVAL">Auto-Approve Safe Confessions (Wait for manual broadcast)</option>
                     <option value="MANUAL_APPROVAL">Manual Admin Approval Only</option>
                   </select>
+                </div>
+
+                {/* Require Manual Admin Approval Toggle */}
+                <div className="flex items-center justify-between p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/50">
+                  <div>
+                    <div className="font-semibold text-zinc-900 flex items-center gap-2">
+                      <span>Require Manual Admin Approval</span>
+                      {generalSettings.require_approval !== false ? (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                          MANUAL REVIEW ON
+                        </span>
+                      ) : (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                          AUTO-APPROVE SAFE POSTS
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-zinc-500 mt-0.5 max-w-lg">
+                      When turned OFF, incoming confessions with LOW moderation risk and passing the quality gate are automatically approved and scheduled into the queue without waiting for manual clicks.
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
+                    <input
+                      type="checkbox"
+                      checked={generalSettings.require_approval !== false}
+                      onChange={(e) => updateSettingField('require_approval', e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-600"></div>
+                  </label>
                 </div>
 
                 {/* SECTION 1: HARD OPERATIONAL LIMITS / GUARDRAILS */}

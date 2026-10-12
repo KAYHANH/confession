@@ -123,6 +123,9 @@ export default function ConfessionsPage() {
     isRandomGap: boolean;
     jitter: number;
     strategyMode: string;
+    autoPublish: boolean;
+    publishingMode: string;
+    requireApproval: boolean;
   }>({
     interval: 180,
     startHour: 9,
@@ -130,6 +133,9 @@ export default function ConfessionsPage() {
     isRandomGap: true,
     jitter: 30,
     strategyMode: 'AUTO',
+    autoPublish: false,
+    publishingMode: 'MANUAL_APPROVAL',
+    requireApproval: true,
   });
 
   // Growth Cadence Intelligence state
@@ -219,6 +225,7 @@ export default function ConfessionsPage() {
             const interval = isRandom
               ? (settings.current_random_gap_minutes ?? settings.auto_publish_interval_minutes ?? 60)
               : (settings.auto_publish_interval_minutes ?? 180);
+            const isAuto = Boolean(settings.auto_publish === true && settings.publishing_mode === 'AUTO_PUBLISH');
             setPublishSettings({
               interval,
               startHour: settings.auto_publish_start_hour ?? 9,
@@ -226,6 +233,9 @@ export default function ConfessionsPage() {
               isRandomGap: isRandom,
               jitter: settings.anti_bot_jitter_minutes ?? 30,
               strategyMode: settings.scheduling_strategy_mode || 'AUTO',
+              autoPublish: isAuto,
+              publishingMode: settings.publishing_mode || 'MANUAL_APPROVAL',
+              requireApproval: settings.require_approval !== false,
             });
           }
         } catch {}
@@ -1432,20 +1442,36 @@ export default function ConfessionsPage() {
               <div className="font-bold text-sm text-indigo-950 flex items-center gap-2">
                 <span>Upload Queue: Unscheduled Submissions ({tabCounts.pipeline?.queued ?? tabCounts.queue})</span>
                 <span className="text-[10px] font-semibold bg-indigo-200/80 text-indigo-800 px-2 py-0.5 rounded-full">
-                  Pending Schedule Slot
+                  {publishSettings.autoPublish ? '24/7 Auto-Publish Active' : 'Pending Schedule Slot'}
                 </span>
               </div>
               <p className="text-indigo-800/90 leading-relaxed">
-                Confessions displayed in this tab are active submissions awaiting approval or initial schedule slot allocation.
-                Once allocated, they automatically receive concrete calendar ETAs and appear under the{' '}
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('scheduled')}
-                  className="font-bold text-indigo-950 underline hover:text-indigo-700 cursor-pointer inline-flex items-center gap-0.5"
-                >
-                  Scheduled ({tabCounts.pipeline?.scheduled ?? tabCounts.scheduled})
-                </button>{' '}
-                tab.
+                {publishSettings.autoPublish ? (
+                  <>
+                    24/7 Hands-Free Auto-Publish is active. Safe, low-risk confessions are automatically approved and allocated calendar slots into the{' '}
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('scheduled')}
+                      className="font-bold text-indigo-950 underline hover:text-indigo-700 cursor-pointer inline-flex items-center gap-0.5"
+                    >
+                      Scheduled ({tabCounts.pipeline?.scheduled ?? tabCounts.scheduled})
+                    </button>{' '}
+                    queue. Confessions requiring review (high risk or low value) remain here for administrator attention.
+                  </>
+                ) : (
+                  <>
+                    Confessions displayed in this tab are active submissions awaiting approval or initial schedule slot allocation.
+                    Once allocated, they automatically receive concrete calendar ETAs and appear under the{' '}
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('scheduled')}
+                      className="font-bold text-indigo-950 underline hover:text-indigo-700 cursor-pointer inline-flex items-center gap-0.5"
+                    >
+                      Scheduled ({tabCounts.pipeline?.scheduled ?? tabCounts.scheduled})
+                    </button>{' '}
+                    tab.
+                  </>
+                )}
               </p>
             </div>
           </div>
@@ -1694,12 +1720,25 @@ export default function ConfessionsPage() {
                             ) : (
                               c.status === 'READY_FOR_REVIEW' ? (
                                 <div className="flex flex-col items-start gap-0.5">
-                                  <span className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200/80 px-1.5 py-0.5 rounded">
-                                    Waiting for approval
-                                  </span>
-                                  <span className="text-[9px] text-zinc-400">
-                                    Needs review before scheduling
-                                  </span>
+                                  {publishSettings.autoPublish && (c.moderation_status === 'LOW' || (c.moderation_status as any) === 'SAFE' || !c.moderation_status) && c.quality_status !== 'LOW_VALUE' ? (
+                                    <>
+                                      <span className="text-[10px] font-medium text-purple-700 bg-purple-50 border border-purple-200/80 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                        <Sparkles className="w-2.5 h-2.5 text-purple-600 animate-pulse" /> Auto-Approve Pending
+                                      </span>
+                                      <span className="text-[9px] text-zinc-400">
+                                        Next slot allocation in progress
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200/80 px-1.5 py-0.5 rounded">
+                                        Waiting for approval
+                                      </span>
+                                      <span className="text-[9px] text-zinc-400">
+                                        Needs review before scheduling
+                                      </span>
+                                    </>
+                                  )}
                                 </div>
                               ) : c.status === 'APPROVED' ? (
                                 <div className="flex flex-col items-start gap-0.5">

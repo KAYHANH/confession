@@ -411,7 +411,7 @@ export class SettingsService {
       throw err;
     }
 
-    // 3. Bidirectional sync between auto_publish and publishing_mode
+    // 3. Bidirectional sync between auto_publish, publishing_mode, and require_approval
     if (cleanUpdates.auto_publish === false || cleanUpdates.auto_publish_enabled === false) {
       cleanUpdates.auto_publish = false;
       cleanUpdates.auto_publish_enabled = false;
@@ -425,6 +425,14 @@ export class SettingsService {
       cleanUpdates.auto_publish = true;
       cleanUpdates.auto_publish_enabled = true;
       cleanUpdates.publishing_mode = 'AUTO_PUBLISH';
+    }
+
+    if (cleanUpdates.require_approval === undefined) {
+      if (cleanUpdates.publishing_mode === 'MANUAL_APPROVAL') {
+        cleanUpdates.require_approval = true;
+      } else if (cleanUpdates.publishing_mode === 'AUTO_PUBLISH' || cleanUpdates.publishing_mode === 'AUTO_APPROVAL') {
+        cleanUpdates.require_approval = false;
+      }
     }
 
     const nextVersion = currentVersion + 1;
@@ -486,6 +494,10 @@ export class SettingsService {
       'random_gap_enabled',
       'timezone',
       'scheduling_mode',
+      'auto_publish',
+      'auto_publish_enabled',
+      'publishing_mode',
+      'require_approval',
     ];
 
     const hasSchedulingChanges = schedulingKeys.some((k) => changedFields.includes(k));
