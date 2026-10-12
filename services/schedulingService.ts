@@ -119,11 +119,42 @@ export class SchedulingService {
 
       console.log(`[SchedulingService] Found ${due.length} scheduled posts due for publishing.`);
 
+      if (due.length === 0) {
+        return { published, errors };
+      }
+
       // Check daily post limit constraint
       const stats = await confessionService.getDashboardStats();
       if (stats.publishedToday >= stats.maxDailyPosts) {
         console.warn(`[SchedulingService] Daily publishing limit reached (${stats.publishedToday}/${stats.maxDailyPosts}). Halting automated batch.`);
         return { published, errors };
+      }
+
+      // Post spacing cooldown guard for due posts (prevents rapid-firing 1 post every minute)
+      if (!force) {
+        const minGap = Math.max(20, settings.min_gap_minutes ?? 30);
+        const minIntervalMs = minGap * 60 * 1000;
+        const allPublishedTimes = mockStore
+          .getConfessions()
+          .filter((c) => c.status === 'PUBLISHED' && c.published_at)
+          .map((c) => new Date(c.published_at!).getTime());
+        const publishedLogTimes = mockStore
+          .getPublishedPosts()
+          .filter((p) => p.published_at)
+          .map((p) => new Date(p.published_at).getTime());
+        const allTimes = [...allPublishedTimes, ...publishedLogTimes, this.lastPublishedAtMs].filter((t) => t > 0);
+
+        if (allTimes.length > 0) {
+          const mostRecentPublishMs = Math.max(...allTimes);
+          const elapsedMs = Date.now() - mostRecentPublishMs;
+          if (elapsedMs < minIntervalMs) {
+            const remainingMinutes = Math.ceil((minIntervalMs - elapsedMs) / 60000);
+            console.log(
+              `[SchedulingService] Due post postponed: cooldown of ${minGap}m active (${Math.floor(elapsedMs / 60000)}m since last post). Next post in ${remainingMinutes}m.`
+            );
+            return { published, errors };
+          }
+        }
       }
 
       for (const post of due) {
@@ -137,10 +168,33 @@ export class SchedulingService {
           await confessionService.publishConfession(post.id);
           published.push(post.id);
           this.lastPublishedAtMs = Date.now();
+
+          // If there are additional due posts that are stale, reschedule them to legal future slots with proper gaps
+          if (due.length > 1) {
+            try {
+              await adaptiveSchedulingEngine.recalculateFutureQueue();
+            } catch {}
+          }
           // Space out due posts organically instead of blasting them all simultaneously
           break;
         } catch (err: any) {
           errors.push({ id: post.id, error: err?.message || 'Failed' });
+          // Prevent infinite retry loop: transition failing post out of SCHEDULED state
+          try {
+            const fresh = mockStore.getConfessionById(post.id);
+            if (fresh && (fresh.status === 'SCHEDULED' || fresh.status === 'PUBLISHING')) {
+              const newRetries = (fresh.retry_count || 0) + 1;
+              const nextStatus: ConfessionStatus = newRetries >= 3 ? 'FAILED_REQUIRES_ACTION' : 'FAILED_CONFIRMED';
+              await confessionService.updateConfession(post.id, {
+                status: nextStatus,
+                retry_count: newRetries,
+                scheduled_at: null,
+                error_message: err?.message || 'Failed during scheduled publishing',
+                reconciliation_status: 'CONFIRMED_NOT_PUBLISHED',
+              });
+            }
+          } catch {}
+          break;
         }
       }
 
@@ -153,7 +207,7 @@ export class SchedulingService {
   /**
    * Run automated Google Sheet sync (called by /api/cron/sync)
    */
-  public async syncGoogleSheet(): Promise<{ imported: number; processed: number }> {
+  public async syncGoogleSheet(): Promise<{ imported: number; processed: number; deleted: number }> {
     const config = mockStore.getGoogleSheetConfig();
     const rows = await googleSheetsService.fetchRows(config);
 
@@ -176,14 +230,72 @@ export class SchedulingService {
     }
 
     const existing = [...mockConfessions, ...dbConfessions];
+    const deletedRowNumbers = mockStore.getDeletedRowNumbers();
 
-    // Combine deleted rows from ALL sources:
-    // 1) Explicitly saved deletedRowNumbers in mockStore
-    // 2) Any confession in existing list with status === 'DELETED'
-    const deletedRowNumbers = new Set<number>([
-      ...mockStore.getDeletedRowNumbers(),
-      ...(existing.filter((c) => c.status === 'DELETED').map((c) => c.google_sheet_row).filter(Boolean) as number[]),
-    ]);
+    // Map rows currently in Google Sheet by row number and by content hash
+    const sheetRowNumbers = new Set(rows.map((r) => r.rowNumber));
+    const sheetRowsByHash = new Map<string, (typeof rows)[0]>();
+    for (const r of rows) {
+      if (r.confession && r.confession.trim().length > 0) {
+        sheetRowsByHash.set(generateContentHash(r.confession), r);
+      }
+    }
+
+    const maxSheetRow = rows.length > 0 ? Math.max(...rows.map((r) => r.rowNumber)) : 0;
+    let deletedCount = 0;
+    let scheduleRecalculationNeeded = false;
+
+    // 1. RECONCILE DELETIONS:
+    // Identify confessions in ConfessionFlow that originated from Google Sheets but were deleted/cleared in the sheet
+    for (const c of existing) {
+      if (!c.google_sheet_row || c.status === 'DELETED') {
+        continue;
+      }
+
+      const confHash = c.normalized_content_hash || c.content_hash || generateContentHash(c.cleaned_text || c.original_text || '');
+      const isStillInSheetByRow = sheetRowNumbers.has(c.google_sheet_row);
+
+      // Check if matching row in sheet is explicitly marked DELETED
+      const rowAtSameIndex = rows.find((r) => r.rowNumber === c.google_sheet_row);
+      const isMarkedDeletedInSheet = rowAtSameIndex && (rowAtSameIndex.status || '').trim().toUpperCase() === 'DELETED';
+
+      // A confession is considered deleted from Google Sheet if:
+      // (a) Row in sheet is explicitly marked DELETED.
+      // (b) Row number is past the current maximum row in the sheet (user truncated/deleted rows).
+      // (c) Row number is missing from current sheet rows, AND its content hash is not active at this row number.
+      const matchingRowByHash = sheetRowsByHash.get(confHash);
+      const isHashClaimedByAnotherActiveConf = matchingRowByHash && existing.some(
+        (other) => other.id !== c.id && other.google_sheet_row === matchingRowByHash.rowNumber && other.status !== 'DELETED'
+      );
+
+      const isDeletedFromSheet =
+        isMarkedDeletedInSheet ||
+        c.google_sheet_row > maxSheetRow ||
+        (!isStillInSheetByRow && (!matchingRowByHash || isHashClaimedByAnotherActiveConf));
+
+      if (isDeletedFromSheet) {
+        console.log(`[SchedulingService] Confession #${c.google_sheet_row || c.id} was deleted from Google Sheet. Syncing DELETED status...`);
+        deletedRowNumbers.add(c.google_sheet_row);
+        deletedCount++;
+        scheduleRecalculationNeeded = true;
+
+        const updatePayload: Partial<Confession> = {
+          status: 'DELETED',
+          deleted_at: new Date().toISOString(),
+          scheduled_at: null,
+          error_message: 'Deleted in Google Sheet',
+        };
+
+        mockStore.updateConfession(c.id, updatePayload);
+        if (useSupabase) {
+          confessionService.deleteConfession(c.id, false).catch(() => {});
+        }
+      }
+    }
+
+    if (deletedCount > 0) {
+      mockStore.setDeletedRowNumbers(Array.from(deletedRowNumbers));
+    }
 
     const existingRowSet = new Set(
       existing.map((c) => c.google_sheet_row).filter(Boolean)
@@ -419,6 +531,16 @@ export class SchedulingService {
       }
     }
 
+    // Automatically recalculate schedule if any additions or deletions took place
+    if (scheduleRecalculationNeeded || newConfessions.length > 0) {
+      try {
+        const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+        await adaptiveSchedulingEngine.recalculateFutureQueue();
+      } catch (err) {
+        console.warn('[SchedulingService] Failed to recalculate schedule after sync:', err);
+      }
+    }
+
     // Update sheet connection sync state
     mockStore.updateGoogleSheetConfig({
       last_sync_at: new Date().toISOString(),
@@ -429,7 +551,7 @@ export class SchedulingService {
     mockStore.addLog({
       action: 'SHEET_SYNC',
       entity_type: 'sheet',
-      metadata: { imported: newConfessions.length, totalInSheet: rows.length },
+      metadata: { imported: newConfessions.length, deleted: deletedCount, totalInSheet: rows.length },
     });
 
     // If publishing mode is AUTO_APPROVAL or AUTO_PUBLISH, auto-approve low risk submissions
@@ -438,7 +560,7 @@ export class SchedulingService {
       await this.autoApproveEligibleConfessions();
     }
 
-    return { imported: newConfessions.length, processed: newConfessions.length };
+    return { imported: newConfessions.length, processed: rows.length, deleted: deletedCount };
   }
 
   /**
@@ -677,6 +799,18 @@ export class SchedulingService {
           ? ['LOW', 'MEDIUM']
           : ['LOW'];
 
+      // Build set of all published content hashes to guarantee duplicate prevention
+      const publishedHashes = new Set(
+        freshConfessions
+          .filter((c) => (c.status === 'PUBLISHED' || !!c.instagram_media_id) && (c.normalized_content_hash || c.content_hash))
+          .map((c) => c.normalized_content_hash || c.content_hash)
+      );
+      const publishedLedgerHashes = new Set(
+        mockStore.getPublishedPosts()
+          .filter((p) => p.preview_text)
+          .map((p) => generateContentHash(p.preview_text))
+      );
+
       // Prioritize strictly APPROVED, READY_FOR_REVIEW (in auto-publish mode), or unposted SCHEDULED confessions in FIFO row order
       const isAutoPublishMode = settings.publishing_mode === 'AUTO_PUBLISH' || settings.auto_publish || force;
       const eligibleCandidates = freshConfessions
@@ -697,6 +831,8 @@ export class SchedulingService {
             allowedRisks.includes(c.moderation_status) &&
             !c.instagram_media_id &&
             !c.published_at &&
+            !publishedHashes.has(c.normalized_content_hash || c.content_hash || '') &&
+            !publishedLedgerHashes.has(c.normalized_content_hash || c.content_hash || '') &&
             validatePublishEligibility(c, settings).isEligible
         )
         .sort((a, b) => {
@@ -883,9 +1019,13 @@ export class SchedulingService {
         try {
           const fresh = mockStore.getConfessionById(candidate.id);
           if (fresh && fresh.status === 'PUBLISHING') {
+            const newRetries = (fresh.retry_count || 0) + 1;
+            const nextStatus: ConfessionStatus = newRetries >= 3 ? 'FAILED_REQUIRES_ACTION' : 'FAILED_CONFIRMED';
             await confessionService.updateConfession(candidate.id, {
-              status: 'APPROVED',
+              status: nextStatus,
+              retry_count: newRetries,
               error_message: err?.message || 'Publishing cycle interrupted',
+              reconciliation_status: 'CONFIRMED_NOT_PUBLISHED',
             });
           }
         } catch {}
@@ -926,6 +1066,10 @@ export class SchedulingService {
       } catch {}
     }
     if (count > 0) {
+      try {
+        const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+        await adaptiveSchedulingEngine.recalculateFutureQueue();
+      } catch {}
       console.log(`[AutoPublisher] Auto-approved ${count} low-risk confessions.`);
     }
     return count;
@@ -975,283 +1119,24 @@ export class SchedulingService {
     preserveExistingFuture?: boolean;
     enforceRollingHorizon?: boolean;
     rollingHorizonHours?: number;
+    includeReadyForReview?: boolean;
   }): Promise<ScheduleGenerationResult> {
-    const settings = mockStore.getSettings();
-    const tz = settings.timezone || 'Asia/Kolkata';
-    const forceRecalculate = options?.forceRecalculate ?? false;
-    const preserveExisting = options?.preserveExistingFuture ?? true;
-
-    if (forceRecalculate) {
-      const recalc = await adaptiveSchedulingEngine.recalculateFutureQueue(options);
-      return {
-        totalScheduled: recalc.totalScheduled,
-        preservedCount: 0,
-        newlyScheduledCount: recalc.newlyScheduledCount,
-        strategy: recalc.strategy as any,
-        mode: 'growth_optimized',
-        recommendationId: 'recalc',
-        queueWindow: recalc.queueWindow,
-        items: recalc.items.map((it) => ({
-          id: it.id,
-          google_sheet_row: it.rowNumber,
-          scheduled_at: it.newScheduledAt,
-          strategy: it.strategy as any,
-          gap_minutes: it.gapMinutes,
-        })),
-      };
-    }
-
-    const { cadenceAnalyzer } = await import('@/services/growth/cadenceAnalyzer');
-    const rec = await cadenceAnalyzer.getCadenceRecommendation();
-
-    // Query authoritative Daily Growth Plan
-    let dailyPlan: any = null;
-    try {
-      dailyPlan = await cadenceAnalyzer.generateDailyGrowthPlan();
-    } catch (dpErr) {
-      console.warn('[SchedulingService] Failed to query daily growth plan for schedule generation:', dpErr);
-    }
-
-    const effectiveDailyCap = dailyPlan ? dailyPlan.effective_daily_posts : (settings.max_daily_posts || 24);
-    const enforceRollingHorizon = options?.enforceRollingHorizon ?? false;
-    const horizonHours = options?.rollingHorizonHours ?? settings.rolling_horizon_hours ?? 24;
-
-    await this.autoHealConfessions();
-    const allConfessions = mockStore.getConfessions();
-    const now = new Date();
-    const nowMs = now.getTime();
-    const horizonLimitMs = nowMs + horizonHours * 60 * 60 * 1000;
-
-    // Eligible candidates for scheduled queue: strictly only APPROVED or already SCHEDULED
-    const eligible = allConfessions.filter(
-      (c) =>
-        (c.status === 'APPROVED' || c.status === 'SCHEDULED') &&
-        !c.published_at &&
-        !c.instagram_media_id
-    );
-
-    const preservedItems: Confession[] = [];
-    const itemsToSchedule: Confession[] = [];
-
-    for (const c of eligible) {
-      const hasFutureSchedule =
-        c.status === 'SCHEDULED' &&
-        c.scheduled_at &&
-        new Date(c.scheduled_at).getTime() > nowMs;
-
-      if (!forceRecalculate && preserveExisting && hasFutureSchedule) {
-        preservedItems.push(c);
-      } else {
-        itemsToSchedule.push(c);
-      }
-    }
-
-    // If any item that needs scheduling has an earlier row number than preserved items,
-    // merge them together so earlier submissions (#028) are NEVER leapfrogged by later ones (#051)!
-    const minScheduleRow = itemsToSchedule.length > 0 ? Math.min(...itemsToSchedule.map((c) => c.google_sheet_row || 0)) : Infinity;
-    const maxPreservedRow = preservedItems.length > 0 ? Math.max(...preservedItems.map((c) => c.google_sheet_row || 0)) : -Infinity;
-
-    if (minScheduleRow < maxPreservedRow) {
-      itemsToSchedule.push(...preservedItems);
-      preservedItems.length = 0;
-    }
-
-    // Sort strictly in FIFO order by Google Sheet row number initially
-    itemsToSchedule.sort((a, b) => (a.google_sheet_row || 0) - (b.google_sheet_row || 0));
-
-    // When QUALITY_FIRST mode is active, rank items using ContentScoringService
-    try {
-      const { contentScoringService } = await import('@/services/growth/contentScoringService');
-      const minThreshold = settings.content_quality_threshold ?? 50;
-      const scoredRanked = await contentScoringService.rankCandidates(itemsToSchedule, minThreshold);
-      if (scoredRanked.length > 0) {
-        const rankedIds = new Set(scoredRanked.map((s) => s.confession.id));
-        const orderedItems = [
-          ...scoredRanked.map((s) => {
-            const conf = s.confession;
-            conf.predicted_performance_score = s.predictedPerformanceScore;
-            return conf;
-          }),
-          ...itemsToSchedule.filter((c) => !rankedIds.has(c.id)),
-        ];
-        itemsToSchedule.length = 0;
-        itemsToSchedule.push(...orderedItems);
-      }
-    } catch (scoreErr: any) {
-      console.warn('[SchedulingService] Content scoring ranking warning:', scoreErr?.message || scoreErr);
-    }
-
-    // Track daily post volume across days to enforce daily limit
-    const postsPerDay = new Map<string, number>();
-
-    // Count already published posts for today
-    const todayKey = this.getDayKey(now, tz);
-    const publishedToday = allConfessions.filter(
-      (c) => c.status === 'PUBLISHED' && c.published_at && this.getDayKey(new Date(c.published_at), tz) === todayKey
-    ).length;
-    postsPerDay.set(todayKey, publishedToday);
-
-    // Count preserved items in postsPerDay
-    for (const p of preservedItems) {
-      if (p.scheduled_at) {
-        const k = this.getDayKey(new Date(p.scheduled_at), tz);
-        postsPerDay.set(k, (postsPerDay.get(k) || 0) + 1);
-      }
-    }
-
-    // Starting cursor for new schedule slots
-    let cursor: Date;
-    if (preservedItems.length > 0) {
-      const latestPreservedMs = Math.max(
-        ...preservedItems.map((p) => new Date(p.scheduled_at!).getTime())
-      );
-      cursor = new Date(Math.max(nowMs + 2 * 60 * 1000, latestPreservedMs));
-    } else {
-      cursor = this.alignToActiveHours(new Date(nowMs + 5 * 60 * 1000), settings, rec.preferredWindows);
-    }
-
-    // Post Saturation & Velocity Guard: If recent post is actively accelerating, delay initial cursor
-    try {
-      const { postSaturationService } = await import('@/services/growth/postSaturationService');
-      const satEval = await postSaturationService.evaluateSaturation();
-      if (satEval.hasRecentPost && satEval.shouldDelayNextPost && satEval.isAccelerating) {
-        const waitMs = satEval.recommendedWaitMinutes * 60 * 1000;
-        const delayedTime = nowMs + waitMs;
-        if (delayedTime > cursor.getTime()) {
-          cursor = this.alignToActiveHours(new Date(delayedTime), settings, rec.preferredWindows);
-        }
-      }
-    } catch {}
-
-    const scheduledResults: Array<{
-      id: string;
-      google_sheet_row?: number;
-      scheduled_at: string;
-      strategy: CadenceStrategyType;
-      gap_minutes: number;
-      reason?: string;
-    }> = [];
-
-    let lastRolledGap = 0;
-    for (let idx = 0; idx < itemsToSchedule.length; idx++) {
-      const c = itemsToSchedule[idx];
-      const format: MediaFormatType = c.slides && c.slides.length > 1 ? 'CAROUSEL' : 'IMAGE';
-      const category = (c as any).content_category || undefined;
-
-      const isFixed = settings.random_gap_enabled === false || settings.scheduling_strategy_mode === 'MANUAL' || rec.mode === 'manual';
-      let gapInfo: { min: number; max: number; rolledGap: number; reason: string };
-
-      if (isFixed) {
-        const base = settings.scheduling_strategy_mode === 'MANUAL'
-          ? Math.max(15, settings.manual_fixed_gap_minutes || settings.auto_publish_interval_minutes || 60)
-          : Math.max(15, settings.auto_publish_interval_minutes || 180);
-        const maxJitter = settings.scheduling_strategy_mode === 'MANUAL'
-          ? 0
-          : (settings.anti_bot_jitter_minutes !== undefined ? settings.anti_bot_jitter_minutes : 30);
-        const jitter = maxJitter > 0 ? (idx * 7) % (maxJitter + 1) : 0;
-        gapInfo = {
-          min: base,
-          max: base + maxJitter,
-          rolledGap: base + jitter,
-          reason: `Fixed cooldown: ${base}m base (+${jitter}m jitter)`,
-        };
-      } else {
-        gapInfo = cadenceAnalyzer.calculateEffectiveGap(rec, format, category);
-
-        // Prevent adjacent identical gaps (e.g. 70m, 70m) to guarantee organic human variation
-        if (gapInfo.rolledGap === lastRolledGap && gapInfo.max > gapInfo.min) {
-          gapInfo.rolledGap = Math.floor(Math.random() * (gapInfo.max - gapInfo.min + 1)) + gapInfo.min;
-          if (gapInfo.rolledGap === lastRolledGap) {
-            gapInfo.rolledGap = gapInfo.rolledGap > gapInfo.min ? gapInfo.rolledGap - 5 : gapInfo.rolledGap + 5;
-          }
-        }
-      }
-      lastRolledGap = gapInfo.rolledGap;
-
-      // Advance cursor by the evidence-backed interval
-      let tentativeCursor = new Date(cursor.getTime() + gapInfo.rolledGap * 60 * 1000);
-      tentativeCursor = this.alignToActiveHours(tentativeCursor, settings, rec.preferredWindows);
-
-      // Enforce daily cap (pushing excess posts to next day's active hours)
-      let dayKey = this.getDayKey(tentativeCursor, tz);
-      let daySafety = 0;
-      while ((postsPerDay.get(dayKey) || 0) >= effectiveDailyCap && daySafety < 30) {
-        daySafety++;
-        tentativeCursor = new Date(tentativeCursor.getTime() + 24 * 60 * 60 * 1000);
-        tentativeCursor = this.alignToActiveHours(tentativeCursor, settings, rec.preferredWindows);
-        dayKey = this.getDayKey(tentativeCursor, tz);
-      }
-
-      // Rolling Horizon Guard: If enforceRollingHorizon is enabled and slot exceeds rolling window
-      if (enforceRollingHorizon && tentativeCursor.getTime() > horizonLimitMs) {
-        console.log(`[SchedulingService] Rolling horizon reached (${horizonHours}h limit). Halting future slot allocation. Remaining items remain in APPROVED queue.`);
-        // Revert remaining unassigned items to APPROVED
-        for (let j = idx; j < itemsToSchedule.length; j++) {
-          const rem = itemsToSchedule[j];
-          if (rem.status === 'SCHEDULED' || rem.scheduled_at) {
-            await confessionService.updateConfession(rem.id, {
-              status: 'APPROVED',
-              scheduled_at: null,
-              scheduling_reason: `Held in approved queue: Exceeds ${horizonHours}h rolling horizon. Scheduled as rolling window advances.`,
-            });
-          }
-        }
-        break;
-      }
-
-      cursor = tentativeCursor;
-      postsPerDay.set(dayKey, (postsPerDay.get(dayKey) || 0) + 1);
-
-      const scheduledAtIso = cursor.toISOString();
-      const isGrowthOptimized = !isFixed && rec.mode === 'growth_optimized';
-      const gapHours = Math.floor(gapInfo.rolledGap / 60);
-      const gapMins = gapInfo.rolledGap % 60;
-      const gapLabel = gapHours > 0 ? (gapMins > 0 ? `${gapHours}h ${gapMins}m` : `${gapHours}h`) : `${gapMins}m`;
-      const strategyLabel = isFixed ? 'Fixed cooldown' : isGrowthOptimized ? 'Growth optimized' : 'Random fallback';
-      const whyThisTime = `${strategyLabel} · ${gapLabel} (${gapInfo.reason || rec.strategy})`;
-
-      await confessionService.updateConfession(c.id, {
-        status: 'SCHEDULED',
-        scheduled_at: scheduledAtIso,
-        scheduling_strategy: isFixed ? 'ADMIN_OVERRIDE' : rec.strategy,
-        scheduling_gap_minutes: gapInfo.rolledGap,
-        scheduling_reason: gapInfo.reason,
-        scheduling_confidence: isFixed ? 'HIGH' : rec.confidence,
-        scheduling_evidence_count: isFixed ? 0 : rec.evidenceCount,
-        experiment_id: isFixed ? undefined : rec.experimentId,
-        predicted_performance_score: c.predicted_performance_score,
-        why_this_time: whyThisTime,
-      });
-
-      scheduledResults.push({
-        id: c.id,
-        google_sheet_row: c.google_sheet_row,
-        scheduled_at: scheduledAtIso,
-        strategy: isFixed ? 'ADMIN_OVERRIDE' : rec.strategy,
-        gap_minutes: gapInfo.rolledGap,
-        reason: gapInfo.reason,
-      });
-    }
-
-    const allScheduledTimes = [
-      ...preservedItems.map((p) => p.scheduled_at!),
-      ...scheduledResults.map((s) => s.scheduled_at),
-    ]
-      .filter(Boolean)
-      .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
-
+    const recalc = await adaptiveSchedulingEngine.recalculateFutureQueue(options);
     return {
-      totalScheduled: allScheduledTimes.length,
-      preservedCount: preservedItems.length,
-      newlyScheduledCount: scheduledResults.length,
-      strategy: rec.strategy,
-      mode: rec.mode,
-      recommendationId: rec.id,
-      queueWindow: {
-        earliest: allScheduledTimes[0] || null,
-        latest: allScheduledTimes[allScheduledTimes.length - 1] || null,
-      },
-      items: scheduledResults,
+      totalScheduled: recalc.totalScheduled,
+      preservedCount: recalc.preservedCount,
+      newlyScheduledCount: recalc.newlyScheduledCount,
+      strategy: recalc.strategy as any,
+      mode: 'growth_optimized',
+      recommendationId: 'canonical_adaptive',
+      queueWindow: recalc.queueWindow,
+      items: recalc.items.map((it) => ({
+        id: it.id,
+        google_sheet_row: it.rowNumber,
+        scheduled_at: it.newScheduledAt,
+        strategy: it.strategy as any,
+        gap_minutes: it.gapMinutes,
+      })),
     };
   }
 

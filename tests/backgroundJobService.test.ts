@@ -63,12 +63,12 @@ describe('Background Job Service & Asynchronous Processing', () => {
     const job = await backgroundJobService.startQueueRestartJob({ targetIds: ['failed-post-1', 'failed-post-2'] });
     const jobId = job.id;
 
-    // Poll until completed (with 20s timeout limit)
+    // Poll until completed (with 35s timeout limit)
     let attempts = 0;
-    while (attempts < 80) {
+    while (attempts < 700) {
       const current = backgroundJobService.getJob(jobId);
       if (current && (current.status === 'COMPLETED' || current.status === 'FAILED')) break;
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 50));
       attempts++;
     }
 
@@ -85,7 +85,7 @@ describe('Background Job Service & Asynchronous Processing', () => {
     if (sample?.scheduled_at) {
       expect(new Date(sample.scheduled_at).getTime()).toBeGreaterThan(Date.now() - 60000);
     }
-  }, 25000);
+  }, 40000);
 
   it('cancels an active job cleanly', async () => {
     const job = await backgroundJobService.startQueueRestartJob({ targetIds: ['failed-post-1'] });

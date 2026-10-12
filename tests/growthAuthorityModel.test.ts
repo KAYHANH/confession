@@ -326,6 +326,13 @@ describe('ConfessionFlow - Final Scheduling Authority Model', () => {
   // Test 7: Post Velocity Hold delays next scheduled post
   // -------------------------------------------------------------
   it('Test 7: should hold next post when current post is actively accelerating', async () => {
+    vi.spyOn(mockStore, 'getSettings').mockReturnValue({
+      ...mockStore.getSettings(),
+      auto_publish: true,
+      publishing_mode: 'AUTO_PUBLISH',
+      auto_publish_start_hour: 0,
+      auto_publish_end_hour: 24,
+    });
     vi.spyOn(postSaturationService, 'evaluateSaturation').mockResolvedValue({
       hasRecentPost: true,
       shouldDelayNextPost: true,

@@ -29,6 +29,16 @@ import {
   StaleQueueRepairResult,
 } from '@/types/growth';
 
+export interface SchedulingDecision {
+  scheduledAt: string;
+  strategySource: CanonicalStrategySource | string;
+  strategyVersion?: string;
+  gapMinutes: number;
+  timezone: string;
+  reasonType: string;
+  reason: string;
+}
+
 export class AdaptiveSchedulingEngine {
   private static instance: AdaptiveSchedulingEngine;
 
@@ -212,7 +222,7 @@ export class AdaptiveSchedulingEngine {
         sample_size: 0,
         is_learned: false,
         reason: `Configured fixed cadence active (${baseGap}m interval${jitter > 0 ? ` + up to ${jitter}m jitter` : ''}).`,
-        label: `Configured Cadence (${baseGap}m)`,
+        label: `Fixed cooldown (${baseGap}m)`,
       };
     }
 
@@ -332,8 +342,79 @@ export class AdaptiveSchedulingEngine {
   }
 
   // ---------------------------------------------------------------------------
-  // 4. Single Post Scheduling: scheduleNextCandidate
+  // 4. Decision Validation & Single Post Scheduling
   // ---------------------------------------------------------------------------
+
+  /**
+   * Validates a scheduling decision object before persisting to database
+   */
+  public validateSchedulingDecision(decision: SchedulingDecision, settings: any): void {
+    if (!decision || !decision.scheduledAt) {
+      throw new Error('Scheduling decision validation failed: scheduledAt is missing or null.');
+    }
+    const d = new Date(decision.scheduledAt);
+    if (isNaN(d.getTime())) {
+      throw new Error(`Scheduling decision validation failed: scheduledAt "${decision.scheduledAt}" is not a valid date.`);
+    }
+    if (d.getTime() <= Date.now() - 5000) {
+      throw new Error(`Scheduling decision validation failed: scheduledAt "${decision.scheduledAt}" must be in the future.`);
+    }
+
+    const tz = decision.timezone || settings.timezone || 'Asia/Kolkata';
+    const startHour = settings.auto_publish_start_hour ?? 9;
+    const endHour = settings.auto_publish_end_hour ?? 22;
+    const is24_7 = (startHour === 0 && endHour >= 24) || (startHour === endHour) || (startHour === 0 && endHour === 0);
+
+    if (!is24_7) {
+      const parts = this.getZonedParts(d, tz);
+      const isAfter = parts.hour > endHour || (parts.hour === endHour && (parts.minute > 0 || parts.second > 0));
+      const isBefore = parts.hour < startHour;
+      if (isAfter || isBefore) {
+        throw new Error(
+          `Scheduling decision validation failed: scheduledAt "${decision.scheduledAt}" (${parts.hour}:${parts.minute} ${tz}) falls outside active hours (${startHour}:00–${endHour}:00).`
+        );
+      }
+    }
+
+    const validSources = ['CONFIGURED', 'BASELINE', 'LEARNED', 'EXPERIMENT'];
+    if (!validSources.includes(decision.strategySource)) {
+      throw new Error(`Scheduling decision validation failed: invalid strategySource "${decision.strategySource}". Must be one of ${validSources.join(', ')}.`);
+    }
+
+    if (typeof decision.gapMinutes !== 'number' || isNaN(decision.gapMinutes) || decision.gapMinutes < 0) {
+      throw new Error('Scheduling decision validation failed: gapMinutes must be a non-negative number.');
+    }
+  }
+
+  /**
+   * Canonical operation: scheduleNextEligiblePost
+   * Schedules the next eligible post or a specific post
+   */
+  public async scheduleNextEligiblePost(
+    candidateOrId?: Confession | string,
+    options?: { forceTime?: string }
+  ): Promise<Confession | null> {
+    let candidate: Confession | null = null;
+    if (typeof candidateOrId === 'string') {
+      candidate = mockStore.getConfessionById(candidateOrId) || null;
+    } else if (candidateOrId) {
+      candidate = candidateOrId;
+    } else {
+      const all = mockStore.getConfessions();
+      candidate = all.find((c) =>
+        (c.status === 'APPROVED' || c.status === 'SCHEDULED') &&
+        !c.published_at &&
+        !c.instagram_media_id &&
+        c.moderation_status !== 'HIGH' &&
+        c.quality_status !== 'LOW_VALUE' &&
+        !['UNKNOWN', 'MANUAL_REVIEW', 'DUPLICATE', 'ALREADY_PUBLISHED', 'NEEDS_REVIEW'].includes(c.reconciliation_status as any) &&
+        !c.scheduled_at
+      ) || null;
+    }
+
+    if (!candidate) return null;
+    return await this.scheduleNextCandidate(candidate, options);
+  }
 
   /**
    * Schedules a single approved candidate at the next available legal slot
@@ -370,6 +451,18 @@ export class AdaptiveSchedulingEngine {
         ? `Manual Schedule · Adjusted (${alignment.reason})`
         : 'Manual Schedule · Configured by administrator';
 
+      const decision: SchedulingDecision = {
+        scheduledAt: scheduledAtIso,
+        strategySource: 'CONFIGURED',
+        strategyVersion: 'v2.1',
+        gapMinutes: 0,
+        timezone: tz,
+        reasonType: alignment.reasonType,
+        reason: whyThisTime,
+      };
+
+      this.validateSchedulingDecision(decision, settings);
+
       const provenance: SchedulingProvenance = {
         reason_type: alignment.reasonType,
         reason: whyThisTime,
@@ -380,15 +473,25 @@ export class AdaptiveSchedulingEngine {
         evaluated_at: now.toISOString(),
       };
 
-      return await confessionService.updateConfession(candidate.id, {
+      const updated = await confessionService.updateConfession(candidate.id, {
         status: 'SCHEDULED',
-        scheduled_at: scheduledAtIso,
+        scheduled_at: decision.scheduledAt,
+        strategy_source: decision.strategySource,
+        strategy_version: decision.strategyVersion,
+        schedule_reason: decision.reason,
+        schedule_timezone: decision.timezone,
         scheduling_strategy: 'ADMIN_OVERRIDE',
         scheduling_reason: whyThisTime,
         scheduling_confidence: 'HIGH',
         why_this_time: whyThisTime,
         scheduling_provenance: provenance,
       });
+
+      if (!updated || !updated.scheduled_at) {
+        throw new Error(`Database write failed for confession #${candidate.id}: scheduled_at was not persisted.`);
+      }
+
+      return updated;
     }
 
     // 2. Automatic candidate scheduling: Find previous post to base cursor on
@@ -448,6 +551,18 @@ export class AdaptiveSchedulingEngine {
       ? `${strategy.label} · Rolled Over (${alignment.reason})`
       : `${strategy.label} · ${gapLabel} (${gapInfo.reason})`;
 
+    const decision: SchedulingDecision = {
+      scheduledAt: scheduledAtIso,
+      strategySource: strategy.source,
+      strategyVersion: 'v2.1',
+      gapMinutes: gapInfo.gapMinutes,
+      timezone: tz,
+      reasonType: alignment.reasonType,
+      reason: whyThisTime,
+    };
+
+    this.validateSchedulingDecision(decision, settings);
+
     const provenance: SchedulingProvenance = {
       reason_type: alignment.reasonType,
       reason: whyThisTime,
@@ -458,9 +573,13 @@ export class AdaptiveSchedulingEngine {
       evaluated_at: now.toISOString(),
     };
 
-    return await confessionService.updateConfession(candidate.id, {
+    const updated = await confessionService.updateConfession(candidate.id, {
       status: 'SCHEDULED',
-      scheduled_at: scheduledAtIso,
+      scheduled_at: decision.scheduledAt,
+      strategy_source: decision.strategySource,
+      strategy_version: decision.strategyVersion,
+      schedule_reason: decision.reason,
+      schedule_timezone: decision.timezone,
       scheduling_strategy: strategy.strategy_name,
       scheduling_gap_minutes: gapInfo.gapMinutes,
       scheduling_reason: whyThisTime,
@@ -469,6 +588,12 @@ export class AdaptiveSchedulingEngine {
       why_this_time: whyThisTime,
       scheduling_provenance: provenance,
     });
+
+    if (!updated || !updated.scheduled_at) {
+      throw new Error(`Database write failed for confession #${candidate.id}: scheduled_at was not persisted.`);
+    }
+
+    return updated;
   }
 
   // ---------------------------------------------------------------------------
@@ -480,10 +605,14 @@ export class AdaptiveSchedulingEngine {
    * Clears all old/invalid timestamps and allocates sequential legal slots inside active hours.
    */
   public async recalculateFutureQueue(options?: {
+    forceRecalculate?: boolean;
+    preserveExistingFuture?: boolean;
     enforceRollingHorizon?: boolean;
     rollingHorizonHours?: number;
+    includeReadyForReview?: boolean;
   }): Promise<{
     totalScheduled: number;
+    preservedCount: number;
     newlyScheduledCount: number;
     strategy: string;
     source: CanonicalStrategySource;
@@ -503,10 +632,35 @@ export class AdaptiveSchedulingEngine {
     const now = new Date();
     const nowMs = now.getTime();
 
+    // Auto-approve eligible READY_FOR_REVIEW items only if manual approval is disabled or explicitly requested
+    const isAutoApprove =
+      options?.includeReadyForReview === true ||
+      (settings.require_approval === false && settings.publishing_mode !== 'MANUAL_APPROVAL');
+
+    const allConfessions = mockStore.getConfessions();
+
+    if (isAutoApprove) {
+      const eligibleReady = allConfessions.filter(
+        (c) =>
+          c.status === 'READY_FOR_REVIEW' &&
+          (c.moderation_status === 'LOW' || (c.moderation_status as any) === 'SAFE' || !c.moderation_status) &&
+          c.quality_status !== 'LOW_VALUE' &&
+          !c.published_at &&
+          !c.instagram_media_id &&
+          !['UNKNOWN', 'MANUAL_REVIEW', 'DUPLICATE', 'ALREADY_PUBLISHED'].includes(c.reconciliation_status as any)
+      );
+      for (const readyItem of eligibleReady) {
+        readyItem.status = 'APPROVED';
+        await confessionService.updateConfession(readyItem.id, {
+          status: 'APPROVED',
+          error_message: null,
+        });
+      }
+    }
+
     // 1. Gather all candidates to schedule:
     // Any confession with status SCHEDULED or APPROVED (excluding PUBLISHED, REJECTED, DELETED, FAILED)
-    const allConfessions = mockStore.getConfessions();
-    const candidates = allConfessions
+    const candidates = mockStore.getConfessions()
       .filter(
         (c) =>
           (c.status === 'SCHEDULED' || c.status === 'APPROVED') &&
@@ -520,6 +674,7 @@ export class AdaptiveSchedulingEngine {
     if (candidates.length === 0) {
       return {
         totalScheduled: 0,
+        preservedCount: 0,
         newlyScheduledCount: 0,
         strategy: strategy.strategy_name,
         source: strategy.source,
@@ -528,16 +683,48 @@ export class AdaptiveSchedulingEngine {
       };
     }
 
+    const forceRecalculate = options?.forceRecalculate ?? false;
+    const preserveExisting = options?.preserveExistingFuture ?? false;
+
+    const preservedItems: Confession[] = [];
+    const itemsToSchedule: Confession[] = [];
+
+    for (const c of candidates) {
+      const hasFutureSchedule =
+        c.status === 'SCHEDULED' &&
+        c.scheduled_at &&
+        new Date(c.scheduled_at).getTime() > nowMs;
+
+      if (!forceRecalculate && preserveExisting && hasFutureSchedule) {
+        preservedItems.push(c);
+      } else {
+        itemsToSchedule.push(c);
+      }
+    }
+
     // 2. Establish initial cursor: Now + 5 minutes aligned to active hours
-    let cursor = this.alignToActiveHours(new Date(nowMs + 5 * 60000), settings).alignedDate;
+    let cursor: Date;
+    if (preservedItems.length > 0) {
+      const latestPreservedMs = Math.max(...preservedItems.map((p) => new Date(p.scheduled_at!).getTime()));
+      cursor = new Date(Math.max(nowMs + 2 * 60000, latestPreservedMs));
+    } else {
+      cursor = this.alignToActiveHours(new Date(nowMs + 5 * 60000), settings).alignedDate;
+    }
 
     // Track daily post volume per calendar day
     const postsPerDay = new Map<string, number>();
     const todayKey = this.getDateKeyInAccountTz(now, tz);
-    const publishedToday = allConfessions.filter(
+    const publishedToday = mockStore.getConfessions().filter(
       (c) => c.status === 'PUBLISHED' && c.published_at && this.getDateKeyInAccountTz(new Date(c.published_at), tz) === todayKey
     ).length;
     postsPerDay.set(todayKey, publishedToday);
+
+    for (const p of preservedItems) {
+      if (p.scheduled_at) {
+        const k = this.getDateKeyInAccountTz(new Date(p.scheduled_at), tz);
+        postsPerDay.set(k, (postsPerDay.get(k) || 0) + 1);
+      }
+    }
 
     let dailyPlan: any = null;
     try {
@@ -560,8 +747,8 @@ export class AdaptiveSchedulingEngine {
       strategy: string;
     }> = [];
 
-    for (let idx = 0; idx < candidates.length; idx++) {
-      const c = candidates[idx];
+    for (let idx = 0; idx < itemsToSchedule.length; idx++) {
+      const c = itemsToSchedule[idx];
       const gapInfo = this.calculateCandidateGap(idx, strategy, settings);
 
       // Advance cursor
@@ -582,8 +769,8 @@ export class AdaptiveSchedulingEngine {
       // Rolling Horizon Guard
       if (enforceRollingHorizon && tentative.getTime() > horizonLimitMs) {
         // Leave remaining items in APPROVED queue without schedule timestamp
-        for (let j = idx; j < candidates.length; j++) {
-          const rem = candidates[j];
+        for (let j = idx; j < itemsToSchedule.length; j++) {
+          const rem = itemsToSchedule[j];
           const updateHold = {
             status: 'APPROVED' as const,
             scheduled_at: null,
@@ -616,11 +803,28 @@ export class AdaptiveSchedulingEngine {
       };
 
       const prevScheduledAt = c.scheduled_at || null;
+
+      const decision: SchedulingDecision = {
+        scheduledAt: scheduledAtIso,
+        strategySource: strategy.source,
+        strategyVersion: 'v2.1',
+        gapMinutes: gapInfo.gapMinutes,
+        timezone: tz,
+        reasonType: alignment.reasonType,
+        reason: whyThisTime,
+      };
+
+      this.validateSchedulingDecision(decision, settings);
+
       const updatePayload = {
         status: 'SCHEDULED' as const,
-        scheduled_at: scheduledAtIso,
+        scheduled_at: decision.scheduledAt,
+        strategy_source: decision.strategySource,
+        strategy_version: decision.strategyVersion,
+        schedule_reason: decision.reason,
+        schedule_timezone: decision.timezone,
         scheduling_strategy: strategy.strategy_name,
-        scheduling_gap_minutes: gapInfo.gapMinutes,
+        scheduling_gap_minutes: decision.gapMinutes,
         scheduling_reason: whyThisTime,
         scheduling_confidence: (strategy.confidence >= 0.7 ? 'HIGH' : strategy.confidence >= 0.4 ? 'MEDIUM' : 'LOW') as 'HIGH' | 'MEDIUM' | 'LOW',
         scheduling_evidence_count: strategy.sample_size,
@@ -628,7 +832,10 @@ export class AdaptiveSchedulingEngine {
         scheduling_provenance: provenance,
       };
 
-      await confessionService.updateConfession(c.id, updatePayload);
+      const updated = await confessionService.updateConfession(c.id, updatePayload);
+      if (!updated || !updated.scheduled_at) {
+        throw new Error(`Database write failed for confession #${c.id}: scheduled_at was not persisted.`);
+      }
 
       scheduledTimes.push(scheduledAtIso);
       repairedItems.push({
@@ -641,14 +848,22 @@ export class AdaptiveSchedulingEngine {
       });
     }
 
+    const allScheduledTimes = [
+      ...preservedItems.map((p) => p.scheduled_at!),
+      ...scheduledTimes,
+    ]
+      .filter(Boolean)
+      .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+
     return {
-      totalScheduled: scheduledTimes.length,
+      totalScheduled: allScheduledTimes.length,
+      preservedCount: preservedItems.length,
       newlyScheduledCount: scheduledTimes.length,
       strategy: strategy.strategy_name,
       source: strategy.source,
       queueWindow: {
-        earliest: scheduledTimes[0] || null,
-        latest: scheduledTimes[scheduledTimes.length - 1] || null,
+        earliest: allScheduledTimes[0] || null,
+        latest: allScheduledTimes[allScheduledTimes.length - 1] || null,
       },
       items: repairedItems,
     };
@@ -751,6 +966,132 @@ export class AdaptiveSchedulingEngine {
       repairedConfessions: recalcRes.items,
       strategy: cadenceStrategy,
       reason: `Repaired ${recalcRes.newlyScheduledCount} stale or invalid scheduled confession(s) via AdaptiveSchedulingEngine (${strategy.label}).`,
+    };
+  }
+
+  /**
+   * Comprehensive Future Schedules Validation
+   * Validates all eligible queue items and returns full breakdown:
+   * total_eligible, scheduled, no_slot, invalid, past, outside_active_hours, database_write_failed
+   */
+  public async validateFutureSchedules(): Promise<{
+    total_eligible: number;
+    scheduled: number;
+    no_slot: number;
+    invalid: number;
+    past: number;
+    outside_active_hours: number;
+    database_write_failed: number;
+    items: Array<{
+      id: string;
+      rowNumber: number;
+      status: string;
+      scheduled_at: string | null;
+      localTimeIST: string | null;
+      time_ist?: string | null;
+      isValid: boolean;
+      slot_status?: string;
+      issues: string[];
+    }>;
+  }> {
+    const settings = mockStore.getSettings();
+    const tz = settings.timezone || 'Asia/Kolkata';
+    const startHour = settings.auto_publish_start_hour ?? 9;
+    const endHour = settings.auto_publish_end_hour ?? 22;
+    const nowMs = Date.now();
+    const is24_7 = (startHour === 0 && endHour >= 24) || (startHour === endHour) || (startHour === 0 && endHour === 0);
+
+    const allConfessions = mockStore.getConfessions();
+    const eligible = allConfessions.filter(
+      (c) =>
+        (c.status === 'SCHEDULED' || c.status === 'APPROVED') &&
+        !c.published_at &&
+        !c.instagram_media_id &&
+        c.quality_status !== 'LOW_VALUE' &&
+        !['UNKNOWN', 'MANUAL_REVIEW', 'DUPLICATE', 'ALREADY_PUBLISHED'].includes(c.reconciliation_status as any)
+    );
+
+    let scheduled = 0;
+    let noSlot = 0;
+    let invalid = 0;
+    let past = 0;
+    let outsideActive = 0;
+    let dbFailed = 0;
+
+    const items: Array<{
+      id: string;
+      rowNumber: number;
+      status: string;
+      scheduled_at: string | null;
+      localTimeIST: string | null;
+      time_ist?: string | null;
+      isValid: boolean;
+      slot_status?: string;
+      issues: string[];
+    }> = [];
+
+    for (const c of eligible) {
+      const issues: string[] = [];
+      let localTimeIST: string | null = null;
+
+      if (!c.scheduled_at) {
+        noSlot++;
+        issues.push('NO_SLOT');
+      } else {
+        const d = new Date(c.scheduled_at);
+        if (isNaN(d.getTime())) {
+          invalid++;
+          issues.push('INVALID_TIMESTAMP');
+        } else {
+          localTimeIST = `${new Intl.DateTimeFormat('en-IN', {
+            timeZone: tz,
+            dateStyle: 'medium',
+            timeStyle: 'medium',
+          }).format(d)} IST`;
+
+          if (d.getTime() <= nowMs) {
+            past++;
+            issues.push('PAST_DUE');
+          }
+
+          if (!is24_7) {
+            const parts = this.getZonedParts(d, tz);
+            const isAfter = parts.hour > endHour || (parts.hour === endHour && (parts.minute > 0 || parts.second > 0));
+            const isBefore = parts.hour < startHour;
+            if (isAfter || isBefore) {
+              outsideActive++;
+              issues.push('OUTSIDE_ACTIVE_HOURS');
+            }
+          }
+        }
+      }
+
+      if (issues.length === 0) {
+        scheduled++;
+      }
+
+      items.push({
+        id: c.id,
+        rowNumber: c.google_sheet_row || 0,
+        status: c.status,
+        scheduled_at: c.scheduled_at || null,
+        localTimeIST,
+        time_ist: localTimeIST,
+        isValid: issues.length === 0,
+        slot_status: issues.length === 0 ? 'VALID' : issues.join(', '),
+        issues,
+      });
+    }
+
+    return {
+      total_eligible: eligible.length,
+      scheduled,
+      no_slot: noSlot,
+      invalid,
+      past,
+      outside_active_hours: outsideActive,
+      database_write_failed: dbFailed,
+      items,
     };
   }
 }

@@ -174,6 +174,8 @@ const DEFAULT_SETTINGS: SystemSettings = {
   min_days_for_cadence_learning: parseInt(process.env.MIN_DAYS_FOR_CADENCE_LEARNING || '7', 10),
   min_growth_confidence: parseFloat(process.env.MIN_GROWTH_CONFIDENCE || '0.70'),
   rolling_horizon_hours: parseInt(process.env.ROLLING_HORIZON_HOURS || '24', 10),
+  settings_version: 1,
+  updated_at: new Date().toISOString(),
 };
 
 const DEFAULT_CONFESSIONS: Confession[] = [];
@@ -237,39 +239,26 @@ class MockStore {
           if (!parsed.settings.default_template_id || parsed.settings.default_template_id === '77777777-7777-7777-7777-777777777777') {
             parsed.settings.default_template_id = '44444444-4444-4444-4444-444444444444';
           }
-          // Auto-upgrade legacy daytime-only settings (9 to 22) to true 24/7 round-the-clock publishing (0 to 24)
-          if (parsed.settings.auto_publish_start_hour === 9 && parsed.settings.auto_publish_end_hour === 22) {
-            parsed.settings.auto_publish_start_hour = 0;
-            parsed.settings.auto_publish_end_hour = 24;
+          if (parsed.settings.auto_publish_start_hour === undefined) {
+            parsed.settings.auto_publish_start_hour = 9;
           }
-          if (parsed.settings.max_daily_posts > 6 || parsed.settings.max_daily_posts === 8 || parsed.settings.max_daily_posts === 24 || parsed.settings.max_daily_posts === 25) {
-            parsed.settings.max_daily_posts = parseInt(process.env.MAX_DAILY_POSTS || '6', 10);
+          if (parsed.settings.auto_publish_end_hour === undefined) {
+            parsed.settings.auto_publish_end_hour = 22;
           }
-          parsed.settings.min_daily_posts = parseInt(process.env.MIN_DAILY_POSTS || '2', 10);
-          parsed.settings.target_daily_posts = parseInt(process.env.TARGET_DAILY_POSTS || '4', 10);
+          if (parsed.settings.settings_version === undefined) {
+            parsed.settings.settings_version = 1;
+          }
+          if (!parsed.settings.updated_at) {
+            parsed.settings.updated_at = new Date().toISOString();
+          }
           if (!parsed.settings.scheduling_mode) {
             parsed.settings.scheduling_mode = 'QUALITY_FIRST';
-          }
-          if (process.env.AUTO_PUBLISH_ENABLED === 'false') {
-            parsed.settings.auto_publish = false;
-            parsed.settings.auto_publish_enabled = false;
-            parsed.settings.publishing_mode = 'MANUAL_APPROVAL';
-          } else if (process.env.NODE_ENV === 'test') {
-            parsed.settings.auto_publish = true;
-            parsed.settings.auto_publish_enabled = true;
-            parsed.settings.publishing_mode = 'AUTO_PUBLISH';
           }
         }
         if (parsed.confessions) {
           parsed.confessions.forEach((c: any) => {
             if (c.template_id === '77777777-7777-7777-7777-777777777777') {
               c.template_id = '44444444-4444-4444-4444-444444444444';
-            }
-            // Auto-heal confessions that were trapped in static SCHEDULED state back to APPROVED
-            // so they are immediately available in the active 24/7 FIFO queue
-            if (c.status === 'SCHEDULED' && !c.published_at && !c.instagram_media_id) {
-              c.status = 'APPROVED';
-              c.scheduled_at = null;
             }
           });
         }
@@ -662,11 +651,6 @@ class MockStore {
       if (hasMissing) {
         this.save();
       }
-    }
-    if (process.env.AUTO_PUBLISH_ENABLED === 'false') {
-      this.data.settings.auto_publish = false;
-      this.data.settings.auto_publish_enabled = false;
-      this.data.settings.publishing_mode = 'MANUAL_APPROVAL';
     }
     return { ...this.data.settings };
   }

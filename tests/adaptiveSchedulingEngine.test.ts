@@ -256,4 +256,408 @@ describe('AdaptiveSchedulingEngine - Canonical Scheduling Authority', () => {
       expect(report.outside_active_hours).toBe(0);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Test 5: State Machine & Canonical Future Queue Pipeline
+  // ---------------------------------------------------------------------------
+  describe('State Machine & Future Queue Pipeline', () => {
+    it('should keep READY_FOR_REVIEW unscheduled in MANUAL_APPROVAL mode while scheduling APPROVED items', async () => {
+      const mockConfessions: Confession[] = [
+        {
+          id: 'ready-1',
+          google_sheet_row: 2,
+          google_sheet_id: 'sheet',
+          google_sheet_name: 'Sheet1',
+          name: 'Anonymous',
+          original_text: 'Pending review text',
+          cleaned_text: 'Pending review text',
+          display_name: 'Anonymous',
+          is_anonymous: true,
+          status: 'READY_FOR_REVIEW',
+          moderation_status: 'SAFE',
+          moderation_reason: null,
+          ai_processed: true,
+          template_id: 't-1',
+          generated_image_url: null,
+          generated_image_path: null,
+          caption: null,
+          hashtags: [],
+          scheduled_at: null,
+          published_at: null,
+          instagram_media_id: null,
+          instagram_permalink: null,
+          retry_count: 0,
+          error_message: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        {
+          id: 'approved-1',
+          google_sheet_row: 3,
+          google_sheet_id: 'sheet',
+          google_sheet_name: 'Sheet1',
+          name: 'Anonymous',
+          original_text: 'Approved text',
+          cleaned_text: 'Approved text',
+          display_name: 'Anonymous',
+          is_anonymous: true,
+          status: 'APPROVED',
+          moderation_status: 'SAFE',
+          moderation_reason: null,
+          ai_processed: true,
+          template_id: 't-1',
+          generated_image_url: null,
+          generated_image_path: null,
+          caption: null,
+          hashtags: [],
+          scheduled_at: null,
+          published_at: null,
+          instagram_media_id: null,
+          instagram_permalink: null,
+          retry_count: 0,
+          error_message: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ];
+
+      vi.spyOn(mockStore, 'getConfessions').mockReturnValue(mockConfessions);
+      vi.spyOn(mockStore, 'updateConfession').mockImplementation((id, updates) => {
+        const item = mockConfessions.find((c) => c.id === id);
+        if (item) Object.assign(item, updates);
+        return item || null;
+      });
+      vi.spyOn(mockStore, 'getSettings').mockReturnValue({
+        ...mockStore.getSettings(),
+        publishing_mode: 'MANUAL_APPROVAL',
+        require_approval: true,
+        auto_publish_start_hour: 9,
+        auto_publish_end_hour: 22,
+        timezone: 'Asia/Kolkata',
+      });
+
+      const updated = await adaptiveSchedulingEngine.recalculateFutureQueue();
+
+      const readyItem = mockConfessions.find((c) => c.id === 'ready-1')!;
+      const approvedItem = mockConfessions.find((c) => c.id === 'approved-1')!;
+
+      // In MANUAL_APPROVAL mode, READY_FOR_REVIEW must remain unscheduled
+      expect(readyItem.status).toBe('READY_FOR_REVIEW');
+      expect(readyItem.scheduled_at).toBeNull();
+
+      // APPROVED item must receive scheduled slot
+      expect(approvedItem.status).toBe('SCHEDULED');
+      expect(approvedItem.scheduled_at).not.toBeNull();
+      expect(new Date(approvedItem.scheduled_at!).getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('should auto-approve safe READY_FOR_REVIEW items when require_approval is false', async () => {
+      const mockConfessions: Confession[] = [
+        {
+          id: 'auto-1',
+          google_sheet_row: 2,
+          google_sheet_id: 'sheet',
+          google_sheet_name: 'Sheet1',
+          name: 'Anonymous',
+          original_text: 'Safe text to auto-approve',
+          cleaned_text: 'Safe text to auto-approve',
+          display_name: 'Anonymous',
+          is_anonymous: true,
+          status: 'READY_FOR_REVIEW',
+          moderation_status: 'SAFE',
+          moderation_reason: null,
+          ai_processed: true,
+          template_id: 't-1',
+          generated_image_url: null,
+          generated_image_path: null,
+          caption: null,
+          hashtags: [],
+          scheduled_at: null,
+          published_at: null,
+          instagram_media_id: null,
+          instagram_permalink: null,
+          retry_count: 0,
+          error_message: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ];
+
+      vi.spyOn(mockStore, 'getConfessions').mockReturnValue(mockConfessions);
+      vi.spyOn(mockStore, 'updateConfession').mockImplementation((id, updates) => {
+        const item = mockConfessions.find((c) => c.id === id);
+        if (item) Object.assign(item, updates);
+        return item || null;
+      });
+      vi.spyOn(mockStore, 'getSettings').mockReturnValue({
+        ...mockStore.getSettings(),
+        publishing_mode: 'AUTO_PUBLISH',
+        require_approval: false,
+        auto_publish_start_hour: 9,
+        auto_publish_end_hour: 22,
+        timezone: 'Asia/Kolkata',
+      });
+
+      const updated = await adaptiveSchedulingEngine.recalculateFutureQueue();
+
+      const autoItem = mockConfessions.find((c) => c.id === 'auto-1')!;
+      expect(autoItem.status).toBe('SCHEDULED');
+      expect(autoItem.scheduled_at).not.toBeNull();
+    });
+
+    it('validateFutureSchedules returns complete diagnostic breakdown and enforces active hours invariant', async () => {
+      // Create a slot valid at 11:00 AM IST tomorrow
+      // 11:00 IST = 05:30 UTC
+      const validDate = new Date();
+      validDate.setUTCDate(validDate.getUTCDate() + 1);
+      validDate.setUTCHours(5, 30, 0, 0);
+
+      const mockConfessions: Confession[] = [
+        {
+          id: 'diag-1',
+          google_sheet_row: 2,
+          google_sheet_id: 'sheet',
+          google_sheet_name: 'Sheet1',
+          name: 'Anonymous',
+          original_text: 'Diagnostic 1',
+          cleaned_text: 'Diagnostic 1',
+          display_name: 'Anonymous',
+          is_anonymous: true,
+          status: 'SCHEDULED',
+          moderation_status: 'SAFE',
+          moderation_reason: null,
+          ai_processed: true,
+          template_id: 't-1',
+          generated_image_url: null,
+          generated_image_path: null,
+          caption: null,
+          hashtags: [],
+          scheduled_at: validDate.toISOString(),
+          published_at: null,
+          instagram_media_id: null,
+          instagram_permalink: null,
+          retry_count: 0,
+          error_message: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ];
+
+      vi.spyOn(mockStore, 'getConfessions').mockReturnValue(mockConfessions);
+      vi.spyOn(mockStore, 'getSettings').mockReturnValue({
+        ...mockStore.getSettings(),
+        auto_publish_start_hour: 9,
+        auto_publish_end_hour: 22,
+        timezone: 'Asia/Kolkata',
+      });
+
+      const report = await adaptiveSchedulingEngine.validateFutureSchedules();
+
+      expect(report.total_eligible).toBe(1);
+      expect(report.scheduled).toBe(1);
+      expect(report.no_slot).toBe(0);
+      expect(report.invalid).toBe(0);
+      expect(report.past).toBe(0);
+      expect(report.outside_active_hours).toBe(0);
+      expect(report.database_write_failed).toBe(0);
+      expect(report.items.length).toBe(1);
+      expect(report.items[0].slot_status).toBe('VALID');
+      expect(report.items[0].time_ist).toContain('IST');
+    });
+
+    it('approving a confession allocates an active slot immediately via adaptiveSchedulingEngine', async () => {
+      const mockConfession: Confession = {
+        id: 'approval-test-1',
+        google_sheet_row: 5,
+        google_sheet_id: 'sheet',
+        google_sheet_name: 'Sheet1',
+        name: 'Anonymous',
+        original_text: 'Confession waiting for approval',
+        cleaned_text: 'Confession waiting for approval',
+        display_name: 'Anonymous',
+        is_anonymous: true,
+        status: 'READY_FOR_REVIEW',
+        moderation_status: 'SAFE',
+        moderation_reason: null,
+        ai_processed: true,
+        template_id: 't-1',
+        generated_image_url: null,
+        generated_image_path: null,
+        caption: null,
+        hashtags: [],
+        scheduled_at: null,
+        published_at: null,
+        instagram_media_id: null,
+        instagram_permalink: null,
+        retry_count: 0,
+        error_message: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      vi.spyOn(mockStore, 'getConfessionById').mockReturnValue(mockConfession);
+      vi.spyOn(mockStore, 'getConfessions').mockReturnValue([mockConfession]);
+      vi.spyOn(mockStore, 'updateConfession').mockImplementation((id, updates) => {
+        Object.assign(mockConfession, updates);
+        return mockConfession;
+      });
+      vi.spyOn(mockStore, 'getSettings').mockReturnValue({
+        ...mockStore.getSettings(),
+        auto_publish_start_hour: 9,
+        auto_publish_end_hour: 22,
+        timezone: 'Asia/Kolkata',
+      });
+
+      const approvedResult = await confessionService.approveConfession('approval-test-1');
+
+      expect(approvedResult).not.toBeNull();
+      expect(approvedResult!.status).toBe('SCHEDULED');
+      expect(approvedResult!.scheduled_at).not.toBeNull();
+
+      // Check slot is strictly inside 09:00 - 22:00 IST
+      const scheduledDate = new Date(approvedResult!.scheduled_at!);
+      const istHour = parseInt(
+        new Intl.DateTimeFormat('en-US', {
+          timeZone: 'Asia/Kolkata',
+          hour: 'numeric',
+          hour12: false,
+        }).format(scheduledDate),
+        10
+      );
+      expect(istHour).toBeGreaterThanOrEqual(9);
+      expect(istHour).toBeLessThan(22);
+    });
+
+    it('scheduleNextEligiblePost automatically schedules next unscheduled approved candidate', async () => {
+      const mockConfession: Confession = {
+        id: 'next-elig-1',
+        google_sheet_row: 6,
+        google_sheet_id: 'sheet',
+        google_sheet_name: 'Sheet1',
+        name: 'Anonymous',
+        original_text: 'Unscheduled approved candidate',
+        cleaned_text: 'Unscheduled approved candidate',
+        display_name: 'Anonymous',
+        is_anonymous: true,
+        status: 'APPROVED',
+        moderation_status: 'LOW',
+        moderation_reason: null,
+        ai_processed: true,
+        template_id: 't-1',
+        generated_image_url: null,
+        generated_image_path: null,
+        caption: null,
+        hashtags: [],
+        scheduled_at: null,
+        published_at: null,
+        instagram_media_id: null,
+        instagram_permalink: null,
+        retry_count: 0,
+        error_message: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      vi.spyOn(mockStore, 'getConfessions').mockReturnValue([mockConfession]);
+      vi.spyOn(mockStore, 'getConfessionById').mockReturnValue(mockConfession);
+      vi.spyOn(mockStore, 'updateConfession').mockImplementation((id, updates) => {
+        Object.assign(mockConfession, updates);
+        return mockConfession;
+      });
+
+      const scheduled = await adaptiveSchedulingEngine.scheduleNextEligiblePost();
+      expect(scheduled).not.toBeNull();
+      expect(scheduled!.status).toBe('SCHEDULED');
+      expect(scheduled!.scheduled_at).toBeTruthy();
+      expect(scheduled!.strategy_source).toBeTruthy();
+      expect(scheduled!.schedule_timezone).toBe('Asia/Kolkata');
+    });
+
+    it('throws explicit error when scheduling decision validation fails or falls outside active hours', () => {
+      const settings = mockStore.getSettings();
+
+      // Past date
+      expect(() => {
+        adaptiveSchedulingEngine.validateSchedulingDecision({
+          scheduledAt: new Date(Date.now() - 3600000).toISOString(),
+          strategySource: 'BASELINE',
+          gapMinutes: 45,
+          timezone: 'Asia/Kolkata',
+          reasonType: 'NORMAL_CADENCE',
+          reason: 'Test',
+        }, settings);
+      }).toThrow(/must be in the future/);
+
+      // Outside active hours (e.g. 23:30 IST)
+      // 23:30 IST = 18:00 UTC
+      const tomorrowNight = new Date();
+      tomorrowNight.setUTCDate(tomorrowNight.getUTCDate() + 1);
+      tomorrowNight.setUTCHours(18, 0, 0, 0);
+
+      expect(() => {
+        adaptiveSchedulingEngine.validateSchedulingDecision({
+          scheduledAt: tomorrowNight.toISOString(),
+          strategySource: 'BASELINE',
+          gapMinutes: 45,
+          timezone: 'Asia/Kolkata',
+          reasonType: 'NORMAL_CADENCE',
+          reason: 'Late Night Test',
+        }, settings);
+      }).toThrow(/falls outside active hours/);
+    });
+
+    it('throws an explicit error when database update fails during scheduling', async () => {
+      const mockConfession: Confession = {
+        id: 'db-fail-1',
+        google_sheet_row: 7,
+        google_sheet_id: 'sheet',
+        google_sheet_name: 'Sheet1',
+        name: 'Anonymous',
+        original_text: 'Db fail candidate',
+        cleaned_text: 'Db fail candidate',
+        display_name: 'Anonymous',
+        is_anonymous: true,
+        status: 'APPROVED',
+        moderation_status: 'LOW',
+        moderation_reason: null,
+        ai_processed: true,
+        template_id: 't-1',
+        generated_image_url: null,
+        generated_image_path: null,
+        caption: null,
+        hashtags: [],
+        scheduled_at: null,
+        published_at: null,
+        instagram_media_id: null,
+        instagram_permalink: null,
+        retry_count: 0,
+        error_message: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      vi.spyOn(mockStore, 'getConfessions').mockReturnValue([mockConfession]);
+      vi.spyOn(mockStore, 'getConfessionById').mockReturnValue(mockConfession);
+      // Simulate database write failure returning null
+      vi.spyOn(confessionService, 'updateConfession').mockResolvedValue(null as any);
+
+      await expect(
+        adaptiveSchedulingEngine.scheduleNextCandidate(mockConfession)
+      ).rejects.toThrow(/Database write failed/);
+    });
+
+    it('falls back safely to BASELINE strategy when Growth Intelligence is unavailable', async () => {
+      vi.spyOn(growthStore, 'getSnapshots').mockRejectedValue(new Error('Growth DB Down'));
+      vi.spyOn(mockStore, 'getSettings').mockReturnValue({
+        ...mockStore.getSettings(),
+        scheduling_strategy_mode: 'AUTO',
+        random_gap_enabled: true,
+      });
+
+      const strategy = await adaptiveSchedulingEngine.getCurrentSchedulingStrategy();
+      expect(strategy.source).toBe('BASELINE');
+      expect(strategy.confidence).toBe(0);
+      expect(strategy.strategy_name).toBe('BASELINE_EXPLORATION');
+    });
+  });
 });

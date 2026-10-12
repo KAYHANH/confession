@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth';
-import { mockStore } from '@/lib/mockStore';
+import { settingsService } from '@/services/settingsService';
 import { cadenceAnalyzer } from '@/services/growth/cadenceAnalyzer';
 
 export async function POST(request: NextRequest) {
@@ -12,7 +12,8 @@ export async function POST(request: NextRequest) {
     const { mode, fixedGapMinutes, enableExperimental } = body;
 
     const updates: Record<string, any> = {};
-    if (mode && ['AUTO', 'BASELINE', 'MANUAL'].includes(mode)) {
+    const validModes = ['AUTO', 'AUTO_GROWTH', 'GROWTH_OPTIMIZED', 'BASELINE', 'MANUAL', 'EXPERIMENT'];
+    if (mode && validModes.includes(mode)) {
       updates.scheduling_strategy_mode = mode;
     }
     if (typeof fixedGapMinutes === 'number' && fixedGapMinutes >= 15) {
@@ -22,13 +23,15 @@ export async function POST(request: NextRequest) {
       updates.enable_experimental_scheduling = enableExperimental;
     }
 
-    mockStore.updateSettings(updates);
+    const result = await settingsService.updateSettings(updates, { author: 'admin' });
     cadenceAnalyzer.invalidateCache();
     const recommendation = await cadenceAnalyzer.getCadenceRecommendation(true);
 
     return NextResponse.json({
       success: true,
       recommendation,
+      settings: result.settings,
+      version: result.version,
     });
   } catch (err: any) {
     console.error('[API Cadence Override] Failed to update scheduling mode override:', err);

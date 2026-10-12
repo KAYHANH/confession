@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { mockStore } from '@/lib/mockStore';
+import { settingsService } from '@/services/settingsService';
 import { confessionService } from '@/services/confessionService';
 import { requireAuth } from '@/lib/auth';
 
@@ -9,14 +9,28 @@ export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
     if (auth instanceof NextResponse) return auth;
-    const settings = mockStore.getSettings();
-    // Return with aliased field for frontend compatibility
+
+    const settings = await settingsService.getSettings();
     return NextResponse.json({
+      success: true,
+      settings,
+      version: settings.settings_version || 1,
+      updatedAt: settings.updated_at || new Date().toISOString(),
+      // Top-level fields preserved for backward compatibility
       ...settings,
       auto_publish_enabled: settings.auto_publish,
     });
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Failed to fetch settings' }, { status: 500 });
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          code: 'FETCH_SETTINGS_FAILED',
+          message: error?.message || 'Failed to fetch settings',
+        },
+      },
+      { status: 500 }
+    );
   }
 }
 
@@ -24,43 +38,86 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
     if (auth instanceof NextResponse) return auth;
-    const body = await request.json();
-    // Strict bidirectional synchronization between auto_publish and publishing_mode
-    if (body.auto_publish === false || body.auto_publish_enabled === false) {
-      body.auto_publish = false;
-      body.auto_publish_enabled = false;
-      if (!body.publishing_mode || body.publishing_mode === 'AUTO_PUBLISH') {
-        body.publishing_mode = 'MANUAL_APPROVAL';
-      }
-    } else if (body.publishing_mode === 'MANUAL_APPROVAL' || body.publishing_mode === 'AUTO_APPROVAL') {
-      body.auto_publish = false;
-      body.auto_publish_enabled = false;
-    } else if (body.auto_publish === true || body.auto_publish_enabled === true || body.publishing_mode === 'AUTO_PUBLISH') {
-      body.auto_publish = true;
-      body.auto_publish_enabled = true;
-      body.publishing_mode = 'AUTO_PUBLISH';
-    }
-    const updated = mockStore.updateSettings(body);
 
-    // Cascade all relevant settings changes to existing unpublished confessions
+    const body = await request.json();
+
+    // 1. Validate payload
+    const validation = settingsService.validateSettings(body);
+    if (!validation.isValid) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'VALIDATION_FAILED',
+            message: validation.errors.join('; '),
+            details: validation.errors,
+          },
+        },
+        { status: 400 }
+      );
+    }
+
+    const expectedVersion =
+      typeof body.expected_version === 'number'
+        ? body.expected_version
+        : typeof body.expectedVersion === 'number'
+        ? body.expectedVersion
+        : undefined;
+
+    // 2. Persist atomically with write verification
+    let updateResult;
+    try {
+      updateResult = await settingsService.updateSettings(body, {
+        author: 'admin',
+        expectedVersion,
+      });
+    } catch (updateErr: any) {
+      if (updateErr?.code === 'CONFLICT') {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              code: 'CONFLICT',
+              message: updateErr.message,
+              currentVersion: updateErr.currentVersion,
+            },
+          },
+          { status: 409 }
+        );
+      }
+      throw updateErr;
+    }
+
+    // 3. Cascade branding/moderation updates to existing unpublished confessions
     const syncResult = await confessionService.syncSettingsToConfessions(body);
 
-    mockStore.addLog({
-      action: 'SETTINGS_UPDATED',
-      entity_type: 'settings',
-      metadata: {
-        fields: Object.keys(body),
-        confessionsSynced: syncResult.updatedCount,
-        scheduleRecalculated: syncResult.scheduleRecalculated,
-      },
-    });
     return NextResponse.json({
-      ...updated,
-      auto_publish_enabled: updated.auto_publish,
+      success: true,
+      settings: updateResult.settings,
+      version: updateResult.version,
+      updatedAt: updateResult.updatedAt,
+      changed_fields: updateResult.changedFields,
       confessions_synced: syncResult.updatedCount,
-      schedule_recalculated: syncResult.scheduleRecalculated,
+      schedule_recalculated: syncResult.scheduleRecalculated || updateResult.scheduleRecalculated,
+      // Backward compatibility fields
+      ...updateResult.settings,
+      auto_publish_enabled: updateResult.settings.auto_publish,
     });
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Failed to update settings' }, { status: 500 });
+    console.error('[API Settings] Failed to persist settings:', error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          code: 'SETTINGS_PERSISTENCE_FAILED',
+          message: error?.message || 'Failed to persist settings',
+        },
+      },
+      { status: 500 }
+    );
   }
+}
+
+export async function PATCH(request: NextRequest) {
+  return POST(request);
 }

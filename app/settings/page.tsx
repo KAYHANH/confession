@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   Settings as SettingsIcon,
@@ -20,12 +20,14 @@ import {
   FlaskConical,
   Zap,
   Activity,
+  Check,
 } from 'lucide-react';
 
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { SystemSettings, GoogleSheetConfig, InstagramAccountConfig } from '@/types';
 import { SchedulerRecommendation, DailyGrowthPlan } from '@/types/growth';
 import { useToast } from '@/components/ui/ToastContext';
+import { supabase } from '@/lib/supabase/client';
 
 function SettingsContent() {
   const searchParams = useSearchParams();
@@ -33,7 +35,17 @@ function SettingsContent() {
 
   const [activeTab, setActiveTab] = useState(initialTab);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'SAVED' | 'SAVING' | 'SAVE_FAILED' | 'UNSAVED'>('SAVED');
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [settingsVersion, setSettingsVersion] = useState<number>(1);
+  const [realtimeStatus, setRealtimeStatus] = useState<'SUBSCRIBED' | 'CONNECTED' | 'ERROR' | 'TIMED_OUT' | 'CLOSED'>('SUBSCRIBED');
+
+  // References for debouncing & optimistic rollback
+  const previousSettingsRef = useRef<SystemSettings | null>(null);
+  const pendingUpdatesRef = useRef<Partial<SystemSettings>>({});
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const inFlightControllerRef = useRef<AbortController | null>(null);
 
   // Configuration States
   const [generalSettings, setGeneralSettings] = useState<SystemSettings | null>(null);
@@ -50,6 +62,8 @@ function SettingsContent() {
   const [instagramTestMessage, setInstagramTestMessage] = useState<{ success: boolean; text: string } | null>(null);
   const [testingAnalytics, setTestingAnalytics] = useState(false);
   const [analyticsTestMessage, setAnalyticsTestMessage] = useState<{ success: boolean; text: string } | null>(null);
+  const [savingSheet, setSavingSheet] = useState(false);
+  const [savingInstagram, setSavingInstagram] = useState(false);
 
   const { success, error, info } = useToast();
   const [runningAutoPublish, setRunningAutoPublish] = useState(false);
@@ -77,14 +91,15 @@ function SettingsContent() {
     }
   };
 
+  // Canonical settings loader strictly reading from backend database API
   const loadAllSettings = useCallback(async () => {
     setLoading(true);
     try {
       const [genRes, sheetRes, igRes, cadenceRes] = await Promise.all([
-        fetch('/api/settings'),
-        fetch('/api/sheets/status'),
-        fetch('/api/instagram/status'),
-        fetch('/api/growth/cadence').catch(() => null),
+        fetch('/api/settings', { cache: 'no-store' }),
+        fetch('/api/sheets/status', { cache: 'no-store' }),
+        fetch('/api/instagram/status', { cache: 'no-store' }),
+        fetch('/api/growth/cadence', { cache: 'no-store' }).catch(() => null),
       ]);
 
       const [genData, sheetData, igData] = await Promise.all([
@@ -104,57 +119,165 @@ function SettingsContent() {
       }
 
       if (!genRes.ok) {
-        error(genData?.error || 'Failed to load settings');
+        error(genData?.error?.message || genData?.error || 'Failed to load settings');
         return;
       }
 
-      // Check browser localStorage for persistent user preference backups
-      let effectiveGenData = genData;
-      if (typeof window !== 'undefined') {
-        const localBackup = localStorage.getItem('confessionflow_custom_settings');
-        if (localBackup) {
-          try {
-            const parsed = JSON.parse(localBackup);
-            if (parsed.auto_publish === false || parsed.auto_publish_enabled === false) {
-              parsed.auto_publish = false;
-              parsed.auto_publish_enabled = false;
-              if (!parsed.publishing_mode || parsed.publishing_mode === 'AUTO_PUBLISH') {
-                parsed.publishing_mode = 'MANUAL_APPROVAL';
-              }
-            } else if (parsed.publishing_mode === 'MANUAL_APPROVAL' || parsed.publishing_mode === 'AUTO_APPROVAL') {
-              parsed.auto_publish = false;
-              parsed.auto_publish_enabled = false;
-            }
-            const needsSync = Object.entries(parsed).some(
-              ([k, v]) => v !== undefined && v !== (genData as any)[k]
-            );
-            if (needsSync) {
-              effectiveGenData = { ...genData, ...parsed };
-              // Sync back to server in background so server adopts user's persistent choices
-              fetch('/api/settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(effectiveGenData),
-              }).catch(() => {});
-            }
-          } catch {}
-        } else {
-          localStorage.setItem('confessionflow_custom_settings', JSON.stringify(genData));
-        }
-      }
-
-      setGeneralSettings(effectiveGenData);
+      const canonicalSettings: SystemSettings = genData.settings || genData;
+      setGeneralSettings(canonicalSettings);
+      previousSettingsRef.current = canonicalSettings;
+      pendingUpdatesRef.current = {};
+      setSettingsVersion(genData.version || canonicalSettings.settings_version || 1);
+      setSaveStatus('SAVED');
+      setSaveError(null);
       setSheetConfig(sheetData);
       setInstagramConfig(igData);
     } catch {
-      error('Failed to load settings');
+      error('Failed to load settings from server');
     } finally {
       setLoading(false);
     }
   }, [error]);
 
-  const handleUpdateCadenceOverride = async (mode: 'AUTO' | 'BASELINE' | 'MANUAL', fixedGap?: number) => {
-    setSaving(true);
+  // Immediate and Debounced Server Mutation with timeout guard and rollback
+  const executeSave = async (explicitUpdates?: Partial<SystemSettings>) => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+
+    const updatesToSave = explicitUpdates || { ...pendingUpdatesRef.current };
+    if (Object.keys(updatesToSave).length === 0) {
+      setSaveStatus('SAVED');
+      return;
+    }
+
+    if (inFlightControllerRef.current) {
+      inFlightControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    inFlightControllerRef.current = abortController;
+
+    setSaveStatus('SAVING');
+    setSaveError(null);
+
+    // Timeout guard: 8 seconds maximum to prevent hanging forever
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+    }, 8000);
+
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...updatesToSave,
+          expected_version: settingsVersion,
+        }),
+        signal: abortController.signal,
+      });
+
+      clearTimeout(timeoutId);
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        if (res.status === 409) {
+          info('Settings were updated in another session. Reloading latest values...');
+          await loadAllSettings();
+          return;
+        }
+        throw new Error(data?.error?.message || data?.error || `Server responded with ${res.status}`);
+      }
+
+      const canonical: SystemSettings = data.settings || data;
+      setGeneralSettings(canonical);
+      previousSettingsRef.current = canonical;
+      pendingUpdatesRef.current = {};
+      const newVersion = data.version || canonical.settings_version || (settingsVersion + 1);
+      setSettingsVersion(newVersion);
+      setSaveStatus('SAVED');
+      setLastSavedAt(new Date());
+
+      // Broadcast update to other tabs/windows
+      try {
+        const channel = new BroadcastChannel('confessionflow_settings');
+        channel.postMessage({ type: 'SETTINGS_UPDATED', version: newVersion });
+        channel.close();
+      } catch {}
+      window.dispatchEvent(new CustomEvent('confessionflow:refresh'));
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        const timeoutMsg = 'Save timed out after 8s — previous settings retained';
+        setSaveError(timeoutMsg);
+        setSaveStatus('SAVE_FAILED');
+        error(timeoutMsg);
+      } else {
+        const errorMsg = err?.message || 'Error saving settings';
+        setSaveError(errorMsg);
+        setSaveStatus('SAVE_FAILED');
+        error(errorMsg);
+      }
+      // Revert optimistic state back to verified server state
+      if (previousSettingsRef.current) {
+        setGeneralSettings(previousSettingsRef.current);
+      }
+      pendingUpdatesRef.current = {};
+    } finally {
+      inFlightControllerRef.current = null;
+    }
+  };
+
+  // Instant update helper with optimistic rendering and debounced server persistence
+  const updateSettingField = <K extends keyof SystemSettings>(
+    key: K,
+    value: SystemSettings[K],
+    immediate: boolean = false
+  ) => {
+    if (!generalSettings) return;
+
+    const updated = { ...generalSettings, [key]: value };
+    setGeneralSettings(updated);
+    setSaveStatus('UNSAVED');
+
+    pendingUpdatesRef.current = { ...pendingUpdatesRef.current, [key]: value };
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    const debounceMs = immediate ? 120 : 400;
+    saveTimeoutRef.current = setTimeout(() => {
+      executeSave();
+    }, debounceMs);
+  };
+
+  // Helper for batch updating related settings atomically
+  const updateMultipleFields = (updates: Partial<SystemSettings>, immediate: boolean = true) => {
+    if (!generalSettings) return;
+
+    const updated = { ...generalSettings, ...updates };
+    setGeneralSettings(updated);
+    setSaveStatus('UNSAVED');
+
+    pendingUpdatesRef.current = { ...pendingUpdatesRef.current, ...updates };
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    const debounceMs = immediate ? 120 : 400;
+    saveTimeoutRef.current = setTimeout(() => {
+      executeSave();
+    }, debounceMs);
+  };
+
+  const handleSaveGeneral = async (_updates?: Partial<SystemSettings>) => {
+    await executeSave(_updates || pendingUpdatesRef.current);
+  };
+
+  const handleUpdateCadenceOverride = async (mode: 'AUTO' | 'BASELINE' | 'MANUAL' | 'EXPERIMENT', fixedGap?: number) => {
+    setSaveStatus('SAVING');
     try {
       const res = await fetch('/api/growth/cadence/override', {
         method: 'POST',
@@ -163,13 +286,18 @@ function SettingsContent() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Failed to update cadence mode');
-      setCadenceRec(data.recommendation);
+      if (data.recommendation) setCadenceRec(data.recommendation);
+      if (data.settings) {
+        setGeneralSettings(data.settings);
+        previousSettingsRef.current = data.settings;
+        setSettingsVersion(data.version || data.settings.settings_version || settingsVersion + 1);
+      }
+      setSaveStatus('SAVED');
+      setLastSavedAt(new Date());
       success(`Scheduling mode set to ${mode}`);
-      loadAllSettings();
     } catch (err: any) {
+      setSaveStatus('SAVE_FAILED');
       error(err?.message || 'Failed to update scheduling mode');
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -182,51 +310,79 @@ function SettingsContent() {
     if (tabParam) setActiveTab(tabParam);
   }, [searchParams]);
 
-  // Save General & Publishing & Moderation Settings (with dual server + localStorage persistence)
-  const handleSaveGeneral = async (updates: Partial<SystemSettings>, silent: boolean = false) => {
-    if (!silent) setSaving(true);
+  // Real-time synchronization (Supabase Realtime + Multi-Tab BroadcastChannel)
+  useEffect(() => {
+    const handleRemoteRefresh = () => {
+      loadAllSettings();
+    };
+    window.addEventListener('confessionflow:settings_updated', handleRemoteRefresh);
+    window.addEventListener('confessionflow:refresh', handleRemoteRefresh);
+
+    let channel: BroadcastChannel | null = null;
     try {
-      // 1. Immediately persist to localStorage
-      if (typeof window !== 'undefined') {
-        const existing = localStorage.getItem('confessionflow_custom_settings');
-        const currentLocal = existing ? JSON.parse(existing) : {};
-        const newBackup = { ...currentLocal, ...updates };
-        localStorage.setItem('confessionflow_custom_settings', JSON.stringify(newBackup));
-      }
+      channel = new BroadcastChannel('confessionflow_settings');
+      channel.onmessage = (event) => {
+        if (event.data?.type === 'SETTINGS_UPDATED') {
+          // If incoming version is newer than current, reload immediately
+          if (!event.data.version || event.data.version > settingsVersion) {
+            loadAllSettings();
+          }
+        }
+      };
+    } catch {}
 
-      // 2. Persist to server
-      const res = await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      });
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || 'Failed to update settings');
+    // Supabase Realtime Channel
+    let supabaseChannel: any = null;
+    try {
+      const isConfigured =
+        typeof window !== 'undefined' &&
+        process.env.NEXT_PUBLIC_SUPABASE_URL &&
+        !process.env.NEXT_PUBLIC_SUPABASE_URL.includes('placeholder');
+
+      if (isConfigured) {
+        supabaseChannel = supabase
+          .channel('realtime:settings')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'settings' },
+            (payload) => {
+              console.log('[Realtime] Settings change received from Supabase:', payload);
+              loadAllSettings();
+            }
+          )
+          .subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+              setRealtimeStatus('SUBSCRIBED');
+            } else if (status === 'CHANNEL_ERROR') {
+              setRealtimeStatus('ERROR');
+              // Fallback refetch if realtime disconnects/errors
+              loadAllSettings();
+            } else if (status === 'TIMED_OUT') {
+              setRealtimeStatus('TIMED_OUT');
+              loadAllSettings();
+            } else if (status === 'CLOSED') {
+              setRealtimeStatus('CLOSED');
+            }
+          });
+      } else {
+        setRealtimeStatus('CONNECTED');
       }
-      const saved = await res.json();
-      setGeneralSettings(saved);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('confessionflow_custom_settings', JSON.stringify(saved));
-      }
-      if (!silent) success('Settings saved permanently as default!');
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('confessionflow:refresh'));
-      }
-    } catch (err: any) {
-      error(err?.message || 'Error saving settings');
-    } finally {
-      if (!silent) setSaving(false);
+    } catch (rtErr) {
+      console.warn('[Realtime] Supabase subscription warning:', rtErr);
+      setRealtimeStatus('CONNECTED');
     }
-  };
 
-  // Instant auto-save helper for toggles, selects, and inputs
-  const updateSettingField = <K extends keyof SystemSettings>(key: K, value: SystemSettings[K]) => {
-    if (!generalSettings) return;
-    const updated = { ...generalSettings, [key]: value };
-    setGeneralSettings(updated);
-    handleSaveGeneral(updated, true);
-  };
+    return () => {
+      window.removeEventListener('confessionflow:settings_updated', handleRemoteRefresh);
+      window.removeEventListener('confessionflow:refresh', handleRemoteRefresh);
+      channel?.close();
+      if (supabaseChannel) {
+        try {
+          supabase.removeChannel(supabaseChannel);
+        } catch {}
+      }
+    };
+  }, [loadAllSettings, settingsVersion]);
 
   // Google Sheets Handlers
   const handleTestSheetConnection = async () => {
@@ -256,7 +412,7 @@ function SettingsContent() {
 
   const handleSaveSheetConfig = async () => {
     if (!sheetConfig) return;
-    setSaving(true);
+    setSavingSheet(true);
     try {
       const res = await fetch('/api/sheets/status', {
         method: 'POST',
@@ -270,7 +426,7 @@ function SettingsContent() {
     } catch (err: any) {
       error(err?.message || 'Failed to save Google Sheet settings');
     } finally {
-      setSaving(false);
+      setSavingSheet(false);
     }
   };
 
@@ -328,7 +484,7 @@ function SettingsContent() {
 
   const handleConnectInstagram = async () => {
     if (!instagramConfig) return;
-    setSaving(true);
+    setSavingInstagram(true);
     try {
       const res = await fetch('/api/instagram/connect', {
         method: 'POST',
@@ -343,7 +499,7 @@ function SettingsContent() {
     } catch (err: any) {
       error(err?.message || 'Failed to save Instagram credentials');
     } finally {
-      setSaving(false);
+      setSavingInstagram(false);
     }
   };
 
@@ -398,7 +554,54 @@ function SettingsContent() {
         </div>
 
         {/* Right Tab Content Panel (9 Cols) */}
-        <div className="lg:col-span-9 bg-white p-8 rounded-2xl border border-zinc-200/80 shadow-sm">
+        <div className="lg:col-span-9 bg-white p-8 rounded-2xl border border-zinc-200/80 shadow-sm space-y-6">
+          {/* Header Action & Live Persistence Status Banner */}
+          <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-zinc-100">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-zinc-500">Database Persistence:</span>
+              {saveStatus === 'SAVING' && (
+                <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  Saving...
+                </span>
+              )}
+              {saveStatus === 'SAVED' && (
+                <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <Check className="w-3 h-3 text-emerald-600" />
+                  ✓ Saved just now {lastSavedAt ? `(${lastSavedAt.toLocaleTimeString()})` : ''}
+                </span>
+              )}
+              {saveStatus === 'UNSAVED' && (
+                <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  Unsaved changes
+                </span>
+              )}
+              {saveStatus === 'SAVE_FAILED' && (
+                <button
+                  onClick={() => executeSave()}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 cursor-pointer"
+                >
+                  <AlertTriangle className="w-3 h-3" />
+                  ⚠ Save failed — Retry
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3 text-[11px] text-zinc-400">
+              <span className={`px-2 py-0.5 rounded-full font-semibold border ${
+                realtimeStatus === 'SUBSCRIBED' || realtimeStatus === 'CONNECTED'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : realtimeStatus === 'ERROR' || realtimeStatus === 'TIMED_OUT'
+                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                  : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+              }`}>
+                ● Realtime: {realtimeStatus}
+              </span>
+              <span>Settings v{settingsVersion} · Source of truth: Database</span>
+            </div>
+          </div>
+
           {/* 1. GENERAL TAB */}
           {activeTab === 'general' && (
             <div className="space-y-6">
@@ -445,13 +648,36 @@ function SettingsContent() {
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-zinc-100 flex justify-end">
+              <div className="pt-4 border-t border-zinc-100 flex items-center justify-between">
+                <div className="text-[11px] text-zinc-500">
+                  {saveStatus === 'SAVING' && 'Saving changes to database...'}
+                  {saveStatus === 'SAVED' && (lastSavedAt ? `Saved to database at ${lastSavedAt.toLocaleTimeString()}` : 'All changes saved')}
+                  {saveStatus === 'UNSAVED' && 'Unsaved changes pending save'}
+                  {saveStatus === 'SAVE_FAILED' && <span className="text-rose-600 font-medium">⚠ {saveError || 'Save failed'}</span>}
+                </div>
                 <button
-                  onClick={() => handleSaveGeneral(generalSettings)}
-                  disabled={saving}
-                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer"
+                  onClick={() => executeSave()}
+                  disabled={saveStatus === 'SAVING'}
+                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-60 flex items-center gap-2"
                 >
-                  Save General Settings
+                  {saveStatus === 'SAVING' ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : saveStatus === 'SAVE_FAILED' ? (
+                    <>
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Retry Save</span>
+                    </>
+                  ) : saveStatus === 'SAVED' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>✓ Saved</span>
+                    </>
+                  ) : (
+                    <span>Save General Settings</span>
+                  )}
                 </button>
               </div>
             </div>
@@ -584,10 +810,10 @@ function SettingsContent() {
 
                 <button
                   onClick={handleSaveSheetConfig}
-                  disabled={saving}
+                  disabled={savingSheet}
                   className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
                 >
-                  {saving ? 'Saving...' : 'Save Sheet Mapping'}
+                  {savingSheet ? 'Saving...' : 'Save Sheet Mapping'}
                 </button>
               </div>
             </div>
@@ -737,10 +963,10 @@ function SettingsContent() {
 
                 <button
                   onClick={handleConnectInstagram}
-                  disabled={saving}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand-600 to-rose-500 hover:from-brand-700 hover:to-rose-600 text-white text-xs font-semibold shadow-md shadow-brand-500/20 cursor-pointer"
+                  disabled={savingInstagram}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand-600 to-rose-500 hover:from-brand-700 hover:to-rose-600 text-white text-xs font-semibold shadow-md shadow-brand-500/20 cursor-pointer disabled:opacity-50"
                 >
-                  Save Instagram Credentials
+                  {savingInstagram ? 'Saving...' : 'Save Instagram Credentials'}
                 </button>
               </div>
             </div>
@@ -953,12 +1179,36 @@ function SettingsContent() {
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-zinc-100 flex justify-end">
+              <div className="pt-4 border-t border-zinc-100 flex items-center justify-between">
+                <div className="text-[11px] text-zinc-500">
+                  {saveStatus === 'SAVING' && 'Saving changes to database...'}
+                  {saveStatus === 'SAVED' && (lastSavedAt ? `Saved to database at ${lastSavedAt.toLocaleTimeString()}` : 'All changes saved')}
+                  {saveStatus === 'UNSAVED' && 'Unsaved changes pending save'}
+                  {saveStatus === 'SAVE_FAILED' && <span className="text-rose-600 font-medium">⚠ {saveError || 'Save failed'}</span>}
+                </div>
                 <button
-                  onClick={() => handleSaveGeneral(generalSettings)}
-                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer"
+                  onClick={() => executeSave()}
+                  disabled={saveStatus === 'SAVING'}
+                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-60 flex items-center gap-2"
                 >
-                  Save Moderation Rules
+                  {saveStatus === 'SAVING' ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : saveStatus === 'SAVE_FAILED' ? (
+                    <>
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Retry Save</span>
+                    </>
+                  ) : saveStatus === 'SAVED' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>✓ Saved</span>
+                    </>
+                  ) : (
+                    <span>Save Moderation Rules</span>
+                  )}
                 </button>
               </div>
             </div>
@@ -999,14 +1249,11 @@ function SettingsContent() {
                     checked={generalSettings.auto_publish !== false && generalSettings.publishing_mode !== 'MANUAL_APPROVAL'}
                     onChange={(e) => {
                       const enabled = e.target.checked;
-                      const updated = {
-                        ...generalSettings,
+                      updateMultipleFields({
                         auto_publish: enabled,
                         auto_publish_enabled: enabled,
-                        publishing_mode: enabled ? ('AUTO_PUBLISH' as const) : ('MANUAL_APPROVAL' as const),
-                      };
-                      setGeneralSettings(updated);
-                      handleSaveGeneral(updated, true);
+                        publishing_mode: enabled ? 'AUTO_PUBLISH' : 'MANUAL_APPROVAL',
+                      }, true);
                     }}
                     className="sr-only peer"
                   />
@@ -1022,14 +1269,11 @@ function SettingsContent() {
                     onChange={(e) => {
                       const mode = e.target.value as any;
                       const isAuto = mode === 'AUTO_PUBLISH';
-                      const updated = {
-                        ...generalSettings,
+                      updateMultipleFields({
                         publishing_mode: mode,
                         auto_publish: isAuto,
                         auto_publish_enabled: isAuto,
-                      };
-                      setGeneralSettings(updated);
-                      handleSaveGeneral(updated, true);
+                      }, true);
                     }}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-200 text-xs font-semibold bg-white"
                   >
@@ -1124,13 +1368,10 @@ function SettingsContent() {
                         <button
                           type="button"
                           onClick={() => {
-                            const updated = {
-                              ...generalSettings,
+                            updateMultipleFields({
                               auto_publish_start_hour: 0,
                               auto_publish_end_hour: 24,
-                            };
-                            setGeneralSettings(updated);
-                            handleSaveGeneral(updated, true);
+                            }, true);
                           }}
                           className="text-[10px] text-purple-600 font-bold hover:underline cursor-pointer"
                         >
@@ -1371,13 +1612,36 @@ function SettingsContent() {
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-zinc-100 flex justify-end">
+              <div className="pt-4 border-t border-zinc-100 flex items-center justify-between">
+                <div className="text-[11px] text-zinc-500">
+                  {saveStatus === 'SAVING' && 'Saving changes to database...'}
+                  {saveStatus === 'SAVED' && (lastSavedAt ? `Saved to database at ${lastSavedAt.toLocaleTimeString()}` : 'All changes saved')}
+                  {saveStatus === 'UNSAVED' && 'Unsaved changes pending save'}
+                  {saveStatus === 'SAVE_FAILED' && <span className="text-rose-600 font-medium">⚠ {saveError || 'Save failed'}</span>}
+                </div>
                 <button
-                  onClick={() => handleSaveGeneral(generalSettings)}
-                  disabled={saving}
-                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
+                  onClick={() => executeSave()}
+                  disabled={saveStatus === 'SAVING'}
+                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-60 flex items-center gap-2"
                 >
-                  {saving ? 'Saving...' : 'Save Publishing Rules'}
+                  {saveStatus === 'SAVING' ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : saveStatus === 'SAVE_FAILED' ? (
+                    <>
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Retry Save</span>
+                    </>
+                  ) : saveStatus === 'SAVED' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>✓ Saved</span>
+                    </>
+                  ) : (
+                    <span>Save Publishing Rules</span>
+                  )}
                 </button>
               </div>
             </div>
@@ -1428,12 +1692,36 @@ function SettingsContent() {
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-zinc-100 flex justify-end">
+              <div className="pt-4 border-t border-zinc-100 flex items-center justify-between">
+                <div className="text-[11px] text-zinc-500">
+                  {saveStatus === 'SAVING' && 'Saving changes to database...'}
+                  {saveStatus === 'SAVED' && (lastSavedAt ? `Saved to database at ${lastSavedAt.toLocaleTimeString()}` : 'All changes saved')}
+                  {saveStatus === 'UNSAVED' && 'Unsaved changes pending save'}
+                  {saveStatus === 'SAVE_FAILED' && <span className="text-rose-600 font-medium">⚠ {saveError || 'Save failed'}</span>}
+                </div>
                 <button
-                  onClick={() => handleSaveGeneral(generalSettings)}
-                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer"
+                  onClick={() => executeSave()}
+                  disabled={saveStatus === 'SAVING'}
+                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-60 flex items-center gap-2"
                 >
-                  Save Hashtags
+                  {saveStatus === 'SAVING' ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : saveStatus === 'SAVE_FAILED' ? (
+                    <>
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Retry Save</span>
+                    </>
+                  ) : saveStatus === 'SAVED' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>✓ Saved</span>
+                    </>
+                  ) : (
+                    <span>Save Hashtags</span>
+                  )}
                 </button>
               </div>
             </div>
@@ -1631,11 +1919,28 @@ function SettingsContent() {
                 </button>
 
                 <button
-                  onClick={() => handleSaveGeneral(generalSettings)}
-                  disabled={saving}
-                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer"
+                  onClick={() => executeSave()}
+                  disabled={saveStatus === 'SAVING'}
+                  className="px-5 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-60 flex items-center gap-2"
                 >
-                  Save Growth Settings
+                  {saveStatus === 'SAVING' ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : saveStatus === 'SAVE_FAILED' ? (
+                    <>
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Retry Save</span>
+                    </>
+                  ) : saveStatus === 'SAVED' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>✓ Saved</span>
+                    </>
+                  ) : (
+                    <span>Save Growth Settings</span>
+                  )}
                 </button>
               </div>
             </div>

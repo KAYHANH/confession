@@ -9,6 +9,7 @@ import { Confession, SystemSettings } from '../types';
 describe('Confession Quality Gate & Low-Value Content Filtering', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(mockStore, 'getConfessions').mockReturnValue([]);
   });
 
   // -------------------------------------------------------------

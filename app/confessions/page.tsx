@@ -391,14 +391,28 @@ export default function ConfessionsPage() {
   useEffect(() => {
     loadData();
     const handleRefresh = () => {
-      loadData();
+      loadData(true);
     };
     window.addEventListener('confessionflow:refresh', handleRefresh);
+    window.addEventListener('confessionflow:settings_updated', handleRefresh);
+
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel('confessionflow_settings');
+      channel.onmessage = (event) => {
+        if (event.data?.type === 'SETTINGS_UPDATED') {
+          loadData(true);
+        }
+      };
+    } catch {}
+
     const pollInterval = setInterval(() => {
-      loadData();
+      loadData(true);
     }, 60000);
     return () => {
       window.removeEventListener('confessionflow:refresh', handleRefresh);
+      window.removeEventListener('confessionflow:settings_updated', handleRefresh);
+      channel?.close();
       clearInterval(pollInterval);
     };
   }, [loadData]);
@@ -430,14 +444,12 @@ export default function ConfessionsPage() {
     if (diff < 60000) return 'Any moment now';
 
     const dayDiff = getCalendarDayDiff(date, now);
-    const mins = Math.floor(diff / 60000);
-
-    // If within 45 minutes on the same calendar day
-    if (diff < 45 * 60000 && dayDiff === 0) {
-      return `~${mins}m from now`;
-    }
-
-    const timeStr = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+    const timeStr = date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'Asia/Kolkata',
+    });
     const dateStr =
       dayDiff === 0
         ? 'Today'
@@ -1073,11 +1085,16 @@ export default function ConfessionsPage() {
                     <AlertTriangle className="w-5 h-5" />
                   </div>
                   <div>
-                    <div className="font-semibold text-sm">
-                      {tabCounts.failed} confession{tabCounts.failed > 1 ? 's' : ''} failed to publish
+                    <div className="font-semibold text-sm flex items-center gap-2">
+                      <span>{tabCounts.failed} confession{tabCounts.failed > 1 ? 's' : ''} failed to publish</span>
+                      {(tabCounts.safeToRetry !== undefined && tabCounts.safeToRetry < tabCounts.failed) && (
+                        <span className="text-[11px] font-normal text-rose-700 bg-rose-100/80 px-2 py-0.5 rounded-md border border-rose-200">
+                          {tabCounts.safeToRetry} safe to retry · {Math.max(0, tabCounts.failed - tabCounts.safeToRetry)} blocked by policy/duplicates
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-rose-700 mt-0.5">
-                      Click <strong>Restart Failed Queue</strong> to re-attempt publishing. Rejected posts and already published posts will strictly <strong>never</strong> be re-uploaded.
+                      Click <strong>Restart Failed Queue</strong> to safely rebuild schedule slots in the background. Rejected posts, duplicates, and already published posts will strictly <strong>never</strong> be re-uploaded.
                     </div>
                   </div>
                 </div>
@@ -1518,9 +1535,29 @@ export default function ConfessionsPage() {
                                 </div>
                               </div>
                             ) : (
-                              <div className="text-[11px] text-zinc-400 italic">
-                                Pending schedule slot
-                              </div>
+                              c.status === 'READY_FOR_REVIEW' ? (
+                                <div className="flex flex-col items-start gap-0.5">
+                                  <span className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200/80 px-1.5 py-0.5 rounded">
+                                    Waiting for approval
+                                  </span>
+                                  <span className="text-[9px] text-zinc-400">
+                                    Needs review before scheduling
+                                  </span>
+                                </div>
+                              ) : c.status === 'APPROVED' ? (
+                                <div className="flex flex-col items-start gap-0.5">
+                                  <span className="text-[10px] font-medium text-blue-700 bg-blue-50 border border-blue-200/80 px-1.5 py-0.5 rounded">
+                                    Approved · Queued for slot
+                                  </span>
+                                  <span className="text-[9px] text-zinc-400">
+                                    Held in buffer / rolling horizon
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="text-[11px] text-zinc-400 italic">
+                                  Pending schedule slot
+                                </div>
+                              )
                             )
                           )}
                         </td>

@@ -504,8 +504,8 @@ export class ConfessionService {
 
       // 2. Automatically recalculate schedule so all remaining queue items update their timing!
       try {
-        const { schedulingService } = await import('@/services/schedulingService');
-        await schedulingService.generateFutureSchedule({ forceRecalculate: true });
+        const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+        await adaptiveSchedulingEngine.recalculateFutureQueue();
       } catch (recalcErr) {
         console.warn('[ConfessionService] Failed to recalculate schedule after deletion:', recalcErr);
       }
@@ -627,8 +627,8 @@ export class ConfessionService {
 
       // 5. Automatically recalculate schedule so restored item is slotted into timing
       try {
-        const { schedulingService } = await import('@/services/schedulingService');
-        await schedulingService.generateFutureSchedule({ forceRecalculate: true });
+        const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+        await adaptiveSchedulingEngine.recalculateFutureQueue();
       } catch (recalcErr) {
         console.warn('[ConfessionService] Failed to recalculate schedule after restore:', recalcErr);
       }
@@ -773,7 +773,16 @@ export class ConfessionService {
       },
     });
 
-    return updated;
+    // Canonical scheduling authority: Allocate valid future slot for approved confession immediately
+    let scheduled = updated;
+    try {
+      const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+      scheduled = await adaptiveSchedulingEngine.scheduleNextCandidate(updated);
+    } catch (schedErr) {
+      console.warn(`[ConfessionService] Scheduling after approval notice for #${id}:`, schedErr);
+    }
+
+    return scheduled;
   }
 
   /**
@@ -1369,6 +1378,15 @@ export class ConfessionService {
       }
     }
 
+    if (approved.length > 0) {
+      try {
+        const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+        await adaptiveSchedulingEngine.recalculateFutureQueue();
+      } catch (err) {
+        console.warn('[ConfessionService] Failed to recalculate queue after bulk approve:', err);
+      }
+    }
+
     return { approved, failed };
   }
 
@@ -1416,10 +1434,7 @@ export class ConfessionService {
     let skippedRejected = 0;
     let skippedPublished = 0;
 
-    const nextStatus: ConfessionStatus =
-      settings.auto_publish === true && settings.publishing_mode === 'AUTO_PUBLISH'
-        ? 'APPROVED'
-        : 'READY_FOR_REVIEW';
+    const nextStatus: ConfessionStatus = 'APPROVED'; // Mark APPROVED so scheduler can assign future slots
 
     for (const confession of candidates) {
       // 1. Strict guard: NEVER touch or upload REJECTED confessions
@@ -1483,6 +1498,15 @@ export class ConfessionService {
       }
     }
 
+    if (restartedIds.length > 0) {
+      try {
+        const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+        await adaptiveSchedulingEngine.recalculateFutureQueue();
+      } catch (err) {
+        console.warn('[ConfessionService] Failed to recalculate queue after restart:', err);
+      }
+    }
+
     mockStore.addLog({
       action: 'QUEUE_RESTARTED',
       entity_type: 'confession',
@@ -1518,15 +1542,22 @@ export class ConfessionService {
   }> {
     const currentSettings = mockStore.getSettings();
 
-    const hasTemplateUpdate = !!updates.default_template_id;
-    const hasBrandingUpdate = !!(updates.brand_name || updates.instagram_handle);
-    const hasHashtagUpdate = Array.isArray(updates.default_hashtags);
-    const hasPiiUpdate = updates.enable_pii_detection !== undefined;
-    const hasProfanityUpdate = updates.enable_profanity_filter !== undefined || updates.risk_threshold !== undefined;
+    const hasTemplateUpdate = !!updates.default_template_id && updates.default_template_id !== currentSettings.default_template_id;
+    const hasBrandingUpdate = !!(
+      (updates.brand_name && updates.brand_name !== currentSettings.brand_name) ||
+      (updates.instagram_handle && updates.instagram_handle !== currentSettings.instagram_handle)
+    );
+    const hasHashtagUpdate = Array.isArray(updates.default_hashtags) &&
+      JSON.stringify(updates.default_hashtags) !== JSON.stringify(currentSettings.default_hashtags);
+    const hasPiiUpdate = updates.enable_pii_detection !== undefined &&
+      updates.enable_pii_detection !== currentSettings.enable_pii_detection;
+    const hasProfanityUpdate =
+      (updates.enable_profanity_filter !== undefined && updates.enable_profanity_filter !== currentSettings.enable_profanity_filter) ||
+      (updates.risk_threshold !== undefined && updates.risk_threshold !== currentSettings.risk_threshold);
     const hasQualityUpdate =
-      updates.min_quality_score !== undefined ||
-      updates.auto_reject_low_value !== undefined ||
-      updates.enable_quality_gate !== undefined;
+      (updates.min_quality_score !== undefined && updates.min_quality_score !== currentSettings.min_quality_score) ||
+      (updates.auto_reject_low_value !== undefined && updates.auto_reject_low_value !== currentSettings.auto_reject_low_value) ||
+      (updates.enable_quality_gate !== undefined && updates.enable_quality_gate !== currentSettings.enable_quality_gate);
 
     const enablePii = updates.enable_pii_detection !== undefined
       ? Boolean(updates.enable_pii_detection)
@@ -1692,11 +1723,13 @@ export class ConfessionService {
       'scheduling_mode',
     ];
 
-    const hasSchedulingChanges = schedulingKeys.some((k) => updates[k] !== undefined);
+    const hasSchedulingChanges = schedulingKeys.some(
+      (k) => updates[k] !== undefined && updates[k] !== (currentSettings as any)[k]
+    );
     if (hasSchedulingChanges) {
       try {
-        const { schedulingService } = await import('@/services/schedulingService');
-        await schedulingService.generateFutureSchedule({ forceRecalculate: true });
+        const { adaptiveSchedulingEngine } = await import('@/services/growth/adaptiveSchedulingEngine');
+        await adaptiveSchedulingEngine.recalculateFutureQueue();
         scheduleRecalculated = true;
       } catch (schedErr) {
         console.warn('[ConfessionService] Failed to recalculate queue schedule after settings update:', schedErr);

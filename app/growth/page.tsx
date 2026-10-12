@@ -260,6 +260,28 @@ export default function GrowthIntelligencePage() {
 
   useEffect(() => {
     loadAllGrowthData();
+
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel('confessionflow_settings');
+      channel.onmessage = (event) => {
+        if (event.data?.type === 'SETTINGS_UPDATED') {
+          loadAllGrowthData();
+        }
+      };
+    } catch {}
+
+    const handleRefresh = () => {
+      loadAllGrowthData();
+    };
+    window.addEventListener('confessionflow:settings_updated', handleRefresh);
+    window.addEventListener('confessionflow:refresh', handleRefresh);
+
+    return () => {
+      channel?.close();
+      window.removeEventListener('confessionflow:settings_updated', handleRefresh);
+      window.removeEventListener('confessionflow:refresh', handleRefresh);
+    };
   }, [loadAllGrowthData]);
 
   // Load post diagnostics whenever selectedPostId changes

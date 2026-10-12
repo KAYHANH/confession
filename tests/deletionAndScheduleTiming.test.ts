@@ -194,10 +194,10 @@ describe('Deleted Section & Schedule Recalculation Engine', () => {
       expect(allRow42.length).toBe(1);
       expect(allRow42[0].status).toBe('DELETED');
 
-      // Row 43 was imported (and auto-approved as low risk)
+      // Row 43 was imported (and auto-approved / scheduled as low risk)
       const row43 = mockStore.getConfessions().find((c) => c.google_sheet_row === 43);
       expect(row43).toBeDefined();
-      expect(row43?.status).toBe('APPROVED');
+      expect(['APPROVED', 'SCHEDULED']).toContain(row43?.status);
     });
 
     it('strictly skips re-importing even if permanent delete removed the item from memory', async () => {

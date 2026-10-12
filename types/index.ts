@@ -109,10 +109,14 @@ export interface Confession {
   slides?: string[];
   format?: 'IMAGE' | 'CAROUSEL' | 'REEL' | 'VIDEO' | 'OTHER';
   content_category?: string;
-  predicted_performance_score?: number | null;
   post_saturation_score?: number | null;
+  predicted_performance_score?: number | null;
   why_this_time?: string | null;
   scheduling_provenance?: any | null;
+  strategy_source?: string | null;
+  strategy_version?: string | null;
+  schedule_reason?: string | null;
+  schedule_timezone?: string | null;
   // Confession Quality Gate Metadata
   quality_status?: QualityStatus;
   quality_score?: number | null;
@@ -294,7 +298,7 @@ export interface SystemSettings {
   enable_auto_optimization?: boolean;
   enable_experiments?: boolean;
   // Adaptive Scheduling Settings
-  scheduling_strategy_mode?: 'AUTO' | 'GROWTH_OPTIMIZED' | 'BASELINE' | 'MANUAL';
+  scheduling_strategy_mode?: 'AUTO' | 'AUTO_GROWTH' | 'GROWTH_OPTIMIZED' | 'BASELINE' | 'MANUAL' | 'EXPERIMENT';
   manual_fixed_gap_minutes?: number;
   enable_experimental_scheduling?: boolean;
   // Content Quality Gate Settings
@@ -307,6 +311,9 @@ export interface SystemSettings {
   min_days_for_cadence_learning?: number; // Minimum distinct days of data required (default 7)
   min_growth_confidence?: number; // Minimum confidence required (0.0 to 1.0, default 0.70)
   rolling_horizon_hours?: number; // Rolling scheduling horizon in hours (default 24)
+  // Versioning and Audit Metadata
+  settings_version?: number;
+  updated_at?: string;
 }
 
 export interface ModerationCheckResult {
