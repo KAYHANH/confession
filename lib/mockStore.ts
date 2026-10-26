@@ -3,6 +3,7 @@ import path from 'path';
 import { Confession, Template, ActivityLog, GoogleSheetConfig, InstagramAccountConfig, SystemSettings, PublishedPost } from '@/types';
 import { BackgroundJob } from '@/types/jobs';
 import { FALLBACK_INSTAGRAM_ACCOUNT_ID, FALLBACK_INSTAGRAM_ACCESS_TOKEN } from '@/lib/config';
+import { generateContentHash } from '@/lib/contentHash';
 
 const DATA_FILE = path.join(process.cwd(), '.mock_data.json');
 
@@ -15,6 +16,7 @@ export interface MockDatabase {
   instagram: InstagramAccountConfig;
   settings: SystemSettings;
   deletedRowNumbers?: number[];
+  deletedContentHashes?: string[];
   jobs?: BackgroundJob[];
   mockSheetRows?: Record<number, any>;
 }
@@ -441,6 +443,12 @@ class MockStore {
       }
     }
 
+    const h = conf.normalized_content_hash || conf.content_hash || generateContentHash(conf.cleaned_text || conf.original_text || '');
+    if (h) {
+      if (!this.data.deletedContentHashes) this.data.deletedContentHashes = [];
+      if (!this.data.deletedContentHashes.includes(h)) this.data.deletedContentHashes.push(h);
+    }
+
     this.addLog({
       action: 'DELETED',
       entity_type: 'confession',
@@ -458,10 +466,17 @@ class MockStore {
     const conf = this.data.confessions.find(
       (c) => c.id === cleanId || String(c.id) === cleanId || (c.google_sheet_row && String(c.google_sheet_row) === cleanId)
     );
-    if (conf && conf.google_sheet_row) {
-      if (!this.data.deletedRowNumbers) this.data.deletedRowNumbers = [];
-      if (!this.data.deletedRowNumbers.includes(conf.google_sheet_row)) {
-        this.data.deletedRowNumbers.push(conf.google_sheet_row);
+    if (conf) {
+      if (conf.google_sheet_row) {
+        if (!this.data.deletedRowNumbers) this.data.deletedRowNumbers = [];
+        if (!this.data.deletedRowNumbers.includes(conf.google_sheet_row)) {
+          this.data.deletedRowNumbers.push(conf.google_sheet_row);
+        }
+      }
+      const h = conf.normalized_content_hash || conf.content_hash || generateContentHash(conf.cleaned_text || conf.original_text || '');
+      if (h) {
+        if (!this.data.deletedContentHashes) this.data.deletedContentHashes = [];
+        if (!this.data.deletedContentHashes.includes(h)) this.data.deletedContentHashes.push(h);
       }
     }
 
@@ -491,6 +506,10 @@ class MockStore {
     if (conf.google_sheet_row && this.data.deletedRowNumbers) {
       this.data.deletedRowNumbers = this.data.deletedRowNumbers.filter((r) => r !== conf.google_sheet_row);
     }
+    const h = conf.normalized_content_hash || conf.content_hash || generateContentHash(conf.cleaned_text || conf.original_text || '');
+    if (h && this.data.deletedContentHashes) {
+      this.data.deletedContentHashes = this.data.deletedContentHashes.filter((x) => x !== h);
+    }
 
     this.addLog({
       action: 'RESTORED',
@@ -517,6 +536,16 @@ class MockStore {
 
   public setDeletedRowNumbers(rows: number[]): void {
     this.data.deletedRowNumbers = [...rows];
+    this.save();
+  }
+
+  public getDeletedContentHashes(): Set<string> {
+    this.ensureFresh();
+    return new Set(this.data.deletedContentHashes || []);
+  }
+
+  public setDeletedContentHashes(hashes: string[]): void {
+    this.data.deletedContentHashes = [...hashes];
     this.save();
   }
 

@@ -76,7 +76,7 @@ export interface Confession {
   id: string;
   google_sheet_id: string;
   google_sheet_name: string;
-  google_sheet_row: number;
+  google_sheet_row?: number;
   name: string;
   original_text: string;
   cleaned_text: string;
@@ -349,6 +349,7 @@ export interface DashboardStats {
   failed: number;
   publishedToday: number;
   maxDailyPosts: number;
+  queued?: number;
 }
 
 export type CounterCategory =

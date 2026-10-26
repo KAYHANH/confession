@@ -850,6 +850,10 @@ export class ConfessionService {
     const confession = await this.getConfessionById(id);
     if (!confession) throw new Error('Confession not found');
 
+    if (confession.status === 'PUBLISHED' || confession.instagram_media_id) {
+      throw new Error('Confession is already published on Instagram and cannot be approved again');
+    }
+
     const isQualityOverride = confession.quality_status === 'LOW_VALUE';
     const updates: Partial<Confession> = {
       status: 'APPROVED',
@@ -2219,6 +2223,7 @@ export class ConfessionService {
       failed: counts.exclusivePartitions.confirmedFailed,
       publishedToday,
       maxDailyPosts: settings.max_daily_posts || 8,
+      queued: counts.pipeline.queued,
     };
   }
 }

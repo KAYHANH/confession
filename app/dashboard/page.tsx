@@ -189,8 +189,13 @@ export default function DashboardPage() {
       {/* 24/7 Engine Status & Restart Bar */}
       <div className="flex items-center justify-between p-3.5 bg-white border border-zinc-200/80 rounded-2xl shadow-sm mb-6 flex-wrap gap-3">
         <div className="flex items-center gap-2.5 text-sm font-medium text-zinc-700">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+          <div className={`w-2.5 h-2.5 rounded-full ${stats && stats.queued === 0 && stats.scheduled === 0 ? 'bg-sky-500' : 'bg-emerald-500 animate-pulse'}`} />
           <span>24/7 Autonomous Publishing Engine</span>
+          {stats && stats.queued === 0 && stats.scheduled === 0 && (
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 font-semibold border border-sky-200">
+              Idle · Waiting for new submissions from Sheet
+            </span>
+          )}
           {stats && stats.failed > 0 && (
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-700 font-bold border border-rose-200">
               {stats.failed} failed

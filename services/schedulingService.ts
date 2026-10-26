@@ -492,11 +492,11 @@ export class SchedulingService {
         });
 
       if (eligibleCandidates.length === 0) {
-        console.log('[AutoPublisher] No eligible safe confessions found to auto-publish.');
+        console.log('[AutoPublisher] Queue empty or all confessions published. Waiting for new submissions from Google Sheet.');
         return {
           ran: false,
           status: 'NO_CANDIDATES',
-          reason: 'No eligible safe confessions in queue. (High-risk or already published confessions are skipped).',
+          reason: 'No eligible safe confessions in queue. Engine is idling, waiting for new submissions from Google Sheet.',
         };
       }
 

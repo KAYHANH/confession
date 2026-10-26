@@ -83,6 +83,12 @@ export class SheetSyncService {
       // Merge and deduplicate DB records by id
       const existingMap = new Map<string, Confession>();
       for (const c of [...mockConfessions, ...dbConfessions]) {
+        if (!c.normalized_content_hash) {
+          c.normalized_content_hash = generateContentHash(c.cleaned_text || c.original_text || '');
+        }
+        if (!c.content_hash) {
+          c.content_hash = c.normalized_content_hash;
+        }
         existingMap.set(c.id, c);
       }
       const existing = Array.from(existingMap.values());
@@ -115,6 +121,20 @@ export class SheetSyncService {
         if (!c.google_sheet_row || c.status === 'DELETED') continue;
 
         const confHash = c.normalized_content_hash || c.content_hash || generateContentHash(c.cleaned_text || c.original_text || '');
+
+        // CRITICAL INVARIANT: NEVER mark already PUBLISHED posts as DELETED just because sheet was cleared!
+        // Published confessions represent live Instagram posts and must retain their PUBLISHED status forever!
+        if (c.status === 'PUBLISHED' || !!c.instagram_media_id || c.reconciliation_status === 'ALREADY_PUBLISHED') {
+          const rowAtSameIndex = rows.find((r) => r.rowNumber === c.google_sheet_row);
+          const rowAtSameIndexHash = rowAtSameIndex?.confession ? generateContentHash(rowAtSameIndex.confession) : null;
+          const isStillAtSameRow = rowAtSameIndexHash === confHash;
+          const isShiftedToAnotherRow = sheetRowsByHash.has(confHash);
+          if (!isStillAtSameRow && !isShiftedToAnotherRow) {
+            c.google_sheet_row = undefined;
+            mockStore.updateConfession(c.id, { google_sheet_row: undefined });
+          }
+          continue;
+        }
         const isStillInSheetByRow = sheetRowNumbers.has(c.google_sheet_row);
         const rowAtSameIndex = rows.find((r) => r.rowNumber === c.google_sheet_row);
         const isMarkedDeletedInSheet = rowAtSameIndex && (rowAtSameIndex.status || '').trim().toUpperCase() === 'DELETED';
@@ -130,7 +150,6 @@ export class SheetSyncService {
           (!isStillInSheetByRow && (!matchingRowByHash || isHashClaimedByAnother));
 
         if (isDeletedFromSheet) {
-          deletedRowNumbers.add(c.google_sheet_row);
           report.deletedRecords++;
 
           const updatePayload: Partial<Confession> = {
@@ -158,10 +177,6 @@ export class SheetSyncService {
         }
       }
 
-      if (report.deletedRecords > 0) {
-        mockStore.setDeletedRowNumbers(Array.from(deletedRowNumbers));
-      }
-
       // ─── Step 2: 3-Tier Record Identity Matching & Processing ─────────────
       const sheetUpdates: SheetRowUpdate[] = [];
       const newConfessionsToInsert: Confession[] = [];
@@ -179,13 +194,19 @@ export class SheetSyncService {
           );
         }
 
-        // Skip rows deleted by user or marked DELETED
-        if (deletedRowNumbers.has(row.rowNumber)) {
-          continue;
-        }
+        const rawText = (row.confession || '').trim();
+        if (!rawText) continue;
 
+        const rowHash = generateContentHash(rawText);
         const rawStatus = (row.status || '').trim().toUpperCase();
-        if (rawStatus === 'DELETED') {
+
+        const deletedHashes = mockStore.getDeletedContentHashes();
+        const isContentDeleted =
+          existing.some(
+            (c) => c.status === 'DELETED' && (c.normalized_content_hash === rowHash || c.content_hash === rowHash)
+          ) || deletedHashes.has(rowHash);
+
+        if (rawStatus === 'DELETED' || isContentDeleted) {
           if (!deletedRowNumbers.has(row.rowNumber)) {
             deletedRowNumbers.add(row.rowNumber);
             mockStore.setDeletedRowNumbers(Array.from(deletedRowNumbers));
@@ -193,10 +214,23 @@ export class SheetSyncService {
           continue;
         }
 
-        const rawText = (row.confession || '').trim();
-        if (!rawText) continue;
+        if (deletedRowNumbers.has(row.rowNumber)) {
+          const existingAtRow = existing.find((c) => c.google_sheet_row === row.rowNumber);
+          const existingHash = existingAtRow
+            ? existingAtRow.normalized_content_hash ||
+              existingAtRow.content_hash ||
+              generateContentHash(existingAtRow.cleaned_text || existingAtRow.original_text || '')
+            : null;
 
-        const rowHash = generateContentHash(rawText);
+          if (existingHash === rowHash) {
+            // Content is identical to the deleted confession -> strictly skip!
+            continue;
+          }
+
+          // Content is different and not in deletedHashes -> genuine new submission on reused row!
+          deletedRowNumbers.delete(row.rowNumber);
+          mockStore.setDeletedRowNumbers(Array.from(deletedRowNumbers));
+        }
 
         // Tier 1: Stable ID matching
         let matchedConf: Confession | undefined = undefined;
@@ -204,12 +238,7 @@ export class SheetSyncService {
           matchedConf = existing.find((c) => c.id === row.id || (c as any).form_response_id === row.id);
         }
 
-        // Tier 2: Row number match
-        if (!matchedConf) {
-          matchedConf = existing.find((c) => c.google_sheet_row === row.rowNumber && c.status !== 'DELETED');
-        }
-
-        // Tier 3: Hash + Submission Timestamp matching for shifted rows
+        // Tier 2: Content Hash matching (Exact text match anywhere in existing pool)
         if (!matchedConf) {
           const candidateShift = existing.find(
             (c) =>
@@ -217,12 +246,39 @@ export class SheetSyncService {
               (c.normalized_content_hash === rowHash || c.content_hash === rowHash)
           );
           if (candidateShift) {
-            // Row shifted upstream in Google Sheet! Update row reference without creating duplicate.
+            // Confession moved/shifted rows in Google Sheet! Update row reference cleanly.
             candidateShift.google_sheet_row = row.rowNumber;
             matchedConf = candidateShift;
             mockStore.updateConfession(candidateShift.id, { google_sheet_row: row.rowNumber });
             if (useSupabase) {
               confessionService.updateConfession(candidateShift.id, { google_sheet_row: row.rowNumber }).catch(() => {});
+            }
+          }
+        }
+
+        // Tier 3: Row number match (ONLY if hash matches or if unpublished confession is being edited in-place)
+        if (!matchedConf) {
+          const rowCandidate = existing.find((c) => c.google_sheet_row === row.rowNumber && c.status !== 'DELETED');
+          if (rowCandidate) {
+            const candHash =
+              rowCandidate.normalized_content_hash ||
+              rowCandidate.content_hash ||
+              generateContentHash(rowCandidate.cleaned_text || rowCandidate.original_text || '');
+            if (candHash === rowHash) {
+              matchedConf = rowCandidate;
+            } else if (
+              rowCandidate.status === 'PUBLISHED' ||
+              !!rowCandidate.instagram_media_id ||
+              rowCandidate.reconciliation_status === 'ALREADY_PUBLISHED'
+            ) {
+              // The published confession was previously at this row number, but the row was cleared/replaced by a new submission!
+              // Unlink the old published confession's row number so it doesn't block new submissions on this row.
+              rowCandidate.google_sheet_row = undefined;
+              mockStore.updateConfession(rowCandidate.id, { google_sheet_row: undefined });
+              matchedConf = undefined;
+            } else {
+              // Unpublished draft confession whose text was edited at this row
+              matchedConf = rowCandidate;
             }
           }
         }
