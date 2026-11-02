@@ -484,18 +484,30 @@ export class SheetSyncService {
             }
           }
 
+          // If confession was previously erroneously marked REJECTED, but quality is APPROVED / GOOD
+          if (matchedConf.status === 'REJECTED' && matchedConf.quality_decision === 'APPROVE' && matchedConf.quality_status === 'GOOD') {
+            matchedConf.status = 'READY_FOR_REVIEW';
+            mockStore.updateConfession(matchedConf.id, { status: 'READY_FOR_REVIEW' });
+            if (useSupabase) {
+              confessionService.updateConfession(matchedConf.id, { status: 'READY_FOR_REVIEW' }).catch(() => {});
+            }
+          }
+
           // Sync DB workflow status back to Google Sheet!
           let targetSheetStatus = rawStatus;
           let sheetError = row.error || '';
 
           if (matchedConf.status === 'SCHEDULED') {
             targetSheetStatus = 'SCHEDULED';
+            sheetError = '';
             report.scheduledRecords++;
           } else if (matchedConf.status === 'APPROVED') {
             targetSheetStatus = 'QUEUED';
+            sheetError = '';
             report.queuedRecords++;
           } else if (matchedConf.status === 'READY_FOR_REVIEW') {
             targetSheetStatus = 'PENDING REVIEW';
+            sheetError = '';
             report.lowValueOrReviewRecords++;
           } else if (
             matchedConf.status === 'FAILED' ||
@@ -514,7 +526,7 @@ export class SheetSyncService {
             report.lowValueOrReviewRecords++;
           }
 
-          if (targetSheetStatus !== rawStatus) {
+          if (targetSheetStatus !== rawStatus || (row.error && sheetError === '')) {
             sheetUpdates.push({
               rowNumber: row.rowNumber,
               status: targetSheetStatus,
@@ -532,6 +544,18 @@ export class SheetSyncService {
               dbStatus: matchedConf.status,
               actionTaken: 'STATUS_CORRECTED',
               evidence: `Sheet status synced from database status (${matchedConf.status}).`,
+            });
+          } else {
+            report.reconciliationItems.push({
+              rowNumber: row.rowNumber,
+              confessionId: matchedConf.id,
+              submitter: matchedConf.display_name || row.name,
+              textPreview: rawText.slice(0, 50),
+              sheetStatusBefore: row.status || 'EMPTY',
+              sheetStatusAfter: targetSheetStatus,
+              dbStatus: matchedConf.status,
+              actionTaken: 'UNCHANGED',
+              evidence: `Row synchronized. Database workflow status is ${matchedConf.status}.`,
             });
           }
           continue;
@@ -596,9 +620,10 @@ export class SheetSyncService {
           actionTaken = 'PUBLICATION_VERIFIED';
           evidenceNote = 'Historical row already marked PUBLISHED in Google Sheet.';
           report.alreadyPublishedVerified++;
-        } else if (isSheetRejected) {
+        } else if (isSheetRejected && qualityResult.qualityStatus === 'LOW_VALUE') {
           initialStatus = 'REJECTED';
           report.lowValueOrReviewRecords++;
+          evidenceNote = `Rejected per Google Sheet status and Quality evaluation: ${qualityResult.reason}`;
         } else if (isSheetScheduled) {
           initialStatus = 'SCHEDULED';
           report.scheduledRecords++;
