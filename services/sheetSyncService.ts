@@ -276,6 +276,13 @@ export class SheetSyncService {
               rowCandidate.google_sheet_row = undefined;
               mockStore.updateConfession(rowCandidate.id, { google_sheet_row: undefined });
               matchedConf = undefined;
+            } else if (rowCandidate.status === 'REJECTED' || rowCandidate.quality_status === 'LOW_VALUE') {
+              // Previously rejected or low-value submission at this row number (e.g. old single-letter test "G"),
+              // and now a new/different confession text is submitted at this row!
+              // Unlink the old rejected record's row number so the new submission is processed freshly through quality evaluation!
+              rowCandidate.google_sheet_row = undefined;
+              mockStore.updateConfession(rowCandidate.id, { google_sheet_row: undefined });
+              matchedConf = undefined;
             } else {
               // Unpublished draft confession whose text was edited at this row
               matchedConf = rowCandidate;
@@ -428,6 +435,53 @@ export class SheetSyncService {
               confessionService.updateConfession(matchedConf.id, pubPayload).catch(() => {});
             }
             continue;
+          }
+
+          // If unpublished confession's text was updated in Google Sheet, re-evaluate quality and update text
+          if (!isDbPublished && matchedConf.original_text !== rawText) {
+            const enablePii = settings.enable_pii_detection !== false;
+            const moderationResult = moderationService.analyzeContent(rawText, enablePii);
+            const cleanedText = enablePii
+              ? moderationService.maskSensitiveInformation(rawText, moderationResult.piiDetected)
+              : rawText;
+            const qualityResult = await confessionQualityService.evaluateConfession(cleanedText, {
+              existingPool: existing.map((c) => ({
+                id: c.id,
+                row: c.google_sheet_row,
+                text: c.cleaned_text || c.original_text,
+              })),
+              confessionId: matchedConf.id,
+            });
+            const isLowValue = settings.auto_reject_low_value !== false && qualityResult.qualityStatus === 'LOW_VALUE';
+            const updatedStatus: ConfessionStatus = isLowValue ? 'REJECTED' : 'READY_FOR_REVIEW';
+
+            matchedConf.original_text = rawText;
+            matchedConf.cleaned_text = cleanedText;
+            matchedConf.normalized_content_hash = rowHash;
+            matchedConf.content_hash = rowHash;
+            matchedConf.quality_status = qualityResult.qualityStatus;
+            matchedConf.quality_score = qualityResult.qualityScore;
+            matchedConf.quality_decision = qualityResult.decision;
+            matchedConf.quality_reason = qualityResult.reason;
+            matchedConf.quality_category = qualityResult.category;
+            matchedConf.status = updatedStatus;
+
+            const updatePayload: Partial<Confession> = {
+              original_text: rawText,
+              cleaned_text: cleanedText,
+              normalized_content_hash: rowHash,
+              content_hash: rowHash,
+              quality_status: qualityResult.qualityStatus,
+              quality_score: qualityResult.qualityScore,
+              quality_decision: qualityResult.decision,
+              quality_reason: qualityResult.reason,
+              quality_category: qualityResult.category,
+              status: updatedStatus,
+            };
+            mockStore.updateConfession(matchedConf.id, updatePayload);
+            if (useSupabase) {
+              confessionService.updateConfession(matchedConf.id, updatePayload).catch(() => {});
+            }
           }
 
           // Sync DB workflow status back to Google Sheet!

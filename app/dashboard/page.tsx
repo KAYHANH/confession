@@ -27,6 +27,8 @@ import { useToast } from '@/components/ui/ToastContext';
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentConfessions, setRecentConfessions] = useState<Confession[]>([]);
+  const [recentPublished, setRecentPublished] = useState<Confession[]>([]);
+  const [dashboardTab, setDashboardTab] = useState<'submissions' | 'published'>('submissions');
   const [queue, setQueue] = useState<Confession[]>([]);
   const [activities, setActivities] = useState<ActivityLog[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -38,19 +40,30 @@ export default function DashboardPage() {
 
   const { success, error } = useToast();
 
+  const getConfessionNumber = (c: Confession): string => {
+    if (c.google_sheet_row && c.google_sheet_row > 0) return String(c.google_sheet_row).padStart(3, '0');
+    const captionMatch = c.caption?.match(/Confession\s*#(\d+)/i);
+    if (captionMatch) return captionMatch[1].padStart(3, '0');
+    const textMatch = c.original_text?.match(/#(\d+)/);
+    if (textMatch) return textMatch[1].padStart(3, '0');
+    return '—';
+  };
+
   const loadDashboardData = useCallback(async () => {
     try {
-      const [statsRes, confRes, queueRes, logRes, tplRes] = await Promise.all([
+      const [statsRes, confRes, pubRes, queueRes, logRes, tplRes] = await Promise.all([
         fetch('/api/dashboard/stats'),
         fetch('/api/confessions?limit=6'),
+        fetch('/api/confessions?tab=published&limit=6&sortBy=recently_published'),
         fetch('/api/confessions?status=SCHEDULED&limit=5'),
         fetch('/api/logs?limit=6'),
         fetch('/api/templates'),
       ]);
 
-      const [statsData, confData, queueData, logData, tplData] = await Promise.all([
+      const [statsData, confData, pubData, queueData, logData, tplData] = await Promise.all([
         statsRes.json(),
         confRes.json(),
+        pubRes.json(),
         queueRes.json(),
         logRes.json(),
         tplRes.json(),
@@ -58,6 +71,7 @@ export default function DashboardPage() {
 
       setStats(statsData);
       setRecentConfessions(confData.confessions || []);
+      setRecentPublished(pubData.confessions || []);
       setQueue(queueData.confessions || []);
       setActivities(logData.logs || []);
       setTemplates(tplData || []);
@@ -219,61 +233,86 @@ export default function DashboardPage() {
 
       {/* KPI Stats Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
-        <div className="bg-white p-4 rounded-2xl border border-zinc-200/80 shadow-sm">
+        <Link
+          href="/confessions"
+          className="bg-white p-4 rounded-2xl border border-zinc-200/80 shadow-sm hover:shadow-md hover:border-zinc-300 transition-all block group"
+        >
           <div className="flex items-center justify-between text-zinc-600 mb-2">
             <span className="text-xs font-medium">Total</span>
-            <MessageSquareText className="w-4 h-4 text-zinc-600" />
+            <MessageSquareText className="w-4 h-4 text-zinc-600 group-hover:scale-110 transition-transform" />
           </div>
           <div className="text-2xl font-bold text-zinc-900">{stats ? stats.total : '—'}</div>
-        </div>
+        </Link>
 
-        <div className="bg-white p-4 rounded-2xl border border-amber-200/70 shadow-sm bg-amber-50/20">
+        <Link
+          href="/confessions?tab=queue"
+          className="bg-white p-4 rounded-2xl border border-amber-200/70 shadow-sm bg-amber-50/20 hover:shadow-md hover:border-amber-300 transition-all block group"
+        >
           <div className="flex items-center justify-between text-amber-700 mb-2">
             <span className="text-xs font-medium">Review</span>
-            <Clock className="w-4 h-4 text-amber-600" />
+            <Clock className="w-4 h-4 text-amber-600 group-hover:scale-110 transition-transform" />
           </div>
           <div className="text-2xl font-bold text-amber-900">{stats ? stats.pendingReview : '—'}</div>
-        </div>
+        </Link>
 
-        <div className="bg-white p-4 rounded-2xl border border-blue-200/70 shadow-sm bg-blue-50/20">
+        <Link
+          href="/confessions?tab=queue"
+          className="bg-white p-4 rounded-2xl border border-blue-200/70 shadow-sm bg-blue-50/20 hover:shadow-md hover:border-blue-300 transition-all block group"
+        >
           <div className="flex items-center justify-between text-blue-700 mb-2">
             <span className="text-xs font-medium">Approved</span>
-            <CheckCircle2 className="w-4 h-4 text-blue-600" />
+            <CheckCircle2 className="w-4 h-4 text-blue-600 group-hover:scale-110 transition-transform" />
           </div>
           <div className="text-2xl font-bold text-blue-900">{stats ? stats.approved : '—'}</div>
-        </div>
+        </Link>
 
-        <div className="bg-white p-4 rounded-2xl border border-indigo-200/70 shadow-sm bg-indigo-50/20">
+        <Link
+          href="/confessions?tab=scheduled"
+          className="bg-white p-4 rounded-2xl border border-indigo-200/70 shadow-sm bg-indigo-50/20 hover:shadow-md hover:border-indigo-300 transition-all block group"
+        >
           <div className="flex items-center justify-between text-indigo-700 mb-2">
             <span className="text-xs font-medium">Scheduled</span>
-            <CalendarDays className="w-4 h-4 text-indigo-600" />
+            <CalendarDays className="w-4 h-4 text-indigo-600 group-hover:scale-110 transition-transform" />
           </div>
           <div className="text-2xl font-bold text-indigo-900">{stats ? stats.scheduled : '—'}</div>
-        </div>
+        </Link>
 
-        <div className="bg-white p-4 rounded-2xl border border-emerald-200/70 shadow-sm bg-emerald-50/20">
+        <Link
+          href="/published"
+          className="bg-white p-4 rounded-2xl border border-emerald-200/70 shadow-sm bg-emerald-50/20 hover:shadow-md hover:border-emerald-300 transition-all block group"
+        >
           <div className="flex items-center justify-between text-emerald-700 mb-2">
             <span className="text-xs font-medium">Published</span>
-            <Send className="w-4 h-4 text-emerald-600" />
+            <Send className="w-4 h-4 text-emerald-600 group-hover:scale-110 transition-transform" />
           </div>
           <div className="text-2xl font-bold text-emerald-900">{stats ? stats.published : '—'}</div>
-        </div>
+          <div className="text-[10px] text-emerald-600 font-semibold mt-1 flex items-center gap-0.5">
+            <span>View Archive</span>
+            <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+          </div>
+        </Link>
 
-        <div className="bg-white p-4 rounded-2xl border border-zinc-200/80 shadow-sm">
+        <Link
+          href="/confessions?tab=low_value"
+          className="bg-white p-4 rounded-2xl border border-zinc-200/80 shadow-sm hover:shadow-md hover:border-zinc-300 transition-all block group"
+        >
           <div className="flex items-center justify-between text-zinc-600 mb-2">
             <span className="text-xs font-medium">Rejected</span>
-            <XCircle className="w-4 h-4 text-zinc-600" />
+            <XCircle className="w-4 h-4 text-zinc-600 group-hover:scale-110 transition-transform" />
           </div>
           <div className="text-2xl font-bold text-zinc-900">{stats ? stats.rejected : '—'}</div>
-        </div>
+        </Link>
 
-        <div className="bg-white p-4 rounded-2xl border border-rose-200/70 shadow-sm bg-rose-50/20">
+        <Link
+          href="/confessions?tab=failed"
+          className="bg-white p-4 rounded-2xl border border-rose-200/70 shadow-sm bg-rose-50/20 hover:shadow-md hover:border-rose-300 transition-all block group"
+        >
           <div className="flex items-center justify-between text-rose-700 mb-2">
             <span className="text-xs font-medium">Failed</span>
-            <AlertTriangle className="w-4 h-4 text-rose-600" />
+            <AlertTriangle className="w-4 h-4 text-rose-600 group-hover:scale-110 transition-transform" />
           </div>
           <div className="text-2xl font-bold text-rose-900">{stats ? stats.failed : '—'}</div>
-        </div>
+        </Link>
       </div>
 
       {/* Main Content Layout: Left 2 Cols (Recent Confessions) & Right 1 Col (Queue & Activity) */}
@@ -281,16 +320,45 @@ export default function DashboardPage() {
         {/* Left Column: Recent Confessions Table */}
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-white rounded-2xl border border-zinc-200/80 shadow-sm overflow-hidden">
-            <div className="p-5 border-b border-zinc-100 flex items-center justify-between">
+            <div className="p-5 border-b border-zinc-100 flex items-center justify-between flex-wrap gap-3">
               <div>
-                <h2 className="text-base font-bold text-zinc-900">Recent Confessions</h2>
-                <p className="text-xs text-zinc-600">Latest submissions from Google Sheets</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setDashboardTab('submissions')}
+                    className={`text-sm font-bold pb-0.5 border-b-2 transition-colors cursor-pointer ${
+                      dashboardTab === 'submissions'
+                        ? 'border-brand-600 text-zinc-900'
+                        : 'border-transparent text-zinc-400 hover:text-zinc-600'
+                    }`}
+                  >
+                    Recent Submissions
+                  </button>
+                  <span className="text-zinc-300">|</span>
+                  <button
+                    onClick={() => setDashboardTab('published')}
+                    className={`text-sm font-bold pb-0.5 border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer ${
+                      dashboardTab === 'published'
+                        ? 'border-emerald-600 text-emerald-900'
+                        : 'border-transparent text-zinc-400 hover:text-zinc-600'
+                    }`}
+                  >
+                    <span>Live Published</span>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-700 font-bold">
+                      {stats?.published ?? 0}
+                    </span>
+                  </button>
+                </div>
+                <p className="text-xs text-zinc-600 mt-1">
+                  {dashboardTab === 'submissions'
+                    ? 'Latest active submissions from Google Sheets queue'
+                    : 'Confessions successfully broadcasted live to Instagram'}
+                </p>
               </div>
               <Link
-                href="/confessions"
+                href={dashboardTab === 'submissions' ? '/confessions' : '/published'}
                 className="text-xs font-semibold text-brand-600 hover:text-brand-700 flex items-center gap-1 group"
               >
-                <span>View All</span>
+                <span>{dashboardTab === 'submissions' ? 'View All Submissions' : 'View All Published'}</span>
                 <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
               </Link>
             </div>
@@ -300,9 +368,11 @@ export default function DashboardPage() {
                 <RefreshCw className="w-4 h-4 animate-spin" />
                 <span>Loading submissions...</span>
               </div>
-            ) : recentConfessions.length === 0 ? (
+            ) : (dashboardTab === 'submissions' ? recentConfessions : recentPublished).length === 0 ? (
               <div className="p-12 text-center text-zinc-600 text-sm">
-                No confessions found. Click <strong>Sync Now</strong> to fetch submissions from Google Sheets.
+                {dashboardTab === 'submissions'
+                  ? 'No active submissions found. Click Sync Now to fetch from Google Sheets.'
+                  : 'No published confessions found yet.'}
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -316,11 +386,11 @@ export default function DashboardPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 font-medium">
-                    {recentConfessions.map((c) => (
+                    {(dashboardTab === 'submissions' ? recentConfessions : recentPublished).map((c) => (
                       <tr key={c.id} className="hover:bg-zinc-50/60 transition-colors">
                         <td className="py-3.5 px-4 whitespace-nowrap">
                           <div className="font-bold text-zinc-900">
-                            #{String(c.google_sheet_row || 1).padStart(3, '0')}
+                            #{getConfessionNumber(c)}
                           </div>
                           <div className="text-[11px] text-zinc-600">
                             {c.is_anonymous ? 'Anonymous' : c.display_name}
@@ -341,7 +411,9 @@ export default function DashboardPage() {
                         <td className="py-3.5 px-4 whitespace-nowrap">
                           {getStatusBadge(c.status)}
                           <div className="text-[10px] text-zinc-600 mt-1">
-                            {new Date(c.created_at).toLocaleDateString()}
+                            {c.status === 'PUBLISHED' && c.published_at
+                              ? new Date(c.published_at).toLocaleDateString()
+                              : new Date(c.created_at).toLocaleDateString()}
                           </div>
                         </td>
 
@@ -354,6 +426,18 @@ export default function DashboardPage() {
                             >
                               <Eye className="w-4 h-4" />
                             </Link>
+
+                            {c.status === 'PUBLISHED' && (
+                              <a
+                                href={c.instagram_permalink || 'https://www.instagram.com/_hpsconfession_'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="p-1.5 rounded-lg text-pink-600 hover:bg-pink-50 transition-colors cursor-pointer"
+                                title="View on Instagram"
+                              >
+                                <Instagram className="w-4 h-4" />
+                              </a>
+                            )}
 
                             {c.status === 'READY_FOR_REVIEW' && (
                               <>
@@ -421,7 +505,7 @@ export default function DashboardPage() {
                   >
                     <div className="overflow-hidden">
                       <div className="font-semibold text-zinc-900 truncate">
-                        #{String(item.google_sheet_row).padStart(3, '0')} &bull; {item.display_name}
+                        #{getConfessionNumber(item)} &bull; {item.display_name}
                       </div>
                       <p className="line-clamp-1 text-zinc-600 mt-0.5">
                         {item.cleaned_text || item.original_text}

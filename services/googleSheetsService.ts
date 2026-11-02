@@ -162,14 +162,14 @@ export class GoogleSheetsService {
    * Automatically resolves column indices from header row with smart detection
    */
   public resolveColumnIndices(headerRow: string[], configMapping: ColumnMapping) {
-    let colTime = this.columnLetterToIndex(configMapping.timestampColumn || 'A');
-    let colName = this.columnLetterToIndex(configMapping.nameColumn || 'B');
-    let colConf = this.columnLetterToIndex(configMapping.confessionColumn || 'E');
-    let colStatus = this.columnLetterToIndex(configMapping.statusColumn || 'D');
-    let colPostId = this.columnLetterToIndex(configMapping.postIdColumn || 'E');
-    let colUrl = this.columnLetterToIndex(configMapping.instagramUrlColumn || 'F');
-    let colProcAt = this.columnLetterToIndex(configMapping.processedAtColumn || 'G');
-    let colErr = this.columnLetterToIndex(configMapping.errorColumn || 'H');
+    let colTime: number | null = this.columnLetterToIndex(configMapping.timestampColumn || 'A');
+    let colName: number | null = this.columnLetterToIndex(configMapping.nameColumn || 'B');
+    let colConf: number = this.columnLetterToIndex(configMapping.confessionColumn || 'E');
+    let colStatus: number | null = this.columnLetterToIndex(configMapping.statusColumn || 'D');
+    let colPostId: number | null = this.columnLetterToIndex(configMapping.postIdColumn || 'E');
+    let colUrl: number | null = this.columnLetterToIndex(configMapping.instagramUrlColumn || 'F');
+    let colProcAt: number | null = this.columnLetterToIndex(configMapping.processedAtColumn || 'G');
+    let colErr: number | null = this.columnLetterToIndex(configMapping.errorColumn || 'H');
     let colId: number | null = configMapping.idColumn ? this.columnLetterToIndex(configMapping.idColumn) : null;
     let colSched: number | null = configMapping.scheduledAtColumn ? this.columnLetterToIndex(configMapping.scheduledAtColumn) : null;
     let colDisclose: number | null = null;
@@ -182,7 +182,7 @@ export class GoogleSheetsService {
           colConf = idx;
         } else if (lower.includes('scheduled_at') || lower.includes('scheduled at') || lower.includes('scheduled time') || lower.includes('post time')) {
           colSched = idx;
-        } else if (lower.includes('timestamp') || lower.includes('date') || lower.includes('submitted')) {
+        } else if (lower === 'timestamp' || lower.includes('timestamp') || (lower.includes('date') && !lower.includes('post date') && !lower.includes('posted') && !lower.includes('published')) || lower.includes('submitted')) {
           colTime = idx;
         } else if (lower === 'id' || lower === 'confession_id' || lower === 'submission_id' || lower === 'response_id') {
           colId = idx;
@@ -215,6 +215,16 @@ export class GoogleSheetsService {
             colConf = actualConfIdx;
           }
         }
+      }
+      // Sanity checks on column overlaps
+      if (colPostId === colConf) {
+        colPostId = null;
+      }
+      if (colStatus === colConf || colStatus === colClass || colStatus === colDisclose) {
+        colStatus = null;
+      }
+      if (colUrl === colConf) {
+        colUrl = null;
       }
     }
 
@@ -291,16 +301,24 @@ export class GoogleSheetsService {
         finalName = rawName;
       }
 
+      const KNOWN_STATUSES = new Set([
+        'NEW', 'PENDING', 'QUEUED', 'SCHEDULED', 'PUBLISHED', 'POSTED',
+        'REJECTED', 'FAILED', 'FAILED_CONFIRMED', 'DELETED', 'DUPLICATE',
+        'READY', 'READY_FOR_REVIEW', 'APPROVED'
+      ]);
+      const rawStatusCell = colStatus !== null && colStatus !== undefined && row[colStatus] ? (row[colStatus] || '').trim().toUpperCase() : '';
+      const validStatus = KNOWN_STATUSES.has(rawStatusCell) ? rawStatusCell : 'NEW';
+
       rows.push({
         rowNumber,
-        timestamp: (row[colTime] || new Date().toISOString()).trim(),
+        timestamp: (colTime !== null && row[colTime] ? row[colTime] : new Date().toISOString()).trim(),
         name: finalName,
         confession: confessionText,
-        status: (row[colStatus] || 'NEW').trim(),
+        status: validStatus,
         isAnonymous,
         className: classInfo,
-        postId: colPostId !== null ? row[colPostId]?.trim() : undefined,
-        instagramUrl: colUrl !== null ? row[colUrl]?.trim() : undefined,
+        postId: colPostId !== null && colPostId !== colConf ? row[colPostId]?.trim() : undefined,
+        instagramUrl: colUrl !== null && colUrl !== colConf ? row[colUrl]?.trim() : undefined,
         processedAt: colProcAt !== null ? row[colProcAt]?.trim() : undefined,
         scheduledAt: colSched !== null ? row[colSched]?.trim() : undefined,
         error: colErr !== null ? row[colErr]?.trim() : undefined,
@@ -395,16 +413,24 @@ export class GoogleSheetsService {
             finalName = rawName;
           }
 
+          const KNOWN_STATUSES = new Set([
+            'NEW', 'PENDING', 'QUEUED', 'SCHEDULED', 'PUBLISHED', 'POSTED',
+            'REJECTED', 'FAILED', 'FAILED_CONFIRMED', 'DELETED', 'DUPLICATE',
+            'READY', 'READY_FOR_REVIEW', 'APPROVED'
+          ]);
+          const rawStatusCell = colStatus !== null && colStatus !== undefined && row[colStatus] ? (row[colStatus] || '').toString().trim().toUpperCase() : '';
+          const validStatus = KNOWN_STATUSES.has(rawStatusCell) ? rawStatusCell : 'NEW';
+
           rows.push({
             rowNumber,
-            timestamp: (row[colTime] || new Date().toISOString()).toString(),
+            timestamp: (colTime !== null && row[colTime] ? row[colTime] : new Date().toISOString()).toString(),
             name: finalName,
             confession: text,
-            status: (row[colStatus] || 'NEW').toString().trim(),
+            status: validStatus,
             isAnonymous,
             className: classInfo,
-            postId: colPostId !== null ? row[colPostId]?.toString().trim() : undefined,
-            instagramUrl: colUrl !== null ? row[colUrl]?.toString().trim() : undefined,
+            postId: colPostId !== null && colPostId !== colConf ? row[colPostId]?.toString().trim() : undefined,
+            instagramUrl: colUrl !== null && colUrl !== colConf ? row[colUrl]?.toString().trim() : undefined,
             processedAt: colProcAt !== null ? row[colProcAt]?.toString().trim() : undefined,
             scheduledAt: colSched !== null ? row[colSched]?.toString().trim() : undefined,
             error: colErr !== null ? row[colErr]?.toString().trim() : undefined,

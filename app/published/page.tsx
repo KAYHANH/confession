@@ -15,6 +15,28 @@ import { Confession, Template } from '@/types';
 import { PostCardPreview } from '@/components/confessions/PostCardPreview';
 import { useToast } from '@/components/ui/ToastContext';
 
+const DEFAULT_TEMPLATE: Template = {
+  id: 'tpl-minimal-dark',
+  name: 'Minimal Dark',
+  description: 'Default minimal dark card layout',
+  background: 'linear-gradient(135deg, #09090b 0%, #18181b 100%)',
+  text_color: '#f4f4f5',
+  accent_color: '#3b82f6',
+  font_family: 'sans-serif',
+  font_size: 44,
+  show_branding: true,
+  show_confession_number: true,
+  show_name: true,
+  layout_config: {
+    padding: 60,
+    quote_icon: true,
+    header_style: 'badge',
+  },
+  active: true,
+  created_at: '2026-01-01T00:00:00.000Z',
+  updated_at: '2026-01-01T00:00:00.000Z',
+};
+
 export default function PublishedPage() {
   const [publishedPosts, setPublishedPosts] = useState<Confession[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -25,7 +47,7 @@ export default function PublishedPage() {
     setLoading(true);
     try {
       const [confRes, tplRes] = await Promise.all([
-        fetch('/api/confessions?status=PUBLISHED&sortBy=recently_published&limit=50'),
+        fetch('/api/confessions?tab=published&sortBy=recently_published&limit=100'),
         fetch('/api/templates'),
       ]);
 
@@ -43,8 +65,17 @@ export default function PublishedPage() {
     loadPublished();
   }, [loadPublished]);
 
-  const getTemplate = (tplId?: string) => {
-    return templates.find((t) => t.id === tplId) || templates[0];
+  const getTemplate = (tplId?: string): Template => {
+    return templates.find((t) => t.id === tplId) || templates[0] || DEFAULT_TEMPLATE;
+  };
+
+  const getConfessionNumber = (c: Confession): number => {
+    if (c.google_sheet_row && c.google_sheet_row > 0) return c.google_sheet_row;
+    const match = c.caption && c.caption.match(/Confession\s*#(\d+)/i);
+    if (match) return parseInt(match[1], 10);
+    const textMatch = c.original_text && c.original_text.match(/#(\d+)/);
+    if (textMatch) return parseInt(textMatch[1], 10);
+    return 1;
   };
 
   return (
@@ -94,7 +125,7 @@ export default function PublishedPage() {
                   {/* Top Bar */}
                   <div className="flex items-center justify-between mb-4">
                     <span className="font-bold text-sm text-zinc-900">
-                      Confession #{String(c.google_sheet_row || 1).padStart(3, '0')}
+                      Confession #{String(getConfessionNumber(c)).padStart(3, '0')}
                     </span>
                     <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                       <CheckCircle2 className="w-3 h-3" />
@@ -108,7 +139,7 @@ export default function PublishedPage() {
                       text={c.cleaned_text || c.original_text}
                       displayName={c.display_name}
                       isAnonymous={c.is_anonymous}
-                      confessionNumber={c.google_sheet_row}
+                      confessionNumber={getConfessionNumber(c)}
                       template={template}
                       scale={0.25}
                     />
@@ -142,18 +173,16 @@ export default function PublishedPage() {
                     <span>View Details</span>
                   </Link>
 
-                  {c.instagram_permalink && (
-                    <a
-                      href={c.instagram_permalink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-50 hover:bg-brand-100 text-brand-700 text-xs font-semibold border border-brand-200 transition-colors"
-                    >
-                      <Instagram className="w-3.5 h-3.5" />
-                      <span>View on Instagram</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
+                  <a
+                    href={c.instagram_permalink || 'https://www.instagram.com/_hpsconfession_'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-pink-50 hover:bg-pink-100 text-pink-700 text-xs font-semibold border border-pink-200 transition-colors"
+                  >
+                    <Instagram className="w-3.5 h-3.5" />
+                    <span>View on Instagram</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
                 </div>
               </div>
             );

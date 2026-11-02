@@ -334,6 +334,9 @@ export class ConfessionService {
       list = list.filter((c) => this.isDeleted(c));
     } else if (tab === 'failed') {
       list = list.filter((c) => this.isConfirmedFailed(c));
+    } else if (tab !== 'deleted' && status !== 'DELETED') {
+      // Exclude deleted confessions by default for general views
+      list = list.filter((c) => !this.isDeleted(c));
     }
 
     if (status) {
@@ -362,19 +365,28 @@ export class ConfessionService {
     // Sorting
     list.sort((a, b) => {
       if (sortBy === 'oldest') {
-        return (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
+        const rowDiff = (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
+        if (rowDiff !== 0) return rowDiff;
+        return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
       }
       if (sortBy === 'newest') {
-        return (b.google_sheet_row || 0) - (a.google_sheet_row || 0);
+        const rowDiff = (b.google_sheet_row || 0) - (a.google_sheet_row || 0);
+        if (rowDiff !== 0) return rowDiff;
+        return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
       }
       if (sortBy === 'scheduled') {
         return (a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0) - (b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0);
       }
       if (sortBy === 'recently_published') {
-        return (b.published_at ? new Date(b.published_at).getTime() : 0) - (a.published_at ? new Date(a.published_at).getTime() : 0);
+        const pubA = a.published_at ? new Date(a.published_at).getTime() : 0;
+        const pubB = b.published_at ? new Date(b.published_at).getTime() : 0;
+        if (pubB !== pubA) return pubB - pubA;
+        return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
       }
       // Default: ascending row order (sheet row 2, 3, 4... = publish order)
-      return (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
+      const rowDiff = (a.google_sheet_row || 0) - (b.google_sheet_row || 0);
+      if (rowDiff !== 0) return rowDiff;
+      return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
     });
 
     const total = list.length;

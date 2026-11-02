@@ -158,6 +158,26 @@ export default function ConfessionsPage() {
 
   const { success, error } = useToast();
 
+  const getConfessionNumber = (c: Confession): string => {
+    if (c.google_sheet_row && c.google_sheet_row > 0) return String(c.google_sheet_row).padStart(3, '0');
+    const captionMatch = c.caption?.match(/Confession\s*#(\d+)/i);
+    if (captionMatch) return captionMatch[1].padStart(3, '0');
+    const textMatch = c.original_text?.match(/#(\d+)/);
+    if (textMatch) return textMatch[1].padStart(3, '0');
+    return '—';
+  };
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const urlTab = params.get('tab') as TabType;
+      const validTabs: TabType[] = ['queue', 'scheduled', 'published', 'unknown', 'duplicates', 'low_value', 'deleted'];
+      if (urlTab && validTabs.includes(urlTab)) {
+        setActiveTab(urlTab);
+      }
+    }
+  }, []);
+
   const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs: number = 10000): Promise<Response> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -1542,7 +1562,7 @@ export default function ConfessionsPage() {
                         </td>
 
                         <td className="py-3.5 px-3 w-16 font-bold text-zinc-900 whitespace-nowrap">
-                          #{String(c.google_sheet_row || 1).padStart(3, '0')}
+                          #{getConfessionNumber(c)}
                         </td>
 
                         <td className="py-3.5 px-3 w-32 whitespace-nowrap">
@@ -1841,6 +1861,25 @@ export default function ConfessionsPage() {
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>
+                              </>
+                            ) : activeTab === 'published' ? (
+                              <>
+                                <Link
+                                  href={`/confessions/${c.id}`}
+                                  className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors"
+                                  title="View Details & Preview"
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </Link>
+                                <a
+                                  href={c.instagram_permalink || 'https://www.instagram.com/_hpsconfession_'}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="p-1.5 rounded-lg text-pink-600 hover:text-pink-700 hover:bg-pink-50 transition-colors"
+                                  title="View on Instagram"
+                                >
+                                  <Instagram className="w-4 h-4" />
+                                </a>
                               </>
                             ) : (
                               <>

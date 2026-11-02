@@ -45,6 +45,28 @@ export function getCardTypography(textLength: number, baseSize: number = 44) {
   };
 }
 
+const DEFAULT_CARD_TEMPLATE: Template = {
+  id: 'tpl-minimal-dark',
+  name: 'Minimal Dark',
+  description: 'Default minimal dark card layout',
+  background: 'linear-gradient(135deg, #09090b 0%, #18181b 100%)',
+  text_color: '#f4f4f5',
+  accent_color: '#3b82f6',
+  font_family: 'sans-serif',
+  font_size: 44,
+  show_branding: true,
+  show_confession_number: true,
+  show_name: true,
+  layout_config: {
+    padding: 60,
+    quote_icon: true,
+    header_style: 'badge',
+  },
+  active: true,
+  created_at: '2026-01-01T00:00:00.000Z',
+  updated_at: '2026-01-01T00:00:00.000Z',
+};
+
 export function PostCardPreview({
   text,
   displayName,
@@ -58,7 +80,8 @@ export function PostCardPreview({
   slideIndex = 0,
   totalSlides = 1,
 }: PostCardPreviewProps) {
-  const numFormatted = String(confessionNumber).padStart(3, '0');
+  const safeTemplate = template || DEFAULT_CARD_TEMPLATE;
+  const numFormatted = String(confessionNumber || 1).padStart(3, '0');
   const nameToShow = isAnonymous ? 'Anonymous' : (displayName || 'Anonymous');
 
   // Determine text to render based on mode
@@ -70,10 +93,10 @@ export function PostCardPreview({
     textToRender = `${cleanCut}\n\n[📖 Read full confession in caption 👇]`;
   }
 
-  const cfg = calculateCardTypography(textToRender, { baseFontSize: template.font_size });
+  const cfg = calculateCardTypography(textToRender, { baseFontSize: safeTemplate.font_size });
 
   const fontFamily =
-    template.font_family === 'serif'
+    safeTemplate.font_family === 'serif'
       ? 'Georgia, serif'
       : 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 
@@ -97,8 +120,8 @@ export function PostCardPreview({
           height: 1080,
           transform: `scale(${scale})`,
           transformOrigin: 'top left',
-          background: template.background,
-          color: template.text_color,
+          background: safeTemplate.background,
+          color: safeTemplate.text_color,
           padding: cfg.padding,
           fontFamily,
         }}
